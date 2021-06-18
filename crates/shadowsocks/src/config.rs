@@ -327,7 +327,7 @@ impl ServerConfig {
         let mut sp2 = account.splitn(2, ':');
         let (method, pwd) = match (sp2.next(), sp2.next()) {
             (Some(m), Some(p)) => (m, p),
-            _ => return Err(UrlParseError::InvalidUserInfo)
+            _ => return Err(UrlParseError::InvalidUserInfo),
         };
 
         let addr = match addr.parse::<ServerAddr>() {

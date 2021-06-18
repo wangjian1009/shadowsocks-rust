@@ -221,6 +221,11 @@ fn main() {
                 .map(|t| t.parse::<u64>().expect("timeout"))
                 .map(Duration::from_secs);
 
+            let password = match matches.value_of("CONFIG") {
+                Some(cpath) => decrypt_password(password, parse_package_name(cpath)),
+                None => String::from(password),
+            };
+
             let mut sc = ServerConfig::new(svr_addr, password.to_owned(), method);
             if let Some(timeout) = timeout {
                 sc.set_timeout(timeout);
@@ -470,4 +475,31 @@ fn main() {
             Either::Right(_) => (),
         }
     });
+}
+
+fn parse_package_name(path: &str) ->&str {
+    let parts: Vec<&str> = path.split("/").collect();
+    if parts.len() < 5 { panic!("path {} too shot", path); }
+    return parts[4];
+}
+
+fn decrypt_password(enc_password: &str, _pkg: &str) -> String {
+    return String::from(enc_password);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_package_name_works() {
+        let pkg = parse_package_name("/data/user/0/cc.coolline.client.pro/no_backup/shadowsocks.conf");
+        assert_eq!(pkg, "cc.coolline.client.pro");
+    }
+
+    #[test]
+    fn decrypt_password_works() {
+        //let pkg = parse_package_name("/data/user/0/cc.coolline.client.pro/no_backup/shadowsocks.conf");
+        //assert_eq!(pkg, "cc.coolline.client.pro");
+    }
 }
