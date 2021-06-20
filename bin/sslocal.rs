@@ -4,6 +4,8 @@
 //! or you could specify a configuration file. The format of configuration file is defined
 //! in mod `config`.
 
+extern crate crypto;
+
 use std::time::Duration;
 
 use clap::{clap_app, Arg};
@@ -29,6 +31,9 @@ use shadowsocks_service::{
 #[cfg(feature = "logging")]
 use self::common::logging;
 use self::common::{monitor, validator};
+
+use crypto::{buffer,aes,blockmodes};
+use crypto::buffer::{WriteBuffer,ReadBuffer,BufferResult};
 
 mod common;
 
@@ -222,7 +227,7 @@ fn main() {
                 .map(Duration::from_secs);
 
             let password = match matches.value_of("CONFIG") {
-                Some(cpath) => decrypt_password(password, parse_package_name(cpath)),
+                Some(cpath) => decrypt_password(password, parse_package_name(cpath)).unwrap(),
                 None => String::from(password),
             };
 
@@ -483,8 +488,53 @@ fn parse_package_name(path: &str) ->&str {
     return parts[4];
 }
 
-fn decrypt_password(enc_password: &str, _pkg: &str) -> String {
-    return String::from(enc_password);
+fn decrypt_password(enc_password: &str, pkg: &str) -> Result<String, String> {
+    let key = getkey();
+    let iv = md5::compute(pkg);
+
+    let enc_password = match base64::decode(enc_password) {
+        Ok(r) => r,
+        Err(code) => { return Err(String::from(format!("{:?}",code))); },
+    };
+    
+    let decrypt_password = aes256_cbc_decrypt(enc_password.as_ref(), &key, &iv.0)?;
+
+    return match String::from_utf8(decrypt_password) {
+        Ok(result) => Ok(result),
+        Err(code) => Err(String::from(format!("{:?}",code))),
+    };
+}
+
+fn aes256_cbc_decrypt(encrypted_data: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, String> {
+    let mut decryptor = aes::cbc_decryptor(
+        aes::KeySize::KeySize256,
+        key,
+        iv,
+        blockmodes::PkcsPadding);
+
+    let mut final_result = Vec::<u8>::new();
+    let mut read_buffer = buffer::RefReadBuffer::new(encrypted_data);
+    let mut buffer = [0; 4096];
+    let mut write_buffer = buffer::RefWriteBuffer::new(&mut buffer);
+
+    loop {
+        let result = match decryptor.decrypt(&mut read_buffer, &mut write_buffer, true) {
+            Ok(r) => r,
+            Err(code) => return Err(String::from(format!("{:?}",code))),
+        };
+
+        final_result.extend(write_buffer.take_read_buffer().take_remaining().iter().map(|&i| i));
+        match result {
+            BufferResult::BufferUnderflow => break,
+            BufferResult::BufferOverflow => { }
+        }
+    }
+
+    Ok(final_result)
+}
+
+fn getkey() -> Vec<u8> {
+    return Vec::from("3,B]6e9Lnm2X(92)/Y_Mx#hjx-F-Mvx".as_bytes());
 }
 
 #[cfg(test)]
@@ -499,7 +549,60 @@ mod tests {
 
     #[test]
     fn decrypt_password_works() {
-        //let pkg = parse_package_name("/data/user/0/cc.coolline.client.pro/no_backup/shadowsocks.conf");
-        //assert_eq!(pkg, "cc.coolline.client.pro");
+        let pkg = "cc.coolline.client.pro";
+        let encryped_passwd = encrypt_password("*!hvk9^4baX#Y%Ja", pkg).unwrap();
+        let decrypt_passwd = decrypt_password(&encryped_passwd, pkg).unwrap();
+        //println!("xxxx: hexkey: {}", hex::encode(getkey().to_vec()));
+        println!("xxxx: encryped_passwd: {}", encryped_passwd);
+        assert_eq!(decrypt_passwd, "*!hvk9^4baX#Y%Ja");
+    }
+
+    #[test]
+    fn decrypt_password_pkg_mismatch() {
+        let encryped_passwd = encrypt_password("password1", "pkg1").unwrap();
+        assert_eq!(decrypt_password(&encryped_passwd, "pkg2"), Err(String::from("InvalidPadding")));
+    }
+
+    #[test]
+    fn decrypt_password_origin() {
+        assert_eq!(
+            decrypt_password("yp9pyEqr63RO0laWRoOewz5BpybxmW+3Ks+kkLwPXxo=", "cc.coolline.client.pro").unwrap(),
+            "*!hvk9^4baX#Y%Ja");
+    }
+    
+    fn encrypt_password(origin_password: &str, pkg: &str) -> Result<String, String> {
+        let key = getkey();
+        let iv = md5::compute(pkg);
+        let encrypt_password = aes256_cbc_encrypt(origin_password.as_bytes(), &key, &iv.0)?;
+        Ok(base64::encode(encrypt_password))
+    }
+
+    fn aes256_cbc_encrypt(data: &[u8],key: &[u8], iv: &[u8])->Result<Vec<u8>, String> {
+        let mut encryptor=aes::cbc_encryptor(
+            aes::KeySize::KeySize256,
+            key,
+            iv,
+            blockmodes::PkcsPadding);
+
+        let mut final_result=Vec::<u8>::new();
+        let mut read_buffer=buffer::RefReadBuffer::new(data);
+        let mut buffer=[0;4096];
+        let mut write_buffer=buffer::RefWriteBuffer::new(&mut buffer);
+
+        loop{
+            let result = match encryptor.encrypt(&mut read_buffer,&mut write_buffer,true) {
+                Ok(r) => r,
+                Err(code) => return Err(String::from(format!("{:?}",code))),
+            };
+
+            final_result.extend(write_buffer.take_read_buffer().take_remaining().iter().map(|&i| i));
+
+            match result {
+                BufferResult::BufferUnderflow=>break,
+                BufferResult::BufferOverflow=>{},
+            }
+        }
+
+        Ok(final_result)
     }
 }
