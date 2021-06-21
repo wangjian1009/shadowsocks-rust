@@ -539,12 +539,23 @@ fn getkey() -> Vec<u8> {
     // let aa  = base64::decode("D6gGZEI40uetWdBOBe+wrrxy2UiMxF6G0Y9YNRrETuKIE7B7oJ3uGFyTwGZTrYJd");
     // println!("xxx: password: {:?}", aa);
 
-    let encrypt_password =
-        [15, 168, 6, 100, 66, 56, 210, 231, 173, 89, 208, 78, 5, 239, 176, 174, 188, 114,
-         217, 72, 140, 196, 94, 134, 209, 143, 88, 53, 26, 196, 78, 226, 136, 19, 176, 123,
-         160, 157, 238, 24, 92, 147, 192, 102, 83, 173, 130, 93];
-    
-    return aes256_cbc_decrypt(&encrypt_password, &key, &iv).unwrap();
+    let mut final_result = Vec::<u8>::new();
+
+    final_result.extend_from_slice(&[16, 169, 7, 101]);
+    final_result.extend_from_slice(&[67, 57, 211, 232]);
+    final_result.extend_from_slice(&[174, 90, 209, 79]);
+    final_result.extend_from_slice(&[6, 240, 177, 175]);
+    final_result.extend_from_slice(&[189, 115, 218, 73]);
+    final_result.extend_from_slice(&[141, 197, 95, 135]);
+    final_result.extend_from_slice(&[210, 144, 89, 54]);
+    final_result.extend_from_slice(&[27, 197, 79, 227]);
+    final_result.extend_from_slice(&[137, 20, 177, 124]);
+    final_result.extend_from_slice(&[161, 158, 239, 25]);
+    final_result.extend_from_slice(&[93, 148, 193, 103]);
+    final_result.extend_from_slice(&[84, 174, 131, 94]);
+
+    let b: Vec<u8> = final_result.iter().map(|&i| i-1).collect();
+    return aes256_cbc_decrypt(&b, &key, &iv).unwrap();
 }
 
 #[cfg(test)]
