@@ -506,17 +506,13 @@ fn decrypt_password(enc_password: &str, pkg: &str) -> Result<String, String> {
 }
 
 fn aes256_cbc_decrypt(encrypted_data: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, String> {
-    let mut decryptor = aes::cbc_decryptor(
-        aes::KeySize::KeySize256,
-        key,
-        iv,
-        blockmodes::PkcsPadding);
+    let mut decryptor = aes::cbc_decryptor(aes::KeySize::KeySize256, key, iv, blockmodes::PkcsPadding);
 
     let mut final_result = Vec::<u8>::new();
     let mut read_buffer = buffer::RefReadBuffer::new(encrypted_data);
     let mut buffer = [0; 4096];
     let mut write_buffer = buffer::RefWriteBuffer::new(&mut buffer);
-
+    
     loop {
         let result = match decryptor.decrypt(&mut read_buffer, &mut write_buffer, true) {
             Ok(r) => r,
@@ -534,7 +530,21 @@ fn aes256_cbc_decrypt(encrypted_data: &[u8], key: &[u8], iv: &[u8]) -> Result<Ve
 }
 
 fn getkey() -> Vec<u8> {
-    return Vec::from("3,B]6e9Lnm2X(92)/Y_Mx#hjx-F-Mvx".as_bytes());
+    let iv: [u8; 16]  = [1; 16];
+    let key: [u8; 32] = [0x6E, 0x41, 0x79, 0x76, 0x26, 0x2F, 0x5B, 0x31,
+                         0x26, 0x5D, 0x44, 0x4E, 0x73, 0x48, 0x63, 0x44,
+                         0x30, 0x33, 0x2E, 0x52, 0x62, 0x5D, 0x69, 0x65,
+                         0x35, 0x78, 0x50, 0x43, 0x46, 0x28, 0x2C, 0x44];
+
+    // let aa  = base64::decode("D6gGZEI40uetWdBOBe+wrrxy2UiMxF6G0Y9YNRrETuKIE7B7oJ3uGFyTwGZTrYJd");
+    // println!("xxx: password: {:?}", aa);
+
+    let encrypt_password =
+        [15, 168, 6, 100, 66, 56, 210, 231, 173, 89, 208, 78, 5, 239, 176, 174, 188, 114,
+         217, 72, 140, 196, 94, 134, 209, 143, 88, 53, 26, 196, 78, 226, 136, 19, 176, 123,
+         160, 157, 238, 24, 92, 147, 192, 102, 83, 173, 130, 93];
+    
+    return aes256_cbc_decrypt(&encrypt_password, &key, &iv).unwrap();
 }
 
 #[cfg(test)]
@@ -566,10 +576,36 @@ mod tests {
     #[test]
     fn decrypt_password_origin() {
         assert_eq!(
-            decrypt_password("yp9pyEqr63RO0laWRoOewz5BpybxmW+3Ks+kkLwPXxo=", "cc.coolline.client.pro").unwrap(),
+            decrypt_password("N35GLo6e1JXk8HEjABg54Wtyn4pvyApBAwjvBKjN3Bo=", "cc.coolline.client.pro").unwrap(),
             "*!hvk9^4baX#Y%Ja");
     }
-    
+
+    #[test]
+    fn gen_password_password() {
+        let iv: [u8; 16]  = [1; 16];
+        let key: [u8; 32] = [0x6E, 0x41, 0x79, 0x76, 0x26, 0x2F, 0x5B, 0x31,
+                             0x26, 0x5D, 0x44, 0x4E, 0x73, 0x48, 0x63, 0x44,
+                             0x30, 0x33, 0x2E, 0x52, 0x62, 0x5D, 0x69, 0x65,
+                             0x35, 0x78, 0x50, 0x43, 0x46, 0x28, 0x2C, 0x44];
+
+        let key_str = "nAyv&/[1&]DNsHcD03.Rb]ie5xPCF(,D";
+        assert_eq!(String::from_utf8(Vec::<u8>::from(key)).unwrap(), key_str);
+
+        let origin_key = "3,B]6e9Lnm2X(92)/Y_Mx#hjx-F-MvxD";
+        let encrypt_password = aes256_cbc_encrypt(origin_key.as_bytes(), &key, &iv).unwrap();
+
+        assert_eq!(
+            aes256_cbc_decrypt(&encrypt_password, &key, &iv).unwrap(),
+            "3,B]6e9Lnm2X(92)/Y_Mx#hjx-F-MvxD".as_bytes());
+    }
+
+    #[test]
+    fn getkey_work() {
+        assert_eq!(
+            String::from_utf8(getkey()).unwrap(),
+            String::from("3,B]6e9Lnm2X(92)/Y_Mx#hjx-F-MvxD"));
+    }
+
     fn encrypt_password(origin_password: &str, pkg: &str) -> Result<String, String> {
         let key = getkey();
         let iv = md5::compute(pkg);
@@ -577,20 +613,16 @@ mod tests {
         Ok(base64::encode(encrypt_password))
     }
 
-    fn aes256_cbc_encrypt(data: &[u8],key: &[u8], iv: &[u8])->Result<Vec<u8>, String> {
-        let mut encryptor=aes::cbc_encryptor(
-            aes::KeySize::KeySize256,
-            key,
-            iv,
-            blockmodes::PkcsPadding);
+    fn aes256_cbc_encrypt(data: &[u8], key: &[u8], iv: &[u8])->Result<Vec<u8>, String> {
+        let mut encryptor = aes::cbc_encryptor(aes::KeySize::KeySize256, key, iv, blockmodes::PkcsPadding);
 
-        let mut final_result=Vec::<u8>::new();
-        let mut read_buffer=buffer::RefReadBuffer::new(data);
-        let mut buffer=[0;4096];
-        let mut write_buffer=buffer::RefWriteBuffer::new(&mut buffer);
+        let mut final_result = Vec::<u8>::new();
+        let mut read_buffer = buffer::RefReadBuffer::new(data);
+        let mut buffer = [0; 4096];
+        let mut write_buffer = buffer::RefWriteBuffer::new(&mut buffer);
 
-        loop{
-            let result = match encryptor.encrypt(&mut read_buffer,&mut write_buffer,true) {
+        loop {
+            let result = match encryptor.encrypt(&mut read_buffer, &mut write_buffer, true) {
                 Ok(r) => r,
                 Err(code) => return Err(String::from(format!("{:?}",code))),
             };
@@ -598,8 +630,8 @@ mod tests {
             final_result.extend(write_buffer.take_read_buffer().take_remaining().iter().map(|&i| i));
 
             match result {
-                BufferResult::BufferUnderflow=>break,
-                BufferResult::BufferOverflow=>{},
+                BufferResult::BufferUnderflow => break,
+                BufferResult::BufferOverflow => {},
             }
         }
 
