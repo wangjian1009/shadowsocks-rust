@@ -188,6 +188,15 @@ impl ServerConfig {
         &self.enc_key.as_ref()
     }
 
+    /// Set password
+    pub fn set_password(&mut self, password: &str) {
+        self.password = password.to_string();
+
+        let mut enc_key = vec![0u8; self.method.key_len()].into_boxed_slice();
+        openssl_bytes_to_key(self.password.as_bytes(), &mut enc_key);
+        self.enc_key = enc_key;
+    }
+    
     /// Get password
     pub fn password(&self) -> &str {
         &self.password.as_str()

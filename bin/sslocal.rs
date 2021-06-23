@@ -204,7 +204,14 @@ fn main() {
 
         let mut config = match matches.value_of("CONFIG") {
             Some(cpath) => match Config::load_from_file(cpath, ConfigType::Local) {
-                Ok(cfg) => cfg,
+                Ok(mut cfg) => {
+                    let package_name = parse_package_name(cpath);
+                    for svr in cfg.server.iter_mut() {
+                        let password = decrypt_password(svr.password(), package_name).unwrap();
+                        svr.set_password(password.as_str());
+                    }
+                    cfg
+                },
                 Err(err) => {
                     panic!("loading config \"{}\", {}", cpath, err);
                 }
@@ -225,11 +232,6 @@ fn main() {
                 .value_of("TIMEOUT")
                 .map(|t| t.parse::<u64>().expect("timeout"))
                 .map(Duration::from_secs);
-
-            let password = match matches.value_of("CONFIG") {
-                Some(cpath) => decrypt_password(password, parse_package_name(cpath)).unwrap(),
-                None => String::from(password),
-            };
 
             let mut sc = ServerConfig::new(svr_addr, password.to_owned(), method);
             if let Some(timeout) = timeout {
