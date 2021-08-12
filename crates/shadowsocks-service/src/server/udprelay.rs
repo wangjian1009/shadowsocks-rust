@@ -6,7 +6,7 @@ use bytes::Bytes;
 use futures::future::{self, AbortHandle};
 use io::ErrorKind;
 use log::{debug, error, info, trace, warn};
-use lru_time_cache::{Entry, LruCache};
+use lru_time_cache::LruCache;
 use shadowsocks::{
     lookup_then,
     net::UdpSocket as OutboundUdpSocket,
@@ -26,9 +26,12 @@ use crate::net::MonProxySocket;
 
 use super::context::ServiceContext;
 
+type AssociationMap = LruCache<SocketAddr, UdpAssociation>;
+type SharedAssociationMap = Arc<Mutex<AssociationMap>>;
+
 pub struct UdpServer {
     context: Arc<ServiceContext>,
-    assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation>>>,
+    assoc_map: SharedAssociationMap,
     cleanup_abortable: AbortHandle,
 }
 
@@ -52,7 +55,7 @@ impl UdpServer {
                 loop {
                     time::sleep(time_to_live).await;
 
-                    // iter() will trigger a cleanup of expired associations
+                    // cleanup expired associations. iter() will remove expired elements
                     let _ = assoc_map.lock().await.iter();
                 }
             });
@@ -112,22 +115,25 @@ impl UdpServer {
         target_addr: Address,
         data: &[u8],
     ) -> io::Result<()> {
-        match self.assoc_map.lock().await.entry(peer_addr) {
-            Entry::Occupied(occ) => {
-                let assoc = occ.into_mut();
-                assoc.try_send((target_addr, Bytes::copy_from_slice(data)))
-            }
-            Entry::Vacant(vac) => {
-                let assoc = vac.insert(UdpAssociation::new(
-                    self.context.clone(),
-                    listener.clone(),
-                    peer_addr,
-                    self.assoc_map.clone(),
-                ));
-                trace!("created udp association for {}", peer_addr);
-                assoc.try_send((target_addr, Bytes::copy_from_slice(data)))
-            }
+        let mut assoc_map = self.assoc_map.lock().await;
+
+        if let Some(assoc) = assoc_map.get(&peer_addr) {
+            return assoc.try_send((target_addr, Bytes::copy_from_slice(data)));
         }
+
+        let assoc = UdpAssociation::new(
+            self.context.clone(),
+            listener.clone(),
+            peer_addr,
+            self.assoc_map.clone(),
+        );
+
+        trace!("created udp association for {}", peer_addr);
+
+        assoc.try_send((target_addr, Bytes::copy_from_slice(data)))?;
+        assoc_map.insert(peer_addr, assoc);
+
+        Ok(())
     }
 }
 
@@ -148,7 +154,7 @@ impl UdpAssociation {
         context: Arc<ServiceContext>,
         inbound: Arc<MonProxySocket>,
         peer_addr: SocketAddr,
-        assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation>>>,
+        assoc_map: SharedAssociationMap,
     ) -> UdpAssociation {
         let (assoc, sender) = UdpAssociationContext::new(context, inbound, peer_addr, assoc_map);
         UdpAssociation { assoc, sender }
@@ -200,7 +206,7 @@ struct UdpAssociationContext {
     peer_addr: SocketAddr,
     outbound_ipv4_socket: SpinMutex<UdpAssociationState>,
     outbound_ipv6_socket: SpinMutex<UdpAssociationState>,
-    assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation>>>,
+    assoc_map: SharedAssociationMap,
     target_cache: Mutex<LruCache<SocketAddr, Address>>,
 }
 
@@ -215,7 +221,7 @@ impl UdpAssociationContext {
         context: Arc<ServiceContext>,
         inbound: Arc<MonProxySocket>,
         peer_addr: SocketAddr,
-        assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation>>>,
+        assoc_map: SharedAssociationMap,
     ) -> (Arc<UdpAssociationContext>, mpsc::Sender<(Address, Bytes)>) {
         // Pending packets 1024 should be good enough for a server.
         // If there are plenty of packets stuck in the channel, dropping exccess packets is a good way to protect the server from
@@ -232,8 +238,12 @@ impl UdpAssociationContext {
             // Cache for remembering the original Address of target,
             // when recv_from a SocketAddr, we have to know whch Address that client was originally requested.
             //
-            // XXX: 64 target addresses should be enough for __one__ client.
-            target_cache: Mutex::new(LruCache::with_capacity(64)),
+            // XXX: 128 target addresses should be enough for __one__ client.
+            //      1 hours should be enough for caching the address mapping. Most of the DNS records' TTL won't last that long.
+            target_cache: Mutex::new(LruCache::with_expiry_duration_and_capacity(
+                Duration::from_secs(3600),
+                128,
+            )),
         });
 
         let l2r_task = {
@@ -274,16 +284,15 @@ impl UdpAssociationContext {
                 SocketAddr::V6(..) => self.copy_ipv6_l2r_dispatch(sa, data).await,
             },
             Address::DomainNameAddress(ref dname, port) => {
-                let sa = lookup_then!(self.context.context_ref(), dname, port, |sa| {
+                lookup_then!(self.context.context_ref(), dname, port, |sa| {
+                    // Record resolved address as reverse index
+                    self.target_cache.lock().await.insert(sa, target_addr.clone());
+
                     match sa {
                         SocketAddr::V4(..) => self.clone().copy_ipv4_l2r_dispatch(sa, data).await,
                         SocketAddr::V6(..) => self.clone().copy_ipv6_l2r_dispatch(sa, data).await,
                     }
-                })?
-                .0;
-
-                // Record resolved address as reverse index
-                self.target_cache.lock().await.insert(sa, target_addr.clone());
+                })?;
 
                 Ok(())
             }
@@ -404,10 +413,10 @@ impl UdpAssociationContext {
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         loop {
             let (n, addr) = match outbound.recv_from(&mut buffer).await {
-                Ok(n) => {
+                Ok(r) => {
                     // Keep association alive in map
                     let _ = self.assoc_map.lock().await.get(&self.peer_addr);
-                    n
+                    r
                 }
                 Err(err) => {
                     error!(
@@ -418,6 +427,8 @@ impl UdpAssociationContext {
                     continue;
                 }
             };
+
+            trace!("udp relay {} <- {} received {} bytes", self.peer_addr, addr, n);
 
             let data = &buffer[..n];
 

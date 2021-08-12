@@ -41,8 +41,6 @@
 //!
 //! These defined server will be used with a load balancing algorithm.
 
-#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))]
-use std::ffi::OsString;
 #[cfg(any(unix, target_os = "android", feature = "local-flow-stat"))]
 use std::path::PathBuf;
 use std::{
@@ -64,7 +62,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "local-tunnel", feature = "local-dns"))]
 use shadowsocks::relay::socks5::Address;
 use shadowsocks::{
-    config::{ManagerAddr, Mode, ServerAddr, ServerConfig},
+    config::{ManagerAddr, Mode, ServerAddr, ServerConfig, ServerWeight},
     crypto::v1::CipherKind,
     plugin::PluginConfig,
 };
@@ -125,17 +123,24 @@ struct SSConfig {
     mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     no_delay: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keep_alive: Option<u64>,
     #[cfg(all(unix, not(target_os = "android")))]
     #[serde(skip_serializing_if = "Option::is_none")]
     nofile: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ipv6_first: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fast_open: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 struct SSLocalExtConfig {
     local_address: Option<String>,
     local_port: u16,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disabled: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
@@ -212,6 +217,10 @@ struct SSServerExtConfig {
     id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tcp_weight: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    udp_weight: Option<f32>,
 }
 
 /// Server config type
@@ -246,11 +255,8 @@ impl ConfigType {
 
 cfg_if! {
     if #[cfg(feature = "local-redir")] {
-        use strum::IntoEnumIterator;
-        use strum_macros::EnumIter;
-
         /// Transparent Proxy type
-        #[derive(Clone, Copy, Debug, Eq, PartialEq, EnumIter)]
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         pub enum RedirType {
             /// For not supported platforms
             NotSupported,
@@ -297,13 +303,27 @@ cfg_if! {
             cfg_if! {
                 if #[cfg(any(target_os = "linux", target_os = "android"))] {
                     /// Default TCP transparent proxy solution on this platform
-                    pub fn tcp_default() -> RedirType {
+                    pub const fn tcp_default() -> RedirType {
                         RedirType::Redirect
                     }
 
+                    /// Available TCP transparent proxy types
+                    #[doc(hidden)]
+                    pub fn tcp_available_types() -> &'static [&'static str] {
+                        const AVAILABLE_TYPES: &[&str] = &[RedirType::Redirect.name(), RedirType::TProxy.name()];
+                        AVAILABLE_TYPES
+                    }
+
                     /// Default UDP transparent proxy solution on this platform
-                    pub fn udp_default() -> RedirType {
+                    pub const fn udp_default() -> RedirType {
                         RedirType::TProxy
+                    }
+
+                    /// Available UDP transparent proxy types
+                    #[doc(hidden)]
+                    pub fn udp_available_types() -> &'static [&'static str] {
+                        const AVAILABLE_TYPES: &[&str] = &[RedirType::TProxy.name()];
+                        AVAILABLE_TYPES
                     }
                 } else if #[cfg(any(target_os = "openbsd", target_os = "freebsd"))] {
                     /// Default TCP transparent proxy solution on this platform
@@ -311,9 +331,23 @@ cfg_if! {
                         RedirType::PacketFilter
                     }
 
+                    /// Available TCP transparent proxy types
+                    #[doc(hidden)]
+                    pub fn tcp_available_types() -> &'static [&'static str] {
+                        const AVAILABLE_TYPES: &[&str] = &[RedirType::PacketFilter.name(), RedirType::IpFirewall.name()];
+                        AVAILABLE_TYPES
+                    }
+
                     /// Default UDP transparent proxy solution on this platform
                     pub fn udp_default() -> RedirType {
                         RedirType::PacketFilter
+                    }
+
+                    /// Available UDP transparent proxy types
+                    #[doc(hidden)]
+                    pub const fn udp_available_types() -> &'static [&'static str] {
+                        const AVAILABLE_TYPES: &[&str] = &[RedirType::PacketFilter.name(), RedirType::IpFirewall.name()];
+                        AVAILABLE_TYPES
                     }
                 } else if #[cfg(any(target_os = "netbsd", target_os = "solaris", target_os = "macos", target_os = "ios"))] {
                     /// Default TCP transparent proxy solution on this platform
@@ -321,9 +355,23 @@ cfg_if! {
                         RedirType::PacketFilter
                     }
 
+                    /// Available TCP transparent proxy types
+                    #[doc(hidden)]
+                    pub const fn tcp_available_types() -> &'static [&'static str] {
+                        const AVAILABLE_TYPES: &[&str] = &[RedirType::PacketFilter.name(), RedirType::IpFirewall.name()];
+                        AVAILABLE_TYPES
+                    }
+
                     /// Default UDP transparent proxy solution on this platform
                     pub fn udp_default() -> RedirType {
                         RedirType::NotSupported
+                    }
+
+                    /// Available UDP transparent proxy types
+                    #[doc(hidden)]
+                    pub const fn udp_available_types() -> &'static [&'static str] {
+                        const AVAILABLE_TYPES: &[&str] = &[];
+                        AVAILABLE_TYPES
                     }
                 } else {
                     /// Default TCP transparent proxy solution on this platform
@@ -331,9 +379,23 @@ cfg_if! {
                         RedirType::NotSupported
                     }
 
+                    /// Available TCP transparent proxy types
+                    #[doc(hidden)]
+                    pub const fn tcp_available_types() -> &'static [&'static str] {
+                        const AVAILABLE_TYPES: &[&str] = &[];
+                        AVAILABLE_TYPES
+                    }
+
                     /// Default UDP transparent proxy solution on this platform
                     pub fn udp_default() -> RedirType {
                         RedirType::NotSupported
+                    }
+
+                    /// Available UDP transparent proxy types
+                    #[doc(hidden)]
+                    pub const fn udp_available_types() -> &'static [&'static str] {
+                        const AVAILABLE_TYPES: &[&str] = &[];
+                        AVAILABLE_TYPES
                     }
                 }
             }
@@ -344,7 +406,7 @@ cfg_if! {
             }
 
             /// Name of redirect type (transparent proxy type)
-            pub fn name(self) -> &'static str {
+            pub const fn name(self) -> &'static str {
                 match self {
                     // Dummy, shouldn't be used in any useful situations
                     RedirType::NotSupported => "not_supported",
@@ -368,19 +430,6 @@ cfg_if! {
                     #[cfg(any(target_os = "freebsd", target_os = "macos", target_os = "ios"))]
                     RedirType::IpFirewall => "ipfw",
                 }
-            }
-
-            /// Get all available types
-            pub fn available_types() -> Vec<&'static str> {
-                let mut v = Vec::new();
-                for e in Self::iter() {
-                    match e {
-                        RedirType::NotSupported => continue,
-                        #[allow(unreachable_patterns)]
-                        _ => v.push(e.name()),
-                    }
-                }
-                v
             }
         }
 
@@ -720,6 +769,15 @@ pub struct Config {
 
     /// Set `TCP_NODELAY` socket option
     pub no_delay: bool,
+    /// Set `TCP_FASTOPEN` socket option
+    pub fast_open: bool,
+    /// Set TCP Keep-Alive duration, will set both `TCP_KEEPIDLE` and `TCP_KEEPINTVL`
+    ///
+    /// https://github.com/shadowsocks/shadowsocks-rust/issues/546
+    ///
+    /// If this is not set, sockets will be set with a default timeout
+    pub keep_alive: Option<Duration>,
+
     /// `RLIMIT_NOFILE` option for *nix systems
     #[cfg(all(unix, not(target_os = "android")))]
     pub nofile: Option<u64>,
@@ -729,7 +787,7 @@ pub struct Config {
     pub outbound_fwmark: Option<u32>,
     /// Set `SO_BINDTODEVICE` socket option for outbound sockets
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))]
-    pub outbound_bind_interface: Option<OsString>,
+    pub outbound_bind_interface: Option<String>,
     /// Path to protect callback unix address, only for Android
     #[cfg(target_os = "android")]
     pub outbound_vpn_protect_path: Option<PathBuf>,
@@ -833,6 +891,9 @@ impl Config {
             ipv6_first: false,
 
             no_delay: false,
+            fast_open: false,
+            keep_alive: None,
+
             #[cfg(all(unix, not(target_os = "android")))]
             nofile: None,
 
@@ -951,6 +1012,10 @@ impl Config {
                 // `locals` are only effective in local server
                 if let Some(locals) = config.locals {
                     for local in locals {
+                        if local.disabled.unwrap_or(false) {
+                            continue;
+                        }
+
                         if local.local_port == 0 {
                             let err = Error::new(ErrorKind::Malformed, "`local_port` cannot be 0", None);
                             return Err(err);
@@ -1100,7 +1165,7 @@ impl Config {
 
         // Standard config
         // Server
-        match (config.server, config.server_port, config.password, config.method) {
+        match (config.server, config.server_port, config.password, &config.method) {
             (Some(address), Some(port), Some(pwd), Some(m)) => {
                 let addr = match address.parse::<Ipv4Addr>() {
                     Ok(v4) => ServerAddr::SocketAddr(SocketAddr::V4(SocketAddrV4::new(v4, port))),
@@ -1143,6 +1208,9 @@ impl Config {
                 }
 
                 nconfig.server.push(nsvr);
+            }
+            (None, None, None, Some(_)) if config_type.is_manager() => {
+                // Set the default method for manager
             }
             (None, None, None, None) => (),
             _ => {
@@ -1192,7 +1260,7 @@ impl Config {
                     Some(mode) => match mode.parse::<Mode>() {
                         Ok(mode) => nsvr.set_mode(mode),
                         Err(..) => {
-                            let err = Error::new(ErrorKind::Malformed, "invalid `mode`", None);
+                            let err = Error::new(ErrorKind::Invalid, "invalid `mode`", None);
                             return Err(err);
                         }
                     },
@@ -1222,6 +1290,23 @@ impl Config {
 
                 if let Some(id) = svr.id {
                     nsvr.set_id(id);
+                }
+
+                if svr.tcp_weight.is_some() || svr.udp_weight.is_some() {
+                    let tcp_weight = svr.tcp_weight.unwrap_or(1.0);
+                    if !(0.0..=1.0).contains(&tcp_weight) {
+                        let err = Error::new(ErrorKind::Invalid, "invalid `tcp_weight`, must be in [0, 1]", None);
+                        return Err(err);
+                    }
+                    let udp_weight = svr.udp_weight.unwrap_or(1.0);
+                    if !(0.0..=1.0).contains(&udp_weight) {
+                        let err = Error::new(ErrorKind::Invalid, "invalid `udp_weight`, must be in [0, 1]", None);
+                        return Err(err);
+                    }
+                    let mut weight = ServerWeight::new();
+                    weight.set_tcp_weight(tcp_weight);
+                    weight.set_udp_weight(udp_weight);
+                    nsvr.set_weight(weight);
                 }
 
                 nconfig.server.push(nsvr);
@@ -1262,6 +1347,21 @@ impl Config {
 
             let mut manager_config = ManagerConfig::new(manager);
             manager_config.mode = global_mode;
+
+            if let Some(ref m) = config.method {
+                match m.parse::<CipherKind>() {
+                    Ok(method) => manager_config.method = Some(method),
+                    Err(..) => {
+                        let err = Error::new(
+                            ErrorKind::Invalid,
+                            "unsupported method",
+                            Some(format!("`{}` is not a supported method", m)),
+                        );
+                        return Err(err);
+                    }
+                }
+            }
+
             nconfig.manager = Some(manager_config);
         }
 
@@ -1278,6 +1378,16 @@ impl Config {
         // TCP nodelay
         if let Some(b) = config.no_delay {
             nconfig.no_delay = b;
+        }
+
+        // TCP fast open
+        if let Some(b) = config.fast_open {
+            nconfig.fast_open = b;
+        }
+
+        // TCP Keep-Alive
+        if let Some(d) = config.keep_alive {
+            nconfig.keep_alive = Some(Duration::from_secs(d));
         }
 
         // UDP
@@ -1580,6 +1690,7 @@ impl fmt::Display for Config {
                             ServerAddr::SocketAddr(ref sa) => sa.port(),
                             ServerAddr::DomainName(.., port) => port,
                         },
+                        disabled: None,
                         local_udp_address: local.udp_addr.as_ref().map(|udp_addr| match udp_addr {
                             ServerAddr::SocketAddr(sa) => sa.ip().to_string(),
                             ServerAddr::DomainName(dm, ..) => dm.to_string(),
@@ -1724,6 +1835,16 @@ impl fmt::Display for Config {
                         remarks: svr.remarks().map(ToOwned::to_owned),
                         id: svr.id().map(ToOwned::to_owned),
                         mode: Some(svr.mode().to_string()),
+                        tcp_weight: if (svr.weight().tcp_weight() - 1.0).abs() > f32::EPSILON {
+                            Some(svr.weight().tcp_weight())
+                        } else {
+                            None
+                        },
+                        udp_weight: if (svr.weight().udp_weight() - 1.0).abs() > f32::EPSILON {
+                            Some(svr.weight().udp_weight())
+                        } else {
+                            None
+                        },
                     });
                 }
 
@@ -1753,6 +1874,14 @@ impl fmt::Display for Config {
 
         if self.no_delay {
             jconf.no_delay = Some(self.no_delay);
+        }
+
+        if self.fast_open {
+            jconf.fast_open = Some(self.fast_open);
+        }
+
+        if let Some(keepalive) = self.keep_alive {
+            jconf.keep_alive = Some(keepalive.as_secs());
         }
 
         match self.dns {

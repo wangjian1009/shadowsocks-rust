@@ -1,21 +1,21 @@
 # shadowsocks
 
-![Build & Test](https://github.com/shadowsocks/shadowsocks-rust/workflows/Build%20&%20Test/badge.svg)
-![Build Releases](https://github.com/shadowsocks/shadowsocks-rust/workflows/Build%20Releases/badge.svg)
+[![Build & Test](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-and-test.yml)
+[![Build Releases](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-release.yml/badge.svg)](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-release.yml)
+[![Build Nightly Releases](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-nightly-release.yml/badge.svg)](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-nightly-release.yml)
 [![License](https://img.shields.io/github/license/zonyitoo/shadowsocks-rust.svg)](https://github.com/zonyitoo/shadowsocks-rust)
 [![crates.io](https://img.shields.io/crates/v/shadowsocks-rust.svg)](https://crates.io/crates/shadowsocks-rust)
 [![Release](https://img.shields.io/github/release/shadowsocks/shadowsocks-rust.svg)](https://github.com/shadowsocks/shadowsocks-rust/releases)
-[![Dependabot Status](https://api.dependabot.com/badges/status?host=github&repo=shadowsocks%2fshadowsocks-rust)](https://dependabot.com)
 
 This is a port of [shadowsocks](https://github.com/shadowsocks/shadowsocks).
 
 shadowsocks is a fast tunnel proxy that helps you bypass firewalls.
 
-| Library | Description |
-| ------- | ----------- |
-| [**shadowsocks**](https://crates.io/crates/shadowsocks) | [![crates.io](https://img.shields.io/crates/v/shadowsocks.svg)](https://crates.io/crates/shadowsocks) [![docs.rs](https://img.shields.io/docsrs/shadowsocks)](https://docs.rs/shadowsocks) shadowsocks core protocol |
+| Library                                                                 | Description                                                                                                                                                                                                                                                 |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**shadowsocks**](https://crates.io/crates/shadowsocks)                 | [![crates.io](https://img.shields.io/crates/v/shadowsocks.svg)](https://crates.io/crates/shadowsocks) [![docs.rs](https://img.shields.io/docsrs/shadowsocks)](https://docs.rs/shadowsocks) shadowsocks core protocol                                        |
 | [**shadowsocks-service**](https://crates.io/crates/shadowsocks-service) | [![crates.io](https://img.shields.io/crates/v/shadowsocks-service.svg)](https://crates.io/crates/shadowsocks-service) [![docs.rs](https://img.shields.io/docsrs/shadowsocks-service)](https://docs.rs/shadowsocks-service) Services for serving shadowsocks |
-| [**shadowsocks-rust**](https://crates.io/crates/shadowsocks-rust) | [![crates.io](https://img.shields.io/crates/v/shadowsocks-rust.svg)](https://crates.io/crates/shadowsocks-rust) Binaries running common shadowsocks services |
+| [**shadowsocks-rust**](https://crates.io/crates/shadowsocks-rust)       | [![crates.io](https://img.shields.io/crates/v/shadowsocks-rust.svg)](https://crates.io/crates/shadowsocks-rust) Binaries running common shadowsocks services                                                                                                |
 
 ## Build & Install
 
@@ -35,6 +35,8 @@ shadowsocks is a fast tunnel proxy that helps you bypass firewalls.
 
 * `local-redir` - Allow using redir (transparent proxy) protocol for `sslocal`
 
+* `local-dns` - Allow using dns protocol for `sslocal`, serves as a DNS server proxying queries to local or remote DNS servers by ACL rules
+
 * `stream-cipher` - Enable deprecated stream ciphers. WARN: stream ciphers are UNSAFE!
 
 * `aead-cipher-extra` - Enable non-standard AEAD ciphers
@@ -46,12 +48,21 @@ This project uses system (libc) memory allocator (Rust's default). But it also a
 * `jemalloc` - Uses [jemalloc](http://jemalloc.net/) as global memory allocator
 * `mimalloc` - Uses [mi-malloc](https://microsoft.github.io/mimalloc/) as global memory allocator
 * `tcmalloc` - Uses [TCMalloc](https://google.github.io/tcmalloc/overview.html) as global memory allocator. It tries to link system-wide tcmalloc by default, use vendored from source with `tcmalloc-vendored`.
+* `snmalloc` - Uses [snmalloc](https://github.com/microsoft/snmalloc) as gloal memory allocator
+* `rpmalloc` - Uses [rpmalloc](https://github.com/mjansson/rpmalloc) as global memory allocator
 
 ### **crates.io**
 
 Install from [crates.io](https://crates.io/crates/shadowsocks-rust):
 
 ```bash
+# Set default toolchain to nightly
+rustup default nightly
+# RECOMMEND: Check the rust-toolchain file in the project root and use the recomended nightly version
+# For example:
+# rustup default nightly-2021-06-03
+
+# Install from crates.io
 cargo install shadowsocks-rust
 ```
 
@@ -180,12 +191,16 @@ List all available arguments with `-h`.
 
 ## Usage
 
-### Socks5 Local client
+Start local client with configuration file
 
 ```bash
 # Read local client configuration from file
 sslocal -c /path/to/shadowsocks.json
+```
 
+### Socks5 Local client
+
+```bash
 # Pass all parameters via command line
 sslocal -b "127.0.0.1:1080" -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty" --plugin "v2ray-plugin" --plugin-opts "server;tls;host=github.com"
 
@@ -197,7 +212,7 @@ sslocal -b "127.0.0.1:1080" --server-url "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@127.0
 
 ```bash
 # Read local client configuration from file
-sslocal -c /path/to/shadowsocks.json --protocol http
+sslocal -b "127.0.0.1:3128" --protocol http -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty"
 ```
 
 All parameters are the same as Socks5 client, except `--protocol http`.
@@ -207,22 +222,29 @@ All parameters are the same as Socks5 client, except `--protocol http`.
 ```bash
 # Read local client configuration from file
 # Set 127.0.0.1:8080 as the target for forwarding to
-sslocal -c /path/to/shadowsocks.json -f "127.0.0.1:8080" --protocol tunnel
+sslocal --protocol tunnel -b "127.0.0.1:3128" -f "127.0.0.1:8080" -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty"
 ```
+
+* `--protocol tunnel` enables local client Tunnel mode
+* `-f "127.0.0.1:8080` sets the tunnel target address
 
 ### Transparent Proxy Local client
 
-**NOTE**: This is currently only supports
+**NOTE**: It currently only supports
 
 * Linux (with `iptables` targets `REDIRECT` and `TPROXY`)
 * BSDs (with `pf`), such as OS X 10.10+, FreeBSD, ...
 
 ```bash
 # Read local client configuration from file
-sslocal -c /path/to/shadowsocks.json --protocol redir
+sslocal -b "127.0.0.1:60080" --protocol redir -s "[::1]:8388" -m "aes-256-gcm" -k "hello-kitty" --tcp-redir "redirect" --udp-redir "tproxy"
 ```
 
 Redirects connections with `iptables` configurations to the port that `sslocal` is listening on.
+
+* `--protocol redir` enables local client Redir mode
+* (optional) `--tcp-redir` sets TCP mode to `REDIRECT` (Linux)
+* (optional) `--udp-redir` sets UDP mode to `TPROXY` (Linux)
 
 ### Server
 
@@ -392,6 +414,13 @@ Example configuration:
             "plugin": "...",
             "plugin_opts": "...",
             "timeout": 7200,
+
+            // Customized weight for local server's balancer
+            //
+            // Weight must be in [0, 1], default is 1.0.
+            // The higher weight, the server may rank higher.
+            "tcp_weight": 1.0,
+            "udp_weight": 1.0,
         }
     ],
 
@@ -428,6 +457,9 @@ Example configuration:
 
     // TCP_NODELAY
     "no_delay": false,
+
+    // Enables `SO_KEEPALIVE` and set `TCP_KEEPIDLE`, `TCP_KEEPINTVL` to the specified seconds
+    "keep_alive": 15,
 
     // Soft and Hard limit of file descriptors on *NIX systems
     "nofile": 10240,
@@ -550,7 +582,7 @@ It supports the following features:
 * [x] Improved logging format (waiting for the new official log crate)
 * [x] Support more ciphers without depending on `libcrypto` (waiting for an acceptable Rust crypto lib implementation)
 * [x] Windows support.
-* [x] Build with stable `rustc`.
+* [ ] Build with stable `rustc` (blocking by `crypto2`).
 * [x] Support HTTP Proxy protocol
 * [x] AEAD ciphers. (proposed in [SIP004](https://github.com/shadowsocks/shadowsocks-org/issues/30), still under discussion)
 * [x] Choose server based on delay #152

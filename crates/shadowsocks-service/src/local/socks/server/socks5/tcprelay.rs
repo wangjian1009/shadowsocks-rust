@@ -36,7 +36,6 @@ use crate::{
 pub struct Socks5TcpHandler {
     context: Arc<ServiceContext>,
     udp_bind_addr: Option<Arc<ServerAddr>>,
-    nodelay: bool,
     balancer: PingBalancer,
     mode: Mode,
 }
@@ -45,14 +44,12 @@ impl Socks5TcpHandler {
     pub fn new(
         context: Arc<ServiceContext>,
         udp_bind_addr: Option<Arc<ServerAddr>>,
-        nodelay: bool,
         balancer: PingBalancer,
         mode: Mode,
     ) -> Socks5TcpHandler {
         Socks5TcpHandler {
             context,
             udp_bind_addr,
-            nodelay,
             balancer,
             mode,
         }
@@ -137,7 +134,7 @@ impl Socks5TcpHandler {
         let server = self.balancer.best_tcp_server();
         let svr_cfg = server.server_config();
 
-        let remote = match AutoProxyClientStream::connect(self.context.clone(), &server, &target_addr).await {
+        let mut remote = match AutoProxyClientStream::connect(self.context.clone(), &server, &target_addr).await {
             Ok(remote) => {
                 // Tell the client that we are ready
                 let header =
@@ -163,23 +160,7 @@ impl Socks5TcpHandler {
             }
         };
 
-        if self.nodelay {
-            remote.set_nodelay(true)?;
-        }
-
-        let (mut plain_reader, mut plain_writer) = stream.split();
-        let (mut shadow_reader, mut shadow_writer) = remote.into_split();
-
-        establish_tcp_tunnel(
-            svr_cfg,
-            &mut plain_reader,
-            &mut plain_writer,
-            &mut shadow_reader,
-            &mut shadow_writer,
-            peer_addr,
-            &target_addr,
-        )
-        .await
+        establish_tcp_tunnel(svr_cfg, &mut stream, &mut remote, peer_addr, &target_addr).await
     }
 
     async fn handle_udp_associate(self, mut stream: TcpStream, client_addr: Address) -> io::Result<()> {

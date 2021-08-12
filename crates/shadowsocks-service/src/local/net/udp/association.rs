@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::{self, AbortHandle};
 use log::{debug, error, trace, warn};
-use lru_time_cache::{Entry, LruCache};
+use lru_time_cache::LruCache;
 use shadowsocks::{
     lookup_then,
     net::UdpSocket as ShadowUdpSocket,
@@ -42,6 +42,9 @@ pub trait UdpInboundWrite {
     async fn send_to(&self, peer_addr: SocketAddr, remote_addr: &Address, data: &[u8]) -> io::Result<()>;
 }
 
+type AssociationMap<W> = LruCache<SocketAddr, UdpAssociation<W>>;
+type SharedAssociationMap<W> = Arc<Mutex<AssociationMap<W>>>;
+
 /// UDP association manager
 pub struct UdpAssociationManager<W>
 where
@@ -49,7 +52,7 @@ where
 {
     respond_writer: W,
     context: Arc<ServiceContext>,
-    assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation<W>>>>,
+    assoc_map: SharedAssociationMap<W>,
     cleanup_abortable: AbortHandle,
     balancer: PingBalancer,
 }
@@ -87,7 +90,7 @@ where
                 loop {
                     time::sleep(time_to_live).await;
 
-                    // iter() will trigger a cleanup of expired associations
+                    // cleanup expired associations. iter() will remove expired elements
                     let _ = assoc_map.lock().await.iter();
                 }
             });
@@ -107,23 +110,27 @@ where
     /// Sends `data` from `peer_addr` to `target_addr`
     pub async fn send_to(&self, peer_addr: SocketAddr, target_addr: Address, data: &[u8]) -> io::Result<()> {
         // Check or (re)create an association
-        match self.assoc_map.lock().await.entry(peer_addr) {
-            Entry::Occupied(occ) => {
-                let assoc = occ.into_mut();
-                assoc.try_send((target_addr, Bytes::copy_from_slice(data)))
-            }
-            Entry::Vacant(vac) => {
-                let assoc = vac.insert(UdpAssociation::new(
-                    self.context.clone(),
-                    peer_addr,
-                    self.assoc_map.clone(),
-                    self.balancer.clone(),
-                    self.respond_writer.clone(),
-                ));
-                trace!("created udp association for {}", peer_addr);
-                assoc.try_send((target_addr, Bytes::copy_from_slice(data)))
-            }
+
+        let mut assoc_map = self.assoc_map.lock().await;
+
+        if let Some(assoc) = assoc_map.get(&peer_addr) {
+            return assoc.try_send((target_addr, Bytes::copy_from_slice(data)));
         }
+
+        let assoc = UdpAssociation::new(
+            self.context.clone(),
+            peer_addr,
+            self.assoc_map.clone(),
+            self.balancer.clone(),
+            self.respond_writer.clone(),
+        );
+
+        trace!("created udp association for {}", peer_addr);
+
+        assoc.try_send((target_addr, Bytes::copy_from_slice(data)))?;
+        assoc_map.insert(peer_addr, assoc);
+
+        Ok(())
     }
 }
 
@@ -153,7 +160,7 @@ where
     fn new(
         context: Arc<ServiceContext>,
         peer_addr: SocketAddr,
-        assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation<W>>>>,
+        assoc_map: SharedAssociationMap<W>,
         balancer: PingBalancer,
         respond_writer: W,
     ) -> UdpAssociation<W> {
@@ -245,7 +252,7 @@ where
     bypassed_ipv4_socket: SpinMutex<UdpAssociationBypassState>,
     bypassed_ipv6_socket: SpinMutex<UdpAssociationBypassState>,
     proxied_socket: SpinMutex<UdpAssociationProxyState>,
-    assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation<W>>>>,
+    assoc_map: SharedAssociationMap<W>,
     balancer: PingBalancer,
     respond_writer: W,
 }
@@ -266,7 +273,7 @@ where
     fn new(
         context: Arc<ServiceContext>,
         peer_addr: SocketAddr,
-        assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation<W>>>>,
+        assoc_map: SharedAssociationMap<W>,
         balancer: PingBalancer,
         respond_writer: W,
     ) -> (Arc<UdpAssociationContext<W>>, mpsc::Sender<(Address, Bytes)>) {
@@ -542,10 +549,16 @@ where
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         loop {
             let (n, addr) = match outbound.recv(&mut buffer).await {
-                Ok(n) => {
+                Ok((n, addr)) => {
+                    trace!(
+                        "udp relay {} <- {} (proxied) received {} bytes",
+                        self.peer_addr,
+                        addr,
+                        n
+                    );
                     // Keep association alive in map
                     let _ = self.assoc_map.lock().await.get(&self.peer_addr);
-                    n
+                    (n, addr)
                 }
                 Err(err) => {
                     // Socket that connected to remote server returns an error, it should be ECONNREFUSED in most cases.
@@ -568,13 +581,18 @@ where
             // Send back to client
             if let Err(err) = self.respond_writer.send_to(self.peer_addr, &addr, data).await {
                 warn!(
-                    "udp failed to send back to client {}, from target {}, error: {}",
+                    "udp failed to send back to client {}, from target {} (proxied), error: {}",
                     self.peer_addr, addr, err
                 );
                 continue;
             }
 
-            trace!("udp relay {} <- {} with {} bytes", self.peer_addr, addr, data.len());
+            trace!(
+                "udp relay {} <- {} (proxied) with {} bytes",
+                self.peer_addr,
+                addr,
+                data.len()
+            );
         }
     }
 
@@ -582,10 +600,16 @@ where
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         loop {
             let (n, addr) = match outbound.recv_from(&mut buffer).await {
-                Ok(n) => {
+                Ok((n, addr)) => {
+                    trace!(
+                        "udp relay {} <- {} (bypassed) received {} bytes",
+                        self.peer_addr,
+                        addr,
+                        n
+                    );
                     // Keep association alive in map
                     let _ = self.assoc_map.lock().await.get(&self.peer_addr);
-                    n
+                    (n, addr)
                 }
                 Err(err) => {
                     error!(
@@ -603,13 +627,18 @@ where
             // Send back to client
             if let Err(err) = self.respond_writer.send_to(self.peer_addr, &addr, data).await {
                 warn!(
-                    "udp failed to send back to client {}, from target {}, error: {}",
+                    "udp failed to send back to client {}, from target {} (bypassed), error: {}",
                     self.peer_addr, addr, err
                 );
                 continue;
             }
 
-            trace!("udp relay {} <- {} with {} bytes", self.peer_addr, addr, data.len());
+            trace!(
+                "udp relay {} <- {} (bypassed) with {} bytes",
+                self.peer_addr,
+                addr,
+                data.len()
+            );
         }
     }
 }

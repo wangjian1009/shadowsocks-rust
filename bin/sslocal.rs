@@ -71,10 +71,10 @@ fn main() {
             (@arg DNS: --dns +takes_value "DNS nameservers, formatted like [(tcp|udp)://]host[:port][,host[:port]]..., or unix:///path/to/dns, or predefined keys like \"google\", \"cloudflare\"")
 
             (@arg TCP_NO_DELAY: --("tcp-no-delay") !takes_value alias("no-delay") "Set TCP_NODELAY option for socket")
+            (@arg TCP_FAST_OPEN: --("tcp-fast-open") !takes_value alias("fast-open") "Enable TCP Fast Open (TFO)")
 
             (@arg UDP_TIMEOUT: --("udp-timeout") +takes_value {validator::validate_u64} "Timeout seconds for UDP relay")
             (@arg UDP_MAX_ASSOCIATIONS: --("udp-max-associations") +takes_value {validator::validate_u64} "Maximum associations to be kept simultaneously for UDP relay")
-
 
             (@arg INBOUND_SEND_BUFFER_SIZE: --("inbound-send-buffer-size") +takes_value {validator::validate_u32} "Set inbound sockets' SO_SNDBUF option")
             (@arg INBOUND_RECV_BUFFER_SIZE: --("inbound-recv-buffer-size") +takes_value {validator::validate_u32} "Set inbound sockets' SO_RCVBUF option")
@@ -129,17 +129,15 @@ fn main() {
 
         #[cfg(feature = "local-redir")]
         {
-            let available_redir_types = RedirType::available_types();
-
             if RedirType::tcp_default() != RedirType::NotSupported {
                 app = clap_app!(@app (app)
-                    (@arg TCP_REDIR: --("tcp-redir") +takes_value requires[LOCAL_ADDR] possible_values(&available_redir_types) "TCP redir (transparent proxy) type")
+                    (@arg TCP_REDIR: --("tcp-redir") +takes_value requires[LOCAL_ADDR] possible_values(RedirType::tcp_available_types()) "TCP redir (transparent proxy) type")
                 );
             }
 
             if RedirType::udp_default() != RedirType::NotSupported {
                 app = clap_app!(@app (app)
-                    (@arg UDP_REDIR: --("udp-redir") +takes_value requires[LOCAL_ADDR] possible_values(&available_redir_types) "UDP redir (transparent proxy) type")
+                    (@arg UDP_REDIR: --("udp-redir") +takes_value requires[LOCAL_ADDR] possible_values(RedirType::udp_available_types()) "UDP redir (transparent proxy) type")
                 );
             }
         }
@@ -358,6 +356,10 @@ fn main() {
             config.no_delay = true;
         }
 
+        if matches.is_present("TCP_FAST_OPEN") {
+            config.fast_open = true;
+        }
+
         #[cfg(any(target_os = "linux", target_os = "android"))]
         if let Some(mark) = matches.value_of("OUTBOUND_FWMARK") {
             config.outbound_fwmark = Some(mark.parse::<u32>().expect("an unsigned integer for `outbound-fwmark`"));
@@ -365,7 +367,7 @@ fn main() {
 
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))]
         if let Some(iface) = matches.value_of("OUTBOUND_BIND_INTERFACE") {
-            config.outbound_bind_interface = Some(From::from(iface.to_owned()));
+            config.outbound_bind_interface = Some(iface.to_owned());
         }
 
         #[cfg(all(unix, not(target_os = "android")))]

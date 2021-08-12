@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks-rust"
-version = "1.10.7"
+version = "1.11.1"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -98,6 +98,9 @@ jemalloc = ["jemallocator"]
 # Enable bundled tcmalloc
 tcmalloc-vendored = ["tcmalloc/bundled"]
 
+# Enable snmalloc for binaries
+snmalloc = ["snmalloc-rs"]
+
 # Enable tokio's multi-threaded runtime
 multi-threaded = ["tokio/rt-multi-thread"]
 
@@ -130,8 +133,10 @@ hex = "0.4.2"
 mimalloc = { version = "0.1", optional = true }
 tcmalloc = { version = "0.3", optional = true }
 jemallocator = { version = "0.3", optional = true }
+snmalloc-rs = { version = "0.2", optional = true }
+rpmalloc = { version = "0.2", optional = true }
 
-shadowsocks-service = { version = "1.10.4", path = "./crates/shadowsocks-service" }
+shadowsocks-service = { version = "1.10.6", path = "./crates/shadowsocks-service" }
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.4"

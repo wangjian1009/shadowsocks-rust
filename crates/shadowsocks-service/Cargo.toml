@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks-service"
-version = "1.10.5"
+version = "1.11.1"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -45,12 +45,12 @@ local-dns-relay = ["local-dns"]
 # Currently is only used in Android
 local-flow-stat = ["local"]
 # Enable HTTP protocol for sslocal
-local-http = ["local", "hyper", "http", "tower"]
+local-http = ["local", "hyper", "tower"]
 local-http-native-tls = ["local-http", "tokio-native-tls", "native-tls"]
 local-http-rustls = ["local-http", "tokio-rustls", "webpki-roots", "rustls-native-certs"]
 # Enable REDIR protocol for sslocal
 # (transparent proxy)
-local-redir = ["local", "strum", "strum_macros", "mio"]
+local-redir = ["local", "mio"]
 # Enable tunnel protocol for sslocal
 local-tunnel = ["local"]
 # Enable socks4 protocol for sslocal
@@ -84,7 +84,7 @@ byteorder = "1.3"
 rand = { version = "0.8", optional = true }
 
 futures = "0.3"
-tokio = { version = "1", features = ["io-util", "macros", "net", "parking_lot", "rt", "sync", "time"] }
+tokio = { version = "1.5", features = ["io-util", "macros", "net", "parking_lot", "rt", "sync", "time"] }
 tokio-native-tls = { version = "0.3", optional = true }
 native-tls = { version = "0.2.7", optional = true, features = ["alpn"] }
 tokio-rustls = { version = "0.22", optional = true }
@@ -96,11 +96,10 @@ mio = { version = "0.7", optional = true }
 socket2 = { version = "0.4", features = ["all"] }
 libc = "0.2"
 
-http = { version = "0.2", optional = true }
-hyper = { version = "0.14", optional = true, features = ["full"] }
+hyper = { version = "0.14.7", optional = true, features = ["full"] }
 tower = { version = "0.4", optional = true }
 
-trust-dns-resolver = { version = "0.20.1", optional = true, features = ["serde-config"] }
+trust-dns-resolver = { version = "0.20.3", optional = true, features = ["serde-config"] }
 
 ipnet = "2.3"
 iprange = "0.6"
@@ -109,10 +108,7 @@ regex = "1.4"
 serde = { version = "1.0", features = ["derive"] }
 json5 = "0.3"
 
-shadowsocks = { version = "1.10.2", path = "../shadowsocks" }
-
-strum = { version = "0.20", optional = true }
-strum_macros = { version = "0.20", optional = true }
+shadowsocks = { version = "1.11.1", path = "../shadowsocks" }
 
 # Just for the ioctl call macro
 [target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
@@ -121,3 +117,6 @@ nix = "0.20"
 [dev-dependencies]
 byteorder = "1.3"
 env_logger = "0.8"
+
+[package.metadata.docs.rs]
+features = ["full", "local-http-rustls", "local-dns", "dns-over-tls", "dns-over-https"]

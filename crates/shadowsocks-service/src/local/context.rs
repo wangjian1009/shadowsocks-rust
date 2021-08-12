@@ -51,7 +51,10 @@ impl ServiceContext {
             acl: None,
             flow_stat: Arc::new(FlowStat::new()),
             #[cfg(feature = "local-dns")]
-            reverse_lookup_cache: Mutex::new(LruCache::with_expiry_duration(Duration::from_secs(3 * 24 * 60 * 60))),
+            reverse_lookup_cache: Mutex::new(LruCache::with_expiry_duration_and_capacity(
+                Duration::from_secs(3 * 24 * 60 * 60),
+                10240, // XXX: It should be enough for a normal user.
+            )),
         }
     }
 

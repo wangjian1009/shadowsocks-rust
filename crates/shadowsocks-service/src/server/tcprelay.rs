@@ -1,28 +1,29 @@
 //! Shadowsocks TCP server
 
 use std::{
+    future::Future,
     io::{self, ErrorKind},
     net::SocketAddr,
     sync::Arc,
     time::Duration,
 };
 
-use futures::future::{self, Either};
 use log::{debug, error, info, trace, warn};
 use shadowsocks::{
     crypto::v1::CipherKind,
     net::{AcceptOpts, TcpStream as OutboundTcpStream},
     relay::{
         socks5::{Address, Error as Socks5Error},
-        tcprelay::{
-            utils::{copy_from_encrypted, copy_to_encrypted},
-            ProxyServerStream,
-        },
+        tcprelay::{utils::copy_encrypted_bidirectional, ProxyServerStream},
     },
     ProxyListener,
     ServerConfig,
 };
-use tokio::{net::TcpStream as TokioTcpStream, time};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream as TokioTcpStream,
+    time,
+};
 
 use crate::net::{utils::ignore_until_end, MonProxyStream};
 
@@ -77,6 +78,20 @@ impl TcpServer {
     }
 }
 
+#[inline]
+async fn timeout_fut<F, R>(duration: Option<Duration>, f: F) -> io::Result<R>
+where
+    F: Future<Output = io::Result<R>>,
+{
+    match duration {
+        None => f.await,
+        Some(d) => match time::timeout(d, f).await {
+            Ok(o) => o,
+            Err(..) => Err(ErrorKind::TimedOut.into()),
+        },
+    }
+}
+
 struct TcpServerClient {
     context: Arc<ServiceContext>,
     method: CipherKind,
@@ -104,7 +119,21 @@ impl TcpServerClient {
                     "handshake failed, maybe wrong method or key, or under reply attacks. peer: {}, error: {}",
                     self.peer_addr, err
                 );
-                let _ = ignore_until_end(&mut self.stream).await;
+
+                // Unwrap and get the plain stream.
+                // Otherwise it will keep reporting decryption error before reaching EOF.
+                //
+                // Note: This will drop all data in the decryption buffer, which is no going back.
+                let mut stream = self.stream.into_inner();
+
+                let res = ignore_until_end(&mut stream).await;
+
+                trace!(
+                    "slient-drop peer: {} is now closing with result {:?}",
+                    self.peer_addr,
+                    res
+                );
+
                 return Ok(());
             }
         };
@@ -123,46 +152,55 @@ impl TcpServerClient {
             return Ok(());
         }
 
-        let mut remote_stream = match self.timeout {
-            Some(d) => {
-                match time::timeout(
-                    d,
-                    OutboundTcpStream::connect_remote_with_opts(
-                        self.context.context_ref(),
-                        &target_addr,
-                        self.context.connect_opts_ref(),
-                    ),
-                )
-                .await
-                {
-                    Ok(Ok(s)) => s,
-                    Ok(Err(e)) => return Err(e),
-                    Err(..) => {
-                        return Err(io::Error::new(
-                            ErrorKind::TimedOut,
-                            format!("connect {} timeout", target_addr),
-                        ))
-                    }
-                }
-            }
-            None => {
-                OutboundTcpStream::connect_remote_with_opts(
-                    self.context.context_ref(),
-                    &target_addr,
-                    self.context.connect_opts_ref(),
-                )
-                .await?
+        let mut remote_stream = match timeout_fut(
+            self.timeout,
+            OutboundTcpStream::connect_remote_with_opts(
+                self.context.context_ref(),
+                &target_addr,
+                self.context.connect_opts_ref(),
+            ),
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(err) => {
+                error!(
+                    "tcp tunnel {} -> {} connect failed, error: {}",
+                    self.peer_addr, target_addr, err
+                );
+                return Err(err);
             }
         };
 
-        let (mut lr, mut lw) = self.stream.into_split();
-        let (mut rr, mut rw) = remote_stream.split();
+        // https://github.com/shadowsocks/shadowsocks-rust/issues/232
+        //
+        // Protocols like FTP, clients will wait for servers to send Welcome Message without sending anything.
+        //
+        // Wait at most 500ms, and then sends handshake packet to remote servers.
+        if self.context.connect_opts_ref().tcp.fastopen {
+            let mut buffer = [0u8; 8192];
+            match time::timeout(Duration::from_millis(500), self.stream.read(&mut buffer)).await {
+                Ok(Ok(0)) => {
+                    // EOF. Just terminate right here.
+                    return Ok(());
+                }
+                Ok(Ok(n)) => {
+                    // Send the first packet.
+                    timeout_fut(self.timeout, remote_stream.write_all(&buffer[..n])).await?;
+                }
+                Ok(Err(err)) => return Err(err),
+                Err(..) => {
+                    // Timeout. Send handshake to server.
+                    timeout_fut(self.timeout, remote_stream.write(&[])).await?;
 
-        let l2r = copy_to_encrypted(self.method, &mut lr, &mut rw);
-        let r2l = copy_from_encrypted(self.method, &mut rr, &mut lw);
-
-        tokio::pin!(l2r);
-        tokio::pin!(r2l);
+                    trace!(
+                        "tcp tunnel {} -> {} sent TFO connect without data",
+                        self.peer_addr,
+                        target_addr
+                    );
+                }
+            }
+        }
 
         debug!(
             "established tcp tunnel {} <-> {} with {:?}",
@@ -171,24 +209,19 @@ impl TcpServerClient {
             self.context.connect_opts_ref()
         );
 
-        match future::select(l2r, r2l).await {
-            Either::Left((Ok(..), ..)) => {
-                trace!("tcp tunnel {} -> {} closed", self.peer_addr, target_addr);
-            }
-            Either::Left((Err(err), ..)) => {
+        match copy_encrypted_bidirectional(self.method, &mut self.stream, &mut remote_stream).await {
+            Ok((rn, wn)) => {
                 trace!(
-                    "tcp tunnel {} -> {} closed with error: {}",
+                    "tcp tunnel {} <-> {} closed, L2R {} bytes, R2L {} bytes",
                     self.peer_addr,
                     target_addr,
-                    err
+                    rn,
+                    wn
                 );
             }
-            Either::Right((Ok(..), ..)) => {
-                trace!("tcp tunnel {} <- {} closed", self.peer_addr, target_addr);
-            }
-            Either::Right((Err(err), ..)) => {
+            Err(err) => {
                 trace!(
-                    "tcp tunnel {} <- {} closed with error: {}",
+                    "tcp tunnel {} <-> {} closed with error: {}",
                     self.peer_addr,
                     target_addr,
                     err

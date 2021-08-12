@@ -1,6 +1,6 @@
 //! Cached HTTP client for remote server
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use hyper::{Body, Client};
 use lru_time_cache::LruCache;
@@ -21,7 +21,7 @@ impl ProxyClientCache {
     pub fn new(context: Arc<ServiceContext>) -> ProxyClientCache {
         ProxyClientCache {
             context,
-            cache: Mutex::new(LruCache::with_expiry_duration_and_capacity(Duration::from_secs(60), 5)),
+            cache: Mutex::new(LruCache::with_capacity(5)),
         }
     }
 
@@ -34,7 +34,10 @@ impl ProxyClientCache {
         }
 
         // Create a new client
-        let client = Client::builder().build::<_, Body>(ProxyConnector::new(self.context.clone(), server.clone()));
+        let client = Client::builder()
+            .http1_preserve_header_case(true)
+            .http1_title_case_headers(true)
+            .build::<_, Body>(ProxyConnector::new(self.context.clone(), server.clone()));
         cache.insert(server_config.addr().clone(), client.clone());
 
         client

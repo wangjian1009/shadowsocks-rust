@@ -6,7 +6,7 @@ use bytes::Bytes;
 use futures::future::{self, AbortHandle};
 use io::ErrorKind;
 use log::{debug, error, info, trace, warn};
-use lru_time_cache::{Entry, LruCache};
+use lru_time_cache::LruCache;
 use shadowsocks::{
     lookup_then,
     net::UdpSocket as ShadowUdpSocket,
@@ -28,9 +28,12 @@ use crate::{
     net::MonProxySocket,
 };
 
+type AssociationMap = LruCache<SocketAddr, UdpAssociation>;
+type SharedAssociationMap = Arc<Mutex<AssociationMap>>;
+
 pub struct UdpTunnel {
     context: Arc<ServiceContext>,
-    assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation>>>,
+    assoc_map: SharedAssociationMap,
     cleanup_abortable: AbortHandle,
 }
 
@@ -54,7 +57,7 @@ impl UdpTunnel {
                 loop {
                     time::sleep(time_to_live).await;
 
-                    // iter() will trigger a cleanup of expired associations
+                    // cleanup expired associations. iter() will remove expired elements
                     let _ = assoc_map.lock().await.iter();
                 }
             });
@@ -126,24 +129,26 @@ impl UdpTunnel {
         data: &[u8],
     ) -> io::Result<()> {
         let mut assoc_map = self.assoc_map.lock().await;
-        match assoc_map.entry(peer_addr) {
-            Entry::Occupied(occ) => {
-                let assoc = occ.into_mut();
-                assoc.try_send(Bytes::copy_from_slice(data))
-            }
-            Entry::Vacant(vac) => {
-                let assoc = vac.insert(UdpAssociation::new(
-                    self.context.clone(),
-                    listener.clone(),
-                    peer_addr,
-                    forward_addr.clone(),
-                    self.assoc_map.clone(),
-                    balancer.clone(),
-                ));
-                trace!("created udp association for {}", peer_addr);
-                assoc.try_send(Bytes::copy_from_slice(data))
-            }
+
+        if let Some(assoc) = assoc_map.get(&peer_addr) {
+            return assoc.try_send(Bytes::copy_from_slice(data));
         }
+
+        let assoc = UdpAssociation::new(
+            self.context.clone(),
+            listener.clone(),
+            peer_addr,
+            forward_addr.clone(),
+            self.assoc_map.clone(),
+            balancer.clone(),
+        );
+
+        trace!("created udp association for {}", peer_addr);
+
+        assoc.try_send(Bytes::copy_from_slice(data))?;
+        assoc_map.insert(peer_addr, assoc);
+
+        Ok(())
     }
 }
 
@@ -164,7 +169,7 @@ impl UdpAssociation {
         inbound: Arc<UdpSocket>,
         peer_addr: SocketAddr,
         forward_addr: Address,
-        assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation>>>,
+        assoc_map: SharedAssociationMap,
         balancer: PingBalancer,
     ) -> UdpAssociation {
         let (assoc, sender) =
@@ -222,7 +227,7 @@ struct UdpAssociationContext {
     peer_addr: SocketAddr,
     forward_addr: Address,
     proxied_socket: SpinMutex<UdpAssociationState>,
-    assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation>>>,
+    assoc_map: SharedAssociationMap,
     balancer: PingBalancer,
 }
 
@@ -238,7 +243,7 @@ impl UdpAssociationContext {
         inbound: Arc<UdpSocket>,
         peer_addr: SocketAddr,
         forward_addr: Address,
-        assoc_map: Arc<Mutex<LruCache<SocketAddr, UdpAssociation>>>,
+        assoc_map: SharedAssociationMap,
         balancer: PingBalancer,
     ) -> (Arc<UdpAssociationContext>, mpsc::Sender<Bytes>) {
         // Pending packets 1024 should be good enough for a server.
@@ -365,8 +370,9 @@ impl UdpAssociationContext {
     async fn copy_proxied_r2l(self: Arc<Self>, outbound: Arc<MonProxySocket>) -> io::Result<()> {
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         loop {
-            let (n, _) = match outbound.recv(&mut buffer).await {
-                Ok(n) => {
+            let n = match outbound.recv(&mut buffer).await {
+                Ok((n, addr)) => {
+                    trace!("udp relay {} <- {} received {} bytes", self.peer_addr, addr, n);
                     // Keep association alive in map
                     let _ = self.assoc_map.lock().await.get(&self.peer_addr);
                     n
