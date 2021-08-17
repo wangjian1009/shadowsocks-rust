@@ -492,16 +492,18 @@ fn parse_package_name(path: &str) ->&str {
     return parts[4];
 }
 
-fn decrypt_password(enc_password: &str, pkg: &str) -> Result<String, String> {
+fn decrypt_password(enc_password: &str, _pkg: &str) -> Result<String, String> {
     let key = getkey();
-    let iv = md5::compute(pkg);
+    //let iv = md5::compute(pkg);
+    let iv:[u8;16] = [0xae, 0x80, 0xed, 0xcb, 0x37, 0xc2, 0x70, 0x33,
+                     0x21, 0xb3, 0x31, 0x07, 0xcf, 0x35, 0x88, 0xc3 ];
 
     let enc_password = match base64::decode(enc_password) {
         Ok(r) => r,
         Err(code) => { return Err(String::from(format!("{:?}",code))); },
     };
     
-    let decrypt_password = aes256_cbc_decrypt(enc_password.as_ref(), &key, &iv.0)?;
+    let decrypt_password = aes256_cbc_decrypt(enc_password.as_ref(), &key, &iv)?;
 
     return match String::from_utf8(decrypt_password) {
         Ok(result) => Ok(result),
