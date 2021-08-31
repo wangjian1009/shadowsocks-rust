@@ -9,11 +9,12 @@ use std::{
     task::{self, Poll},
 };
 
+use futures::ready;
 use log::error;
 use pin_project::pin_project;
 use socket2::SockAddr;
 use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
+    io::{AsyncRead, AsyncWrite, Interest, ReadBuf},
     net::{TcpSocket, TcpStream as TokioTcpStream, UdpSocket},
 };
 
@@ -23,9 +24,18 @@ use crate::net::{
     ConnectOpts,
 };
 
+enum TcpStreamState {
+    Connected,
+    FastOpenWrite,
+}
+
 /// A `TcpStream` that supports TFO (TCP Fast Open)
-#[pin_project]
-pub struct TcpStream(#[pin] TokioTcpStream);
+#[pin_project(project = TcpStreamProj)]
+pub struct TcpStream {
+    #[pin]
+    inner: TokioTcpStream,
+    state: TcpStreamState,
+}
 
 impl TcpStream {
     pub async fn connect(addr: SocketAddr, opts: &ConnectOpts) -> io::Result<TcpStream> {
@@ -45,7 +55,10 @@ impl TcpStream {
             // If TFO is not enabled, it just works like a normal TcpStream
             let stream = socket.connect(addr).await?;
             set_common_sockopt_after_connect(&stream, opts)?;
-            return Ok(TcpStream(stream));
+            return Ok(TcpStream {
+                inner: stream,
+                state: TcpStreamState::Connected,
+            });
         }
 
         // TFO in macos uses connectx
@@ -76,7 +89,10 @@ impl TcpStream {
         let stream = TokioTcpStream::from_std(unsafe { StdTcpStream::from_raw_fd(socket.into_raw_fd()) })?;
         set_common_sockopt_after_connect(&stream, opts)?;
 
-        Ok(TcpStream(stream))
+        Ok(TcpStream {
+            inner: stream,
+            state: TcpStreamState::FastOpenWrite,
+        })
     }
 }
 
@@ -84,33 +100,95 @@ impl Deref for TcpStream {
     type Target = TokioTcpStream;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.inner
     }
 }
 
 impl DerefMut for TcpStream {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.inner
     }
 }
 
 impl AsyncRead for TcpStream {
     fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
-        self.project().0.poll_read(cx, buf)
+        self.project().inner.poll_read(cx, buf)
     }
 }
 
 impl AsyncWrite for TcpStream {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        self.project().0.poll_write(cx, buf)
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        loop {
+            let TcpStreamProj { inner, state } = self.as_mut().project();
+
+            match *state {
+                TcpStreamState::Connected => return inner.poll_write(cx, buf),
+
+                TcpStreamState::FastOpenWrite => {
+                    // `CONNECT_RESUME_ON_READ_WRITE` is set when calling `connectx`,
+                    // so the first call of `send` will perform the actual SYN with TFO cookie.
+                    //
+                    // (NOT SURE) If remote server doesn't support TFO or this is the first connection,
+                    // it may return EINPROGRESS just like other platforms (Linux, FreeBSD).
+
+                    let stream = inner.get_mut();
+
+                    // Ensure socket is writable
+                    ready!(stream.poll_write_ready(cx))?;
+
+                    let mut connecting = false;
+                    let send_result = stream.try_io(Interest::WRITABLE, || {
+                        unsafe {
+                            let ret = libc::send(stream.as_raw_fd(), buf.as_ptr() as *const libc::c_void, buf.len(), 0);
+                            if ret >= 0 {
+                                Ok(ret as usize)
+                            } else {
+                                let err = io::Error::last_os_error();
+                                // EAGAIN and EWOULDBLOCK should have been handled by tokio
+                                //
+                                // EINPROGRESS
+                                if let Some(libc::EINPROGRESS) = err.raw_os_error() {
+                                    // For non-blocking socket, it returns the number of bytes queued (and transmitted in the SYN-data packet) if cookie is available.
+                                    // If cookie is not available, it transmits a data-less SYN packet with Fast Open cookie request option and returns -EINPROGRESS like connect().
+                                    //
+                                    // So in this state. We have to loop again to call `poll_write` for sending the first packet.
+                                    connecting = true;
+
+                                    // Let `poll_write_io` clears the write readiness.
+                                    Err(ErrorKind::WouldBlock.into())
+                                } else {
+                                    // Other errors, including EAGAIN
+                                    Err(err)
+                                }
+                            }
+                        }
+                    });
+
+                    match send_result {
+                        Ok(n) => {
+                            // Connected successfully with fast open
+                            *state = TcpStreamState::Connected;
+                            return Ok(n).into();
+                        }
+                        Err(ref err) if err.kind() == ErrorKind::WouldBlock => {
+                            if connecting {
+                                // Connecting with normal TCP handshakes, write the first packet after connected
+                                *state = TcpStreamState::Connected;
+                            }
+                        }
+                        Err(err) => return Err(err).into(),
+                    }
+                }
+            }
+        }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
-        self.project().0.poll_flush(cx)
+        self.project().inner.poll_flush(cx)
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
-        self.project().0.poll_shutdown(cx)
+        self.project().inner.poll_shutdown(cx)
     }
 }
 

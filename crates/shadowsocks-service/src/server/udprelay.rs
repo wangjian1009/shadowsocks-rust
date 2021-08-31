@@ -3,7 +3,6 @@
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use futures::future::{self, AbortHandle};
 use io::ErrorKind;
 use log::{debug, error, info, trace, warn};
 use lru_time_cache::LruCache;
@@ -19,6 +18,7 @@ use shadowsocks::{
 use spin::Mutex as SpinMutex;
 use tokio::{
     sync::{mpsc, Mutex},
+    task::JoinHandle,
     time,
 };
 
@@ -32,12 +32,15 @@ type SharedAssociationMap = Arc<Mutex<AssociationMap>>;
 pub struct UdpServer {
     context: Arc<ServiceContext>,
     assoc_map: SharedAssociationMap,
-    cleanup_abortable: AbortHandle,
+    cleanup_abortable: JoinHandle<()>,
+    keepalive_abortable: JoinHandle<()>,
+    keepalive_tx: mpsc::Sender<SocketAddr>,
 }
 
 impl Drop for UdpServer {
     fn drop(&mut self) {
         self.cleanup_abortable.abort();
+        self.keepalive_abortable.abort();
     }
 }
 
@@ -51,22 +54,33 @@ impl UdpServer {
 
         let cleanup_abortable = {
             let assoc_map = assoc_map.clone();
-            let (cleanup_task, cleanup_abortable) = future::abortable(async move {
+            tokio::spawn(async move {
                 loop {
                     time::sleep(time_to_live).await;
 
                     // cleanup expired associations. iter() will remove expired elements
                     let _ = assoc_map.lock().await.iter();
                 }
-            });
-            tokio::spawn(cleanup_task);
-            cleanup_abortable
+            })
+        };
+
+        let (keepalive_tx, mut keepalive_rx) = mpsc::channel(64);
+
+        let keepalive_abortable = {
+            let assoc_map = assoc_map.clone();
+            tokio::spawn(async move {
+                while let Some(peer_addr) = keepalive_rx.recv().await {
+                    assoc_map.lock().await.get(&peer_addr);
+                }
+            })
         };
 
         UdpServer {
             context,
             assoc_map,
             cleanup_abortable,
+            keepalive_abortable,
+            keepalive_tx,
         }
     }
 
@@ -125,7 +139,7 @@ impl UdpServer {
             self.context.clone(),
             listener.clone(),
             peer_addr,
-            self.assoc_map.clone(),
+            self.keepalive_tx.clone(),
         );
 
         trace!("created udp association for {}", peer_addr);
@@ -154,9 +168,9 @@ impl UdpAssociation {
         context: Arc<ServiceContext>,
         inbound: Arc<MonProxySocket>,
         peer_addr: SocketAddr,
-        assoc_map: SharedAssociationMap,
+        keepalive_tx: mpsc::Sender<SocketAddr>,
     ) -> UdpAssociation {
-        let (assoc, sender) = UdpAssociationContext::new(context, inbound, peer_addr, assoc_map);
+        let (assoc, sender) = UdpAssociationContext::new(context, inbound, peer_addr, keepalive_tx);
         UdpAssociation { assoc, sender }
     }
 
@@ -173,16 +187,14 @@ enum UdpAssociationState {
     Empty,
     Connected {
         socket: Arc<OutboundUdpSocket>,
-        abortable: AbortHandle,
+        abortable: JoinHandle<io::Result<()>>,
     },
     Aborted,
 }
 
 impl Drop for UdpAssociationState {
     fn drop(&mut self) {
-        if let UdpAssociationState::Connected { ref abortable, .. } = *self {
-            abortable.abort();
-        }
+        self.abort_inner();
     }
 }
 
@@ -191,12 +203,20 @@ impl UdpAssociationState {
         UdpAssociationState::Empty
     }
 
-    fn set_connected(&mut self, socket: Arc<OutboundUdpSocket>, abortable: AbortHandle) {
+    fn set_connected(&mut self, socket: Arc<OutboundUdpSocket>, abortable: JoinHandle<io::Result<()>>) {
+        self.abort_inner();
         *self = UdpAssociationState::Connected { socket, abortable };
     }
 
     fn abort(&mut self) {
+        self.abort_inner();
         *self = UdpAssociationState::Aborted;
+    }
+
+    fn abort_inner(&mut self) {
+        if let UdpAssociationState::Connected { ref abortable, .. } = *self {
+            abortable.abort();
+        }
     }
 }
 
@@ -206,8 +226,7 @@ struct UdpAssociationContext {
     peer_addr: SocketAddr,
     outbound_ipv4_socket: SpinMutex<UdpAssociationState>,
     outbound_ipv6_socket: SpinMutex<UdpAssociationState>,
-    assoc_map: SharedAssociationMap,
-    target_cache: Mutex<LruCache<SocketAddr, Address>>,
+    keepalive_tx: mpsc::Sender<SocketAddr>,
 }
 
 impl Drop for UdpAssociationContext {
@@ -221,7 +240,7 @@ impl UdpAssociationContext {
         context: Arc<ServiceContext>,
         inbound: Arc<MonProxySocket>,
         peer_addr: SocketAddr,
-        assoc_map: SharedAssociationMap,
+        keepalive_tx: mpsc::Sender<SocketAddr>,
     ) -> (Arc<UdpAssociationContext>, mpsc::Sender<(Address, Bytes)>) {
         // Pending packets 1024 should be good enough for a server.
         // If there are plenty of packets stuck in the channel, dropping exccess packets is a good way to protect the server from
@@ -234,16 +253,7 @@ impl UdpAssociationContext {
             peer_addr,
             outbound_ipv4_socket: SpinMutex::new(UdpAssociationState::empty()),
             outbound_ipv6_socket: SpinMutex::new(UdpAssociationState::empty()),
-            assoc_map,
-            // Cache for remembering the original Address of target,
-            // when recv_from a SocketAddr, we have to know whch Address that client was originally requested.
-            //
-            // XXX: 128 target addresses should be enough for __one__ client.
-            //      1 hours should be enough for caching the address mapping. Most of the DNS records' TTL won't last that long.
-            target_cache: Mutex::new(LruCache::with_expiry_duration_and_capacity(
-                Duration::from_secs(3600),
-                128,
-            )),
+            keepalive_tx,
         });
 
         let l2r_task = {
@@ -285,9 +295,6 @@ impl UdpAssociationContext {
             },
             Address::DomainNameAddress(ref dname, port) => {
                 lookup_then!(self.context.context_ref(), dname, port, |sa| {
-                    // Record resolved address as reverse index
-                    self.target_cache.lock().await.insert(sa, target_addr.clone());
-
                     match sa {
                         SocketAddr::V4(..) => self.clone().copy_ipv4_l2r_dispatch(sa, data).await,
                         SocketAddr::V6(..) => self.clone().copy_ipv6_l2r_dispatch(sa, data).await,
@@ -311,13 +318,11 @@ impl UdpAssociationContext {
                         OutboundUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref()).await?;
                     let socket: Arc<OutboundUdpSocket> = Arc::new(socket);
 
-                    let (r2l_fut, r2l_abortable) = {
-                        let assoc = self.clone();
-                        future::abortable(assoc.copy_r2l(socket.clone()))
-                    };
-
                     // CLIENT <- REMOTE
-                    tokio::spawn(r2l_fut);
+                    let r2l_abortable = {
+                        let assoc = self.clone();
+                        tokio::spawn(assoc.copy_r2l(socket.clone()))
+                    };
                     debug!(
                         "created udp association for {} with {:?}",
                         self.peer_addr,
@@ -366,13 +371,11 @@ impl UdpAssociationContext {
                         OutboundUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref()).await?;
                     let socket: Arc<OutboundUdpSocket> = Arc::new(socket);
 
-                    let (r2l_fut, r2l_abortable) = {
-                        let assoc = self.clone();
-                        future::abortable(assoc.copy_r2l(socket.clone()))
-                    };
-
                     // CLIENT <- REMOTE
-                    tokio::spawn(r2l_fut);
+                    let r2l_abortable = {
+                        let assoc = self.clone();
+                        tokio::spawn(assoc.copy_r2l(socket.clone()))
+                    };
                     debug!(
                         "created udp association for {} with {:?}",
                         self.peer_addr,
@@ -415,7 +418,10 @@ impl UdpAssociationContext {
             let (n, addr) = match outbound.recv_from(&mut buffer).await {
                 Ok(r) => {
                     // Keep association alive in map
-                    let _ = self.assoc_map.lock().await.get(&self.peer_addr);
+                    let _ = self
+                        .keepalive_tx
+                        .send_timeout(self.peer_addr, Duration::from_secs(1))
+                        .await;
                     r
                 }
                 Err(err) => {
@@ -432,10 +438,7 @@ impl UdpAssociationContext {
 
             let data = &buffer[..n];
 
-            let target_addr = match self.target_cache.lock().await.get(&addr) {
-                Some(a) => a.clone(),
-                None => Address::from(addr),
-            };
+            let target_addr = Address::from(addr);
 
             // Send back to client
             if let Err(err) = self.inbound.send_to(self.peer_addr, &target_addr, data).await {

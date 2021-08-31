@@ -23,7 +23,7 @@ use std::io::{self, Cursor, ErrorKind};
 
 use byte_string::ByteStr;
 use bytes::{BufMut, BytesMut};
-use log::{debug, trace};
+use log::{trace, warn};
 
 use crate::{
     context::Context,
@@ -84,7 +84,7 @@ fn encrypt_payload_stream(
         context.check_nonce_and_set(iv);
     }
 
-    let mut cipher = Cipher::new(method, key, &iv);
+    let mut cipher = Cipher::new(method, key, iv);
 
     addr.write_to_buf(dst);
     dst.put_slice(payload);
@@ -182,8 +182,7 @@ async fn decrypt_payload_stream(
 
     let (iv, data) = payload.split_at_mut(iv_len);
     if context.check_nonce_and_set(iv) {
-        debug!("detected repeated iv {:?}", ByteStr::new(iv));
-        return Err(io::Error::new(io::ErrorKind::Other, "detected repeated iv"));
+        warn!("detected repeated iv {:?}", ByteStr::new(iv));
     }
 
     trace!("UDP packet got stream IV {:?}", ByteStr::new(iv));
@@ -215,13 +214,12 @@ async fn decrypt_payload_aead(
 
     let (salt, data) = payload.split_at_mut(salt_len);
     if context.check_nonce_and_set(salt) {
-        debug!("detected repeated salt {:?}", ByteStr::new(salt));
-        return Err(io::Error::new(io::ErrorKind::Other, "detected repeated salt"));
+        warn!("detected repeated salt {:?}", ByteStr::new(salt));
     }
 
     trace!("UDP packet got AEAD salt {:?}", ByteStr::new(salt));
 
-    let mut cipher = Cipher::new(method, &key, &salt);
+    let mut cipher = Cipher::new(method, key, salt);
     let tag_len = cipher.tag_len();
 
     if data.len() < tag_len {

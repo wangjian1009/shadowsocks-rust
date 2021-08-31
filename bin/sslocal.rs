@@ -4,11 +4,9 @@
 //! or you could specify a configuration file. The format of configuration file is defined
 //! in mod `config`.
 
-extern crate crypto;
+use std::{net::IpAddr, process, time::Duration};
 
-use std::time::Duration;
-
-use clap::{clap_app, Arg};
+use clap::{clap_app, Arg, Error as ClapError, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
 use log::info;
 use tokio::{self, runtime::Builder};
@@ -46,12 +44,12 @@ fn main() {
             (version: VERSION)
             (about: "A fast tunnel proxy that helps you bypass firewalls.")
 
-            (@arg CONFIG: -c --config +takes_value required_unless_all(&["LOCAL_ADDR", "SERVER_CONFIG"]) "Shadowsocks configuration file (https://shadowsocks.org/en/config/quick-guide.html)")
+            (@arg CONFIG: -c --config +takes_value required_unless("SERVER_CONFIG") "Shadowsocks configuration file (https://shadowsocks.org/en/config/quick-guide.html)")
 
             (@arg LOCAL_ADDR: -b --("local-addr") +takes_value {validator::validate_server_addr} "Local address, listen only to this address if specified")
             (@arg UDP_ONLY: -u conflicts_with[TCP_AND_UDP] requires[LOCAL_ADDR] "Server mode UDP_ONLY")
             (@arg TCP_AND_UDP: -U requires[LOCAL_ADDR] "Server mode TCP_AND_UDP")
-            (@arg PROTOCOL: --protocol +takes_value requires[LOCAL_ADDR] possible_values(ProtocolType::available_protocols()) "Protocol for communicating with clients (SOCKS5 by default)")
+            (@arg PROTOCOL: --protocol +takes_value possible_values(ProtocolType::available_protocols()) "Protocol for communicating with clients (SOCKS5 by default)")
             (@arg UDP_BIND_ADDR: --("udp-bind-addr") +takes_value requires[LOCAL_ADDR] {validator::validate_server_addr} "UDP relay's bind address, default is the same as local-addr")
 
             (@arg SERVER_ADDR: -s --("server-addr") +takes_value {validator::validate_server_addr} requires[PASSWORD ENCRYPT_METHOD] "Server address")
@@ -72,6 +70,7 @@ fn main() {
 
             (@arg TCP_NO_DELAY: --("tcp-no-delay") !takes_value alias("no-delay") "Set TCP_NODELAY option for socket")
             (@arg TCP_FAST_OPEN: --("tcp-fast-open") !takes_value alias("fast-open") "Enable TCP Fast Open (TFO)")
+            (@arg TCP_KEEP_ALIVE: --("tcp-keep-alive") +takes_value {validator::validate_u64} "Set TCP keep alive timeout seconds")
 
             (@arg UDP_TIMEOUT: --("udp-timeout") +takes_value {validator::validate_u64} "Timeout seconds for UDP relay")
             (@arg UDP_MAX_ASSOCIATIONS: --("udp-max-associations") +takes_value {validator::validate_u64} "Maximum associations to be kept simultaneously for UDP relay")
@@ -80,6 +79,8 @@ fn main() {
             (@arg INBOUND_RECV_BUFFER_SIZE: --("inbound-recv-buffer-size") +takes_value {validator::validate_u32} "Set inbound sockets' SO_RCVBUF option")
             (@arg OUTBOUND_SEND_BUFFER_SIZE: --("outbound-send-buffer-size") +takes_value {validator::validate_u32} "Set outbound sockets' SO_SNDBUF option")
             (@arg OUTBOUND_RECV_BUFFER_SIZE: --("outbound-recv-buffer-size") +takes_value {validator::validate_u32} "Set outbound sockets' SO_RCVBUF option")
+
+            (@arg OUTBOUND_BIND_ADDR: --("outbound-bind-addr") +takes_value alias("bind-addr") {validator::validate_ip_addr} "Bind address, outbound socket will bind this address")
         );
 
         // FIXME: -6 is not a identifier, so we cannot build it with clap_app!
@@ -172,6 +173,21 @@ fn main() {
             }
         }
 
+        #[cfg(feature = "local-tun")]
+        {
+            app = clap_app!(@app (app)
+                (@arg TUN_INTERFACE_NAME: --("tun-interface-name") +takes_value "Tun interface name, allocate one if not specify")
+                (@arg TUN_INTERFACE_ADDRESS: --("tun-interface-address") +takes_value {validator::validate_ipnet} "Tun interface address (network)")
+            );
+
+            #[cfg(unix)]
+            {
+                app = clap_app!(@app (app)
+                    (@arg TUN_DEVICE_FD_FROM_PATH: --("tun-device-fd-from-path") +takes_value "Tun device file descriptor will be transferred from this unix domain socket path")
+                );
+            }
+        }
+
         #[cfg(unix)]
         {
             app = clap_app!(@app (app)
@@ -211,7 +227,8 @@ fn main() {
                     cfg
                 },
                 Err(err) => {
-                    panic!("loading config \"{}\", {}", cpath, err);
+                    eprintln!("loading config \"{}\", {}", cpath, err);
+                    process::exit(common::EXIT_CODE_LOAD_CONFIG_FAILURE);
                 }
             },
             None => Config::new(ConfigType::Local),
@@ -268,9 +285,7 @@ fn main() {
             config.outbound_vpn_protect_path = Some(From::from("protect_path"));
         }
 
-        if let Some(local_addr) = matches.value_of("LOCAL_ADDR") {
-            let local_addr = local_addr.parse::<ServerAddr>().expect("local bind addr");
-
+        if matches.value_of("LOCAL_ADDR").is_some() || matches.value_of("PROTOCOL").is_some() {
             let protocol = match matches.value_of("PROTOCOL") {
                 Some("socks") => ProtocolType::Socks,
                 #[cfg(feature = "local-http")]
@@ -281,11 +296,31 @@ fn main() {
                 Some("redir") => ProtocolType::Redir,
                 #[cfg(feature = "local-dns")]
                 Some("dns") => ProtocolType::Dns,
+                #[cfg(feature = "local-tun")]
+                Some("tun") => ProtocolType::Tun,
                 Some(p) => panic!("not supported `protocol` \"{}\"", p),
                 None => ProtocolType::Socks,
             };
 
-            let mut local_config = LocalConfig::new(local_addr, protocol);
+            let mut local_config = LocalConfig::new(protocol);
+            match (protocol, matches.value_of("LOCAL_ADDR")) {
+                #[cfg(feature = "local-tun")]
+                (ProtocolType::Tun, local_addr_opt) => {
+                    if let Some(local_addr) = local_addr_opt {
+                        local_config.addr = Some(local_addr.parse::<ServerAddr>().expect("local bind addr"));
+                    }
+                }
+                (_, None) => {
+                    ClapError::with_description(
+                        format!("Protocol \"{}\" requires local-addr", protocol.as_str()).as_str(),
+                        ClapErrorKind::ArgumentNotFound,
+                    )
+                    .exit();
+                }
+                (_, Some(local_addr)) => {
+                    local_config.addr = Some(local_addr.parse::<ServerAddr>().expect("local bind addr"));
+                }
+            }
 
             if let Some(udp_bind_addr) = matches.value_of("UDP_BIND_ADDR") {
                 local_config.udp_addr = Some(udp_bind_addr.parse::<ServerAddr>().expect("udp-bind-addr"));
@@ -331,13 +366,28 @@ fn main() {
                 if let Some(dns_relay_addr) = matches.value_of("DNS_LOCAL_ADDR") {
                     let addr = dns_relay_addr.parse::<ServerAddr>().expect("dns relay address");
 
-                    let mut local_dns_config = LocalConfig::new(addr, ProtocolType::Dns);
+                    let mut local_dns_config = LocalConfig::new_with_addr(addr, ProtocolType::Dns);
 
                     // The `local_dns_addr` and `remote_dns_addr` are for this DNS server (for compatibility)
                     local_dns_config.local_dns_addr = local_config.local_dns_addr.take();
                     local_dns_config.remote_dns_addr = local_config.remote_dns_addr.take();
 
                     config.local.push(local_dns_config);
+                }
+            }
+
+            #[cfg(feature = "local-tun")]
+            {
+                if let Some(tun_address) = matches.value_of("TUN_INTERFACE_ADDRESS") {
+                    local_config.tun_interface_address = Some(tun_address.parse().expect("tun-interface-address"));
+                }
+                if let Some(tun_name) = matches.value_of("TUN_INTERFACE_NAME") {
+                    local_config.tun_interface_name = Some(tun_name.to_owned());
+                }
+
+                #[cfg(unix)]
+                if let Some(fd_path) = matches.value_of("TUN_DEVICE_FD_FROM_PATH") {
+                    local_config.tun_device_fd_from_path = Some(fd_path.into());
                 }
             }
 
@@ -360,6 +410,14 @@ fn main() {
             config.fast_open = true;
         }
 
+        if let Some(keep_alive) = matches.value_of("TCP_KEEP_ALIVE") {
+            config.keep_alive = Some(Duration::from_secs(
+                keep_alive
+                    .parse::<u64>()
+                    .expect("`tcp-keep-alive` is expecting an integer"),
+            ));
+        }
+
         #[cfg(any(target_os = "linux", target_os = "android"))]
         if let Some(mark) = matches.value_of("OUTBOUND_FWMARK") {
             config.outbound_fwmark = Some(mark.parse::<u32>().expect("an unsigned integer for `outbound-fwmark`"));
@@ -379,7 +437,8 @@ fn main() {
             let acl = match AccessControl::load_from_file(acl_file) {
                 Ok(acl) => acl,
                 Err(err) => {
-                    panic!("loading ACL \"{}\", {}", acl_file, err);
+                    eprintln!("loading ACL \"{}\", {}", acl_file, err);
+                    process::exit(common::EXIT_CODE_LOAD_ACL_FAILURE);
                 }
             };
             config.acl = Some(acl);
@@ -412,6 +471,11 @@ fn main() {
         }
         if let Some(bs) = matches.value_of("OUTBOUND_RECV_BUFFER_SIZE") {
             config.outbound_recv_buffer_size = Some(bs.parse::<u32>().expect("outbound-recv-buffer-size"));
+        }
+
+        if let Some(bind_addr) = matches.value_of("OUTBOUND_BIND_ADDR") {
+            let bind_addr = bind_addr.parse::<IpAddr>().expect("outbound-bind-addr");
+            config.outbound_bind_addr = Some(bind_addr);
         }
 
         // DONE READING options
@@ -477,9 +541,15 @@ fn main() {
 
         match future::select(server, abort_signal).await {
             // Server future resolved without an error. This should never happen.
-            Either::Left((Ok(..), ..)) => panic!("server exited unexpectly"),
+            Either::Left((Ok(..), ..)) => {
+                eprintln!("server exited unexpectly");
+                process::exit(common::EXIT_CODE_SERVER_EXIT_UNEXPECTLY);
+            }
             // Server future resolved with error, which are listener errors in most cases
-            Either::Left((Err(err), ..)) => panic!("aborted with {}", err),
+            Either::Left((Err(err), ..)) => {
+                eprintln!("server aborted with {}", err);
+                process::exit(common::EXIT_CODE_SERVER_ABORTED);
+            }
             // The abort signal future resolved. Means we should just exit.
             Either::Right(_) => (),
         }

@@ -1,9 +1,9 @@
 //! TcpStream wrappers that supports connecting with options
 
 #[cfg(unix)]
-use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 #[cfg(windows)]
-use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket};
+use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket, RawSocket};
 use std::{
     io::{self, ErrorKind},
     net::SocketAddr,
@@ -13,7 +13,7 @@ use std::{
 };
 
 use futures::{future, ready};
-use log::{debug, warn};
+use log::warn;
 use pin_project::pin_project;
 use socket2::{Socket, TcpKeepalive};
 use tokio::{
@@ -49,7 +49,7 @@ impl TcpStream {
         let stream = match *addr {
             ServerAddr::SocketAddr(ref addr) => SysTcpStream::connect(*addr, opts).await?,
             ServerAddr::DomainName(ref domain, port) => {
-                lookup_then!(&context, &domain, port, |addr| {
+                lookup_then!(context, domain, port, |addr| {
                     SysTcpStream::connect(addr, opts).await
                 })?
                 .1
@@ -68,7 +68,7 @@ impl TcpStream {
         let stream = match *addr {
             Address::SocketAddress(ref addr) => SysTcpStream::connect(*addr, opts).await?,
             Address::DomainNameAddress(ref domain, port) => {
-                lookup_then!(&context, &domain, port, |addr| {
+                lookup_then!(context, domain, port, |addr| {
                     SysTcpStream::connect(addr, opts).await
                 })?
                 .1
@@ -173,7 +173,7 @@ impl TcpListener {
                 Ok(..) => {}
                 Err(ref err) if err.kind() == ErrorKind::AddrInUse => {
                     // This is probably 0.0.0.0 with the same port has already been occupied
-                    debug!(
+                    warn!(
                         "0.0.0.0:{} may have already been occupied, retry with IPV6_V6ONLY",
                         addr.port()
                     );
@@ -217,6 +217,11 @@ impl TcpListener {
     /// Accept a new incoming connection to this listener
     pub async fn accept(&self) -> io::Result<(TokioTcpStream, SocketAddr)> {
         future::poll_fn(|cx| self.poll_accept(cx)).await
+    }
+
+    /// Unwraps and take the internal `TcpListener`
+    pub fn into_inner(self) -> TokioTcpListener {
+        self.inner
     }
 }
 
@@ -329,4 +334,18 @@ fn setsockopt_with_opt(f: &tokio::net::TcpStream, opts: &AcceptOpts) -> io::Resu
 fn setsockopt_with_opt(f: &tokio::net::TcpStream, opts: &AcceptOpts) -> io::Result<()> {
     f.set_nodelay(opts.tcp.nodelay)?;
     Ok(())
+}
+
+#[cfg(unix)]
+impl AsRawFd for TcpStream {
+    fn as_raw_fd(&self) -> RawFd {
+        self.0.as_raw_fd()
+    }
+}
+
+#[cfg(windows)]
+impl AsRawSocket for TcpStream {
+    fn as_raw_socket(&self) -> RawSocket {
+        self.0.as_raw_socket()
+    }
 }

@@ -7,7 +7,7 @@
 //! *It should be notice that the extented configuration file is not suitable for the server
 //! side.*
 
-use std::{net::IpAddr, time::Duration};
+use std::{net::IpAddr, process, time::Duration};
 
 use clap::{clap_app, Arg};
 use futures::future::{self, Either};
@@ -21,6 +21,7 @@ use shadowsocks_service::{
     shadowsocks::{
         config::{ManagerAddr, Mode},
         crypto::v1::{available_ciphers, CipherKind},
+        plugin::PluginConfig,
     },
 };
 
@@ -43,23 +44,27 @@ fn main() {
             (@arg UDP_ONLY: -u conflicts_with[TCP_AND_UDP] "Server mode UDP_ONLY")
             (@arg TCP_AND_UDP: -U conflicts_with[UDP_ONLY] "Server mode TCP_AND_UDP")
 
-            (@arg CONFIG: -c --config +takes_value required_unless("MANAGER_ADDRESS")
+            (@arg CONFIG: -c --config +takes_value required_unless("MANAGER_ADDR")
                 "Shadowsocks configuration file (https://shadowsocks.org/en/config/quick-guide.html), \
                     the only required fields are \"manager_address\" and \"manager_port\". \
                     Servers defined will be created when process is started.")
 
-            (@arg BIND_ADDR: -b --("bind-addr") +takes_value {validator::validate_ip_addr} "Bind address, outbound socket will bind this address")
+            (@arg OUTBOUND_BIND_ADDR: -b --("outbound-bind-addr") +takes_value alias("bind-addr") {validator::validate_ip_addr} "Bind address, outbound socket will bind this address")
             (@arg SERVER_HOST: -s --("server-host") +takes_value "Host name or IP address of your remote server")
 
-            (@arg MANAGER_ADDRESS: --("manager-address") +takes_value {validator::validate_manager_addr} "ShadowSocks Manager (ssmgr) address, could be ip:port, domain:port or /path/to/unix.sock")
+            (@arg MANAGER_ADDR: --("manager-addr") +takes_value alias("manager-address") {validator::validate_manager_addr} "ShadowSocks Manager (ssmgr) address, could be ip:port, domain:port or /path/to/unix.sock")
             (@arg ENCRYPT_METHOD: -m --("encrypt-method") +takes_value possible_values(available_ciphers()) "Default encryption method")
             (@arg TIMEOUT: --timeout +takes_value {validator::validate_u64} "Default timeout seconds for TCP relay")
+
+            (@arg PLUGIN: --plugin +takes_value requires[SERVER_ADDR] "Default SIP003 (https://shadowsocks.org/en/spec/Plugin.html) plugin")
+            (@arg PLUGIN_OPT: --("plugin-opts") +takes_value requires[PLUGIN] "Default SIP003 plugin options")
 
             (@arg ACL: --acl +takes_value "Path to ACL (Access Control List)")
             (@arg DNS: --dns +takes_value "DNS nameservers, formatted like [(tcp|udp)://]host[:port][,host[:port]]..., or unix:///path/to/dns, or predefined keys like \"google\", \"cloudflare\"")
 
             (@arg TCP_NO_DELAY: --("tcp-no-delay") !takes_value alias("no-delay") "Set TCP_NODELAY option for socket")
             (@arg TCP_FAST_OPEN: --("tcp-fast-open") !takes_value alias("fast-open") "Enable TCP Fast Open (TFO)")
+            (@arg TCP_KEEP_ALIVE: --("tcp-keep-alive") +takes_value {validator::validate_u64} "Set TCP keep alive timeout seconds")
 
             (@arg UDP_TIMEOUT: --("udp-timeout") +takes_value {validator::validate_u64} "Timeout seconds for UDP relay")
             (@arg UDP_MAX_ASSOCIATIONS: --("udp-max-associations") +takes_value {validator::validate_u64} "Maximum associations to be kept simultaneously for UDP relay")
@@ -139,15 +144,16 @@ fn main() {
             Some(cpath) => match Config::load_from_file(cpath, ConfigType::Manager) {
                 Ok(cfg) => cfg,
                 Err(err) => {
-                    panic!("loading config \"{}\", {}", cpath, err);
+                    eprintln!("loading config \"{}\", {}", cpath, err);
+                    process::exit(common::EXIT_CODE_LOAD_CONFIG_FAILURE);
                 }
             },
             None => Config::new(ConfigType::Manager),
         };
 
-        if let Some(bind_addr) = matches.value_of("BIND_ADDR") {
-            let bind_addr = bind_addr.parse::<IpAddr>().expect("bind-addr");
-            config.local_addr = Some(bind_addr);
+        if let Some(bind_addr) = matches.value_of("OUTBOUND_BIND_ADDR") {
+            let bind_addr = bind_addr.parse::<IpAddr>().expect("outbound-bind-addr");
+            config.outbound_bind_addr = Some(bind_addr);
         }
 
         if matches.is_present("TCP_NO_DELAY") {
@@ -156,6 +162,14 @@ fn main() {
 
         if matches.is_present("TCP_FAST_OPEN") {
             config.fast_open = true;
+        }
+
+        if let Some(keep_alive) = matches.value_of("TCP_KEEP_ALIVE") {
+            config.keep_alive = Some(Duration::from_secs(
+                keep_alive
+                    .parse::<u64>()
+                    .expect("`tcp-keep-alive` is expecting an integer"),
+            ));
         }
 
         #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -168,7 +182,7 @@ fn main() {
             config.outbound_bind_interface = Some(iface.to_owned());
         }
 
-        if let Some(m) = matches.value_of("MANAGER_ADDRESS") {
+        if let Some(m) = matches.value_of("MANAGER_ADDR") {
             if let Some(ref mut manager_config) = config.manager {
                 manager_config.addr = m.parse::<ManagerAddr>().expect("manager-address");
             } else {
@@ -188,12 +202,20 @@ fn main() {
             if let Some(sh) = matches.value_of("SERVER_HOST") {
                 manager_config.server_host = sh.parse::<ManagerServerHost>().unwrap();
             }
+
+            if let Some(p) = matches.value_of("PLUGIN") {
+                manager_config.plugin = Some(PluginConfig {
+                    plugin: p.to_owned(),
+                    plugin_opts: matches.value_of("PLUGIN_OPT").map(ToOwned::to_owned),
+                    plugin_args: Vec::new(),
+                });
+            }
         }
 
         // Overrides
         if matches.is_present("UDP_ONLY") {
             if let Some(ref mut m) = config.manager {
-                m.mode = m.mode.merge(Mode::UdpOnly);
+                m.mode = Mode::UdpOnly;
             }
         }
 
@@ -212,7 +234,8 @@ fn main() {
             let acl = match AccessControl::load_from_file(acl_file) {
                 Ok(acl) => acl,
                 Err(err) => {
-                    panic!("loading ACL \"{}\", {}", acl_file, err);
+                    eprintln!("loading ACL \"{}\", {}", acl_file, err);
+                    process::exit(common::EXIT_CODE_LOAD_ACL_FAILURE);
                 }
             };
             config.acl = Some(acl);
@@ -299,9 +322,15 @@ fn main() {
 
         match future::select(server, abort_signal).await {
             // Server future resolved without an error. This should never happen.
-            Either::Left((Ok(..), ..)) => panic!("server exited unexpectly"),
+            Either::Left((Ok(..), ..)) => {
+                eprintln!("server exited unexpectly");
+                process::exit(common::EXIT_CODE_SERVER_EXIT_UNEXPECTLY);
+            }
             // Server future resolved with error, which are listener errors in most cases
-            Either::Left((Err(err), ..)) => panic!("aborted with {}", err),
+            Either::Left((Err(err), ..)) => {
+                eprintln!("server aborted with {}", err);
+                process::exit(common::EXIT_CODE_SERVER_ABORTED);
+            }
             // The abort signal future resolved. Means we should just exit.
             Either::Right(_) => (),
         }

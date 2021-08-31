@@ -9,7 +9,6 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::future::{self, AbortHandle};
 use log::{debug, error, trace, warn};
 use lru_time_cache::LruCache;
 use shadowsocks::{
@@ -24,6 +23,7 @@ use spin::Mutex as SpinMutex;
 use tokio::{
     net::UdpSocket,
     sync::{mpsc, Mutex},
+    task::JoinHandle,
     time,
 };
 
@@ -53,7 +53,9 @@ where
     respond_writer: W,
     context: Arc<ServiceContext>,
     assoc_map: SharedAssociationMap<W>,
-    cleanup_abortable: AbortHandle,
+    cleanup_abortable: JoinHandle<()>,
+    keepalive_abortable: JoinHandle<()>,
+    keepalive_tx: mpsc::Sender<SocketAddr>,
     balancer: PingBalancer,
 }
 
@@ -63,6 +65,7 @@ where
 {
     fn drop(&mut self) {
         self.cleanup_abortable.abort();
+        self.keepalive_abortable.abort();
     }
 }
 
@@ -86,16 +89,25 @@ where
 
         let cleanup_abortable = {
             let assoc_map = assoc_map.clone();
-            let (cleanup_task, cleanup_abortable) = future::abortable(async move {
+            tokio::spawn(async move {
                 loop {
                     time::sleep(time_to_live).await;
 
                     // cleanup expired associations. iter() will remove expired elements
                     let _ = assoc_map.lock().await.iter();
                 }
-            });
-            tokio::spawn(cleanup_task);
-            cleanup_abortable
+            })
+        };
+
+        let (keepalive_tx, mut keepalive_rx) = mpsc::channel(256);
+
+        let keepalive_abortable = {
+            let assoc_map = assoc_map.clone();
+            tokio::spawn(async move {
+                while let Some(peer_addr) = keepalive_rx.recv().await {
+                    assoc_map.lock().await.get(&peer_addr);
+                }
+            })
         };
 
         UdpAssociationManager {
@@ -103,6 +115,8 @@ where
             context,
             assoc_map,
             cleanup_abortable,
+            keepalive_abortable,
+            keepalive_tx,
             balancer,
         }
     }
@@ -120,7 +134,7 @@ where
         let assoc = UdpAssociation::new(
             self.context.clone(),
             peer_addr,
-            self.assoc_map.clone(),
+            self.keepalive_tx.clone(),
             self.balancer.clone(),
             self.respond_writer.clone(),
         );
@@ -160,11 +174,11 @@ where
     fn new(
         context: Arc<ServiceContext>,
         peer_addr: SocketAddr,
-        assoc_map: SharedAssociationMap<W>,
+        keepalive_tx: mpsc::Sender<SocketAddr>,
         balancer: PingBalancer,
         respond_writer: W,
     ) -> UdpAssociation<W> {
-        let (assoc, sender) = UdpAssociationContext::new(context, peer_addr, assoc_map, balancer, respond_writer);
+        let (assoc, sender) = UdpAssociationContext::new(context, peer_addr, keepalive_tx, balancer, respond_writer);
         UdpAssociation { assoc, sender }
     }
 
@@ -181,7 +195,7 @@ enum UdpAssociationBypassState {
     Empty,
     Connected {
         socket: Arc<UdpSocket>,
-        abortable: AbortHandle,
+        abortable: JoinHandle<io::Result<()>>,
     },
     Aborted,
 }
@@ -199,7 +213,7 @@ impl UdpAssociationBypassState {
         UdpAssociationBypassState::Empty
     }
 
-    fn set_connected(&mut self, socket: Arc<UdpSocket>, abortable: AbortHandle) {
+    fn set_connected(&mut self, socket: Arc<UdpSocket>, abortable: JoinHandle<io::Result<()>>) {
         *self = UdpAssociationBypassState::Connected { socket, abortable };
     }
 
@@ -212,16 +226,14 @@ enum UdpAssociationProxyState {
     Empty,
     Connected {
         socket: Arc<MonProxySocket>,
-        abortable: AbortHandle,
+        abortable: JoinHandle<io::Result<()>>,
     },
     Aborted,
 }
 
 impl Drop for UdpAssociationProxyState {
     fn drop(&mut self) {
-        if let UdpAssociationProxyState::Connected { ref abortable, .. } = *self {
-            abortable.abort();
-        }
+        self.abort_inner();
     }
 }
 
@@ -231,15 +243,24 @@ impl UdpAssociationProxyState {
     }
 
     fn reset(&mut self) {
+        self.abort_inner();
         *self = UdpAssociationProxyState::Empty;
     }
 
-    fn set_connected(&mut self, socket: Arc<MonProxySocket>, abortable: AbortHandle) {
+    fn set_connected(&mut self, socket: Arc<MonProxySocket>, abortable: JoinHandle<io::Result<()>>) {
+        self.abort_inner();
         *self = UdpAssociationProxyState::Connected { socket, abortable };
     }
 
     fn abort(&mut self) {
+        self.abort_inner();
         *self = UdpAssociationProxyState::Aborted;
+    }
+
+    fn abort_inner(&mut self) {
+        if let UdpAssociationProxyState::Connected { ref abortable, .. } = *self {
+            abortable.abort();
+        }
     }
 }
 
@@ -252,7 +273,7 @@ where
     bypassed_ipv4_socket: SpinMutex<UdpAssociationBypassState>,
     bypassed_ipv6_socket: SpinMutex<UdpAssociationBypassState>,
     proxied_socket: SpinMutex<UdpAssociationProxyState>,
-    assoc_map: SharedAssociationMap<W>,
+    keepalive_tx: mpsc::Sender<SocketAddr>,
     balancer: PingBalancer,
     respond_writer: W,
 }
@@ -273,7 +294,7 @@ where
     fn new(
         context: Arc<ServiceContext>,
         peer_addr: SocketAddr,
-        assoc_map: SharedAssociationMap<W>,
+        keepalive_tx: mpsc::Sender<SocketAddr>,
         balancer: PingBalancer,
         respond_writer: W,
     ) -> (Arc<UdpAssociationContext<W>>, mpsc::Sender<(Address, Bytes)>) {
@@ -288,7 +309,7 @@ where
             bypassed_ipv4_socket: SpinMutex::new(UdpAssociationBypassState::empty()),
             bypassed_ipv6_socket: SpinMutex::new(UdpAssociationBypassState::empty()),
             proxied_socket: SpinMutex::new(UdpAssociationProxyState::empty()),
-            assoc_map,
+            keepalive_tx,
             balancer,
             respond_writer,
         });
@@ -369,13 +390,11 @@ where
                         ShadowUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref()).await?;
                     let socket: Arc<UdpSocket> = Arc::new(socket.into());
 
-                    let (r2l_fut, r2l_abortable) = {
-                        let assoc = self.clone();
-                        future::abortable(assoc.copy_bypassed_r2l(socket.clone()))
-                    };
-
                     // CLIENT <- REMOTE
-                    tokio::spawn(r2l_fut);
+                    let r2l_abortable = {
+                        let assoc = self.clone();
+                        tokio::spawn(assoc.copy_bypassed_r2l(socket.clone()))
+                    };
                     debug!(
                         "created udp association for {} (bypassed) with {:?}",
                         self.peer_addr,
@@ -424,13 +443,11 @@ where
                         ShadowUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref()).await?;
                     let socket: Arc<UdpSocket> = Arc::new(socket.into());
 
-                    let (r2l_fut, r2l_abortable) = {
-                        let assoc = self.clone();
-                        future::abortable(assoc.copy_bypassed_r2l(socket.clone()))
-                    };
-
                     // CLIENT <- REMOTE
-                    tokio::spawn(r2l_fut);
+                    let r2l_abortable = {
+                        let assoc = self.clone();
+                        tokio::spawn(assoc.copy_bypassed_r2l(socket.clone()))
+                    };
                     debug!(
                         "created udp association for {} (bypassed) with {:?}",
                         self.peer_addr,
@@ -490,13 +507,11 @@ where
                         let socket = MonProxySocket::from_socket(socket, self.context.flow_stat());
                         let socket = Arc::new(socket);
 
-                        let (r2l_fut, r2l_abortable) = {
-                            let assoc = self.clone();
-                            future::abortable(assoc.copy_proxied_r2l(socket.clone()))
-                        };
-
                         // CLIENT <- REMOTE
-                        tokio::spawn(r2l_fut);
+                        let r2l_abortable = {
+                            let assoc = self.clone();
+                            tokio::spawn(assoc.copy_proxied_r2l(socket.clone()))
+                        };
 
                         debug!(
                             "created udp association for {} <-> {} (proxied) with {:?}",
@@ -557,7 +572,10 @@ where
                         n
                     );
                     // Keep association alive in map
-                    let _ = self.assoc_map.lock().await.get(&self.peer_addr);
+                    let _ = self
+                        .keepalive_tx
+                        .send_timeout(self.peer_addr, Duration::from_secs(1))
+                        .await;
                     (n, addr)
                 }
                 Err(err) => {
@@ -608,7 +626,10 @@ where
                         n
                     );
                     // Keep association alive in map
-                    let _ = self.assoc_map.lock().await.get(&self.peer_addr);
+                    let _ = self
+                        .keepalive_tx
+                        .send_timeout(self.peer_addr, Duration::from_secs(1))
+                        .await;
                     (n, addr)
                 }
                 Err(err) => {

@@ -3,7 +3,6 @@
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use futures::future::{self, AbortHandle};
 use io::ErrorKind;
 use log::{debug, error, info, trace, warn};
 use lru_time_cache::LruCache;
@@ -20,6 +19,7 @@ use spin::Mutex as SpinMutex;
 use tokio::{
     net::UdpSocket,
     sync::{mpsc, Mutex},
+    task::JoinHandle,
     time,
 };
 
@@ -34,12 +34,15 @@ type SharedAssociationMap = Arc<Mutex<AssociationMap>>;
 pub struct UdpTunnel {
     context: Arc<ServiceContext>,
     assoc_map: SharedAssociationMap,
-    cleanup_abortable: AbortHandle,
+    cleanup_abortable: JoinHandle<()>,
+    keepalive_abortable: JoinHandle<()>,
+    keepalive_tx: mpsc::Sender<SocketAddr>,
 }
 
 impl Drop for UdpTunnel {
     fn drop(&mut self) {
         self.cleanup_abortable.abort();
+        self.keepalive_abortable.abort();
     }
 }
 
@@ -53,22 +56,33 @@ impl UdpTunnel {
 
         let cleanup_abortable = {
             let assoc_map = assoc_map.clone();
-            let (cleanup_task, cleanup_abortable) = future::abortable(async move {
+            tokio::spawn(async move {
                 loop {
                     time::sleep(time_to_live).await;
 
                     // cleanup expired associations. iter() will remove expired elements
                     let _ = assoc_map.lock().await.iter();
                 }
-            });
-            tokio::spawn(cleanup_task);
-            cleanup_abortable
+            })
+        };
+
+        let (keepalive_tx, mut keepalive_rx) = mpsc::channel(64);
+
+        let keepalive_abortable = {
+            let assoc_map = assoc_map.clone();
+            tokio::spawn(async move {
+                while let Some(peer_addr) = keepalive_rx.recv().await {
+                    assoc_map.lock().await.get(&peer_addr);
+                }
+            })
         };
 
         UdpTunnel {
             context,
             assoc_map,
             cleanup_abortable,
+            keepalive_abortable,
+            keepalive_tx,
         }
     }
 
@@ -79,9 +93,9 @@ impl UdpTunnel {
         forward_addr: &Address,
     ) -> io::Result<()> {
         let socket = match *client_config {
-            ServerAddr::SocketAddr(ref saddr) => ShadowUdpSocket::listen(&saddr).await?,
+            ServerAddr::SocketAddr(ref saddr) => ShadowUdpSocket::listen(saddr).await?,
             ServerAddr::DomainName(ref dname, port) => {
-                lookup_then!(&self.context.context_ref(), dname, port, |addr| {
+                lookup_then!(self.context.context_ref(), dname, port, |addr| {
                     ShadowUdpSocket::listen(&addr).await
                 })?
                 .1
@@ -106,7 +120,7 @@ impl UdpTunnel {
 
             let data = &buffer[..n];
             if let Err(err) = self
-                .send_packet(&listener, peer_addr, &balancer, &forward_addr, data)
+                .send_packet(&listener, peer_addr, &balancer, forward_addr, data)
                 .await
             {
                 error!(
@@ -139,7 +153,7 @@ impl UdpTunnel {
             listener.clone(),
             peer_addr,
             forward_addr.clone(),
-            self.assoc_map.clone(),
+            self.keepalive_tx.clone(),
             balancer.clone(),
         );
 
@@ -169,11 +183,11 @@ impl UdpAssociation {
         inbound: Arc<UdpSocket>,
         peer_addr: SocketAddr,
         forward_addr: Address,
-        assoc_map: SharedAssociationMap,
+        keepalive_tx: mpsc::Sender<SocketAddr>,
         balancer: PingBalancer,
     ) -> UdpAssociation {
         let (assoc, sender) =
-            UdpAssociationContext::new(context, inbound, peer_addr, forward_addr, assoc_map, balancer);
+            UdpAssociationContext::new(context, inbound, peer_addr, forward_addr, keepalive_tx, balancer);
         UdpAssociation { sender, assoc }
     }
 
@@ -190,16 +204,14 @@ enum UdpAssociationState {
     Empty,
     Connected {
         socket: Arc<MonProxySocket>,
-        abortable: AbortHandle,
+        abortable: JoinHandle<io::Result<()>>,
     },
     Aborted,
 }
 
 impl Drop for UdpAssociationState {
     fn drop(&mut self) {
-        if let UdpAssociationState::Connected { ref abortable, .. } = *self {
-            abortable.abort();
-        }
+        self.abort_inner();
     }
 }
 
@@ -209,15 +221,24 @@ impl UdpAssociationState {
     }
 
     fn reset(&mut self) {
+        self.abort_inner();
         *self = UdpAssociationState::Empty;
     }
 
-    fn set_connected(&mut self, socket: Arc<MonProxySocket>, abortable: AbortHandle) {
+    fn set_connected(&mut self, socket: Arc<MonProxySocket>, abortable: JoinHandle<io::Result<()>>) {
+        self.abort_inner();
         *self = UdpAssociationState::Connected { socket, abortable };
     }
 
     fn abort(&mut self) {
+        self.abort_inner();
         *self = UdpAssociationState::Aborted;
+    }
+
+    fn abort_inner(&mut self) {
+        if let UdpAssociationState::Connected { ref abortable, .. } = *self {
+            abortable.abort();
+        }
     }
 }
 
@@ -227,7 +248,7 @@ struct UdpAssociationContext {
     peer_addr: SocketAddr,
     forward_addr: Address,
     proxied_socket: SpinMutex<UdpAssociationState>,
-    assoc_map: SharedAssociationMap,
+    keepalive_tx: mpsc::Sender<SocketAddr>,
     balancer: PingBalancer,
 }
 
@@ -243,7 +264,7 @@ impl UdpAssociationContext {
         inbound: Arc<UdpSocket>,
         peer_addr: SocketAddr,
         forward_addr: Address,
-        assoc_map: SharedAssociationMap,
+        keepalive_tx: mpsc::Sender<SocketAddr>,
         balancer: PingBalancer,
     ) -> (Arc<UdpAssociationContext>, mpsc::Sender<Bytes>) {
         // Pending packets 1024 should be good enough for a server.
@@ -257,7 +278,7 @@ impl UdpAssociationContext {
             peer_addr,
             forward_addr,
             proxied_socket: SpinMutex::new(UdpAssociationState::empty()),
-            assoc_map,
+            keepalive_tx,
             balancer,
         });
 
@@ -312,13 +333,11 @@ impl UdpAssociationContext {
                         let socket = MonProxySocket::from_socket(socket, self.context.flow_stat());
                         let socket = Arc::new(socket);
 
-                        let (r2l_fut, r2l_abortable) = {
-                            let assoc = self.clone();
-                            future::abortable(assoc.copy_proxied_r2l(socket.clone()))
-                        };
-
                         // CLIENT <- REMOTE
-                        tokio::spawn(r2l_fut);
+                        let r2l_abortable = {
+                            let assoc = self.clone();
+                            tokio::spawn(assoc.copy_proxied_r2l(socket.clone()))
+                        };
 
                         debug!(
                             "created udp association for {} <-> {} (proxied) with {:?}",
@@ -374,7 +393,10 @@ impl UdpAssociationContext {
                 Ok((n, addr)) => {
                     trace!("udp relay {} <- {} received {} bytes", self.peer_addr, addr, n);
                     // Keep association alive in map
-                    let _ = self.assoc_map.lock().await.get(&self.peer_addr);
+                    let _ = self
+                        .keepalive_tx
+                        .send_timeout(self.peer_addr, Duration::from_secs(1))
+                        .await;
                     n
                 }
                 Err(err) => {

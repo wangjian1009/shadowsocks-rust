@@ -2,8 +2,7 @@
 
 use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 
-use futures::future::{self, AbortHandle};
-use log::{error, info};
+use log::{error, info, trace};
 use shadowsocks::{
     config::{Mode, ServerConfig, ServerType},
     context::{Context, SharedContext},
@@ -26,7 +25,7 @@ use shadowsocks::{
     ManagerListener,
     ServerAddr,
 };
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
     acl::AccessControl,
@@ -37,7 +36,7 @@ use crate::{
 
 struct ServerInstance {
     flow_stat: Arc<FlowStat>,
-    abortable: AbortHandle,
+    abortable: JoinHandle<io::Result<()>>,
     svr_cfg: ServerConfig,
 }
 
@@ -131,6 +130,8 @@ impl Manager {
                 }
             };
 
+            trace!("received {:?} from {:?}", req, peer_addr);
+
             match req {
                 ManagerRequest::Add(ref req) => match self.handle_add(req).await {
                     Ok(rsp) => {
@@ -196,8 +197,7 @@ impl Manager {
 
         let flow_stat = server.flow_stat();
 
-        let (server_fut, abortable) = future::abortable(async move { server.run().await });
-        tokio::spawn(server_fut);
+        let abortable = tokio::spawn(async move { server.run().await });
 
         servers.insert(
             server_port,
@@ -237,6 +237,8 @@ impl Manager {
                 plugin_args: Vec::new(),
             };
             svr_cfg.set_plugin(p);
+        } else if let Some(ref plugin) = self.svr_cfg.plugin {
+            svr_cfg.set_plugin(plugin.clone());
         }
 
         let mode = match req.mode {

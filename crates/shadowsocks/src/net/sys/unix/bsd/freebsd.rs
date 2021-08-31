@@ -13,7 +13,7 @@ use log::error;
 use pin_project::pin_project;
 use socket2::SockAddr;
 use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
+    io::{AsyncRead, AsyncWrite, Interest, ReadBuf},
     net::{TcpSocket, TcpStream as TokioTcpStream, UdpSocket},
 };
 
@@ -29,7 +29,7 @@ enum TcpStreamState {
 }
 
 /// A `TcpStream` that supports TFO (TCP Fast Open)
-#[pin_project]
+#[pin_project(project = TcpStreamProj)]
 pub struct TcpStream {
     #[pin]
     inner: TokioTcpStream,
@@ -105,46 +105,78 @@ impl AsyncRead for TcpStream {
 }
 
 impl AsyncWrite for TcpStream {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        let this = self.project();
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        loop {
+            let TcpStreamProj { inner, state } = self.project();
 
-        if let TcpStreamState::FastOpenConnect(addr) = this.state {
-            loop {
-                // TCP_FASTOPEN was supported since FreeBSD 12.0
-                //
-                // Example program:
-                // <https://people.freebsd.org/~pkelsey/tfo-tools/tfo-client.c>
+            match *state {
+                TcpStreamState::Connected => return inner.poll_write(cx, buf),
 
-                // Wait until socket is writable
-                ready!(this.inner.poll_write_ready(cx))?;
+                TcpStreamState::FastOpenConnect(addr) => {
+                    // TCP_FASTOPEN was supported since FreeBSD 12.0
+                    //
+                    // Example program:
+                    // <https://people.freebsd.org/~pkelsey/tfo-tools/tfo-client.c>
 
-                unsafe {
-                    let saddr = SockAddr::from(*addr);
+                    let saddr = SockAddr::from(addr);
 
-                    let ret = libc::sendto(
-                        this.inner.as_raw_fd(),
-                        buf.as_ptr() as *const libc::c_void,
-                        buf.len(),
-                        0, // Yes, BSD doesn't need MSG_FASTOPEN
-                        saddr.as_ptr(),
-                        saddr.len(),
-                    );
+                    let stream = inner.get_mut();
 
-                    if ret >= 0 {
-                        // Connect successfully.
-                        *(this.state) = TcpStreamState::Connected;
-                        return Ok(ret as usize).into();
-                    } else {
-                        // Error occurs
-                        let err = io::Error::last_os_error();
-                        if err.kind() != ErrorKind::WouldBlock {
-                            return Err(err).into();
+                    // Ensure socket is writable
+                    ready!(stream.poll_write_ready(cx))?;
+
+                    let mut connecting = false;
+                    let send_result = stream.try_io(Interest::WRITABLE, || {
+                        unsafe {
+                            let ret = libc::sendto(
+                                stream.as_raw_fd(),
+                                buf.as_ptr() as *const libc::c_void,
+                                buf.len(),
+                                0, // Yes, BSD doesn't need MSG_FASTOPEN
+                                saddr.as_ptr(),
+                                saddr.len(),
+                            );
+
+                            if ret >= 0 {
+                                Ok(ret as usize)
+                            } else {
+                                // Error occurs
+                                let err = io::Error::last_os_error();
+
+                                // EINPROGRESS
+                                if let Some(libc::EINPROGRESS) = err.raw_os_error() {
+                                    // For non-blocking socket, it returns the number of bytes queued (and transmitted in the SYN-data packet) if cookie is available.
+                                    // If cookie is not available, it transmits a data-less SYN packet with Fast Open cookie request option and returns -EINPROGRESS like connect().
+                                    //
+                                    // So in this state. We have to loop again to call `poll_write` for sending the first packet.
+                                    connecting = true;
+
+                                    // Let `poll_write_io` clears the write readiness.
+                                    Err(ErrorKind::WouldBlock.into())
+                                } else {
+                                    // Other errors, including EAGAIN, EWOULDBLOCK
+                                    Err(err)
+                                }
+                            }
                         }
+                    });
+
+                    match send_result {
+                        Ok(n) => {
+                            // Connected successfully with fast open
+                            *state = TcpStreamState::Connected;
+                            return Ok(n).into();
+                        }
+                        Err(ref err) if err.kind() == ErrorKind::WouldBlock => {
+                            if connecting {
+                                // Connecting with normal TCP handshakes, write the first packet after connected
+                                *state = TcpStreamState::Connected;
+                            }
+                        }
+                        Err(err) => return Err(err).into(),
                     }
                 }
             }
-        } else {
-            this.inner.poll_write(cx, buf)
         }
     }
 

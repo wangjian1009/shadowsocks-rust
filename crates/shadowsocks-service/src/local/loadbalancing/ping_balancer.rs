@@ -2,7 +2,6 @@
 
 use std::{
     fmt::{self, Debug, Display},
-    future::Future,
     io,
     net::{Ipv4Addr, SocketAddr},
     sync::{
@@ -13,7 +12,7 @@ use std::{
 };
 
 use byte_string::ByteStr;
-use futures::future::{self, AbortHandle};
+use futures::future;
 use log::{debug, info, trace};
 use shadowsocks::{
     config::Mode,
@@ -26,6 +25,7 @@ use shadowsocks::{
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    task::JoinHandle,
     time,
 };
 
@@ -72,7 +72,7 @@ impl PingBalancerBuilder {
         self.servers.push(Arc::new(server));
     }
 
-    pub async fn build(self) -> (PingBalancer, impl Future<Output = ()>) {
+    pub async fn build(self) -> PingBalancer {
         assert!(!self.servers.is_empty(), "build PingBalancer without any servers");
 
         let balancer_context = PingBalancerContext {
@@ -87,21 +87,17 @@ impl PingBalancerBuilder {
 
         let shared_context = Arc::new(balancer_context);
 
-        let (checker, abortable) = {
+        let abortable = {
             let shared_context = shared_context.clone();
-            future::abortable(async move { shared_context.checker_task().await })
-        };
-        let checker = async move {
-            let _ = checker.await;
+            tokio::spawn(async move { shared_context.checker_task().await })
         };
 
-        let balancer = PingBalancer {
+        PingBalancer {
             inner: Arc::new(PingBalancerInner {
                 context: shared_context,
                 abortable,
             }),
-        };
-        (balancer, checker)
+        }
     }
 }
 
@@ -260,7 +256,7 @@ impl PingBalancerContext {
 
 struct PingBalancerInner {
     context: Arc<PingBalancerContext>,
-    abortable: AbortHandle,
+    abortable: JoinHandle<()>,
 }
 
 impl Drop for PingBalancerInner {
@@ -456,7 +452,7 @@ impl PingChecker {
         if dns_answer.len() < 12 || &dns_answer[0..2] != b"\x12\x34" {
             use std::io::{Error, ErrorKind};
 
-            debug!("unexpected response from 8.8.8.8:53, {:?}", ByteStr::new(&dns_answer));
+            debug!("unexpected response from 8.8.8.8:53, {:?}", ByteStr::new(dns_answer));
 
             let err = Error::new(ErrorKind::InvalidData, "unexpected response from 8.8.8.8:53");
             return Err(err);
