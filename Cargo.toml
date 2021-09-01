@@ -128,6 +128,11 @@ exitcode = "1"
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "signal"] }
 
+rust-crypto = "0.2.36"
+base64 = "0.13.0"
+md5 = "0.7.0"
+hex = "0.4.2"
+
 ipnet = { version = "2.3", optional = true }
 
 mimalloc = { version = "0.1", optional = true }
