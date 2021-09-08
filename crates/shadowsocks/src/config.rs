@@ -247,7 +247,7 @@ impl ServerConfig {
         openssl_bytes_to_key(self.password.as_bytes(), &mut enc_key);
         self.enc_key = enc_key;
     }
-    
+
     /// Get password
     pub fn password(&self) -> &str {
         self.password.as_str()

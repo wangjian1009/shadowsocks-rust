@@ -30,10 +30,8 @@ use shadowsocks_service::{
 use self::common::logging;
 use self::common::{monitor, validator};
 
-use crypto::{buffer,aes,blockmodes};
-use crypto::buffer::{WriteBuffer,ReadBuffer,BufferResult};
-
 mod common;
+mod local;
 
 /// shadowsocks version
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -219,13 +217,13 @@ fn main() {
         let mut config = match matches.value_of("CONFIG") {
             Some(cpath) => match Config::load_from_file(cpath, ConfigType::Local) {
                 Ok(mut cfg) => {
-                    let package_name = parse_package_name(cpath);
+                    // let package_name = parse_package_name(cpath);
                     for svr in cfg.server.iter_mut() {
-                        let password = decrypt_password(svr.password(), package_name).unwrap();
+                        let password = local::decrypt_password(svr.password()).unwrap();
                         svr.set_password(password.as_str());
                     }
                     cfg
-                },
+                }
                 Err(err) => {
                     eprintln!("loading config \"{}\", {}", cpath, err);
                     process::exit(common::EXIT_CODE_LOAD_CONFIG_FAILURE);
@@ -554,174 +552,4 @@ fn main() {
             Either::Right(_) => (),
         }
     });
-}
-
-fn parse_package_name(path: &str) ->&str {
-    let parts: Vec<&str> = path.split("/").collect();
-    if parts.len() < 5 { panic!("path {} too shot", path); }
-    return parts[4];
-}
-
-fn decrypt_password(enc_password: &str, _pkg: &str) -> Result<String, String> {
-    let key = getkey();
-    //let iv = md5::compute(pkg);
-    let iv:[u8;16] = [0xae, 0x80, 0xed, 0xcb, 0x37, 0xc2, 0x70, 0x33,
-                     0x21, 0xb3, 0x31, 0x07, 0xcf, 0x35, 0x88, 0xc3 ];
-
-    let enc_password = match base64::decode(enc_password) {
-        Ok(r) => r,
-        Err(code) => { return Err(String::from(format!("{:?}",code))); },
-    };
-    
-    let decrypt_password = aes256_cbc_decrypt(enc_password.as_ref(), &key, &iv)?;
-
-    return match String::from_utf8(decrypt_password) {
-        Ok(result) => Ok(result),
-        Err(code) => Err(String::from(format!("{:?}",code))),
-    };
-}
-
-fn aes256_cbc_decrypt(encrypted_data: &[u8], key: &[u8], iv: &[u8]) -> Result<Vec<u8>, String> {
-    let mut decryptor = aes::cbc_decryptor(aes::KeySize::KeySize256, key, iv, blockmodes::PkcsPadding);
-
-    let mut final_result = Vec::<u8>::new();
-    let mut read_buffer = buffer::RefReadBuffer::new(encrypted_data);
-    let mut buffer = [0; 4096];
-    let mut write_buffer = buffer::RefWriteBuffer::new(&mut buffer);
-    
-    loop {
-        let result = match decryptor.decrypt(&mut read_buffer, &mut write_buffer, true) {
-            Ok(r) => r,
-            Err(code) => return Err(String::from(format!("{:?}",code))),
-        };
-
-        final_result.extend(write_buffer.take_read_buffer().take_remaining().iter().map(|&i| i));
-        match result {
-            BufferResult::BufferUnderflow => break,
-            BufferResult::BufferOverflow => { }
-        }
-    }
-
-    Ok(final_result)
-}
-
-fn getkey() -> Vec<u8> {
-    let iv: [u8; 16]  = [1; 16];
-    let key: [u8; 32] = [0x6E, 0x41, 0x79, 0x76, 0x26, 0x2F, 0x5B, 0x31,
-                         0x26, 0x5D, 0x44, 0x4E, 0x73, 0x48, 0x63, 0x44,
-                         0x30, 0x33, 0x2E, 0x52, 0x62, 0x5D, 0x69, 0x65,
-                         0x35, 0x78, 0x50, 0x43, 0x46, 0x28, 0x2C, 0x44];
-
-    // let aa  = base64::decode("D6gGZEI40uetWdBOBe+wrrxy2UiMxF6G0Y9YNRrETuKIE7B7oJ3uGFyTwGZTrYJd");
-    // println!("xxx: password: {:?}", aa);
-
-    let mut final_result = Vec::<u8>::new();
-
-    final_result.extend_from_slice(&[16, 169, 7, 101]);
-    final_result.extend_from_slice(&[67, 57, 211, 232]);
-    final_result.extend_from_slice(&[174, 90, 209, 79]);
-    final_result.extend_from_slice(&[6, 240, 177, 175]);
-    final_result.extend_from_slice(&[189, 115, 218, 73]);
-    final_result.extend_from_slice(&[141, 197, 95, 135]);
-    final_result.extend_from_slice(&[210, 144, 89, 54]);
-    final_result.extend_from_slice(&[27, 197, 79, 227]);
-    final_result.extend_from_slice(&[137, 20, 177, 124]);
-    final_result.extend_from_slice(&[161, 158, 239, 25]);
-    final_result.extend_from_slice(&[93, 148, 193, 103]);
-    final_result.extend_from_slice(&[84, 174, 131, 94]);
-
-    let b: Vec<u8> = final_result.iter().map(|&i| i-1).collect();
-    return aes256_cbc_decrypt(&b, &key, &iv).unwrap();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_package_name_works() {
-        let pkg = parse_package_name("/data/user/0/cc.coolline.client.pro/no_backup/shadowsocks.conf");
-        assert_eq!(pkg, "cc.coolline.client.pro");
-    }
-
-    #[test]
-    fn decrypt_password_works() {
-        let pkg = "cc.coolline.client.pro";
-        let encryped_passwd = encrypt_password("*!hvk9^4baX#Y%Ja", pkg).unwrap();
-        let decrypt_passwd = decrypt_password(&encryped_passwd, pkg).unwrap();
-        //println!("xxxx: hexkey: {}", hex::encode(getkey().to_vec()));
-        println!("xxxx: encryped_passwd: {}", encryped_passwd);
-        assert_eq!(decrypt_passwd, "*!hvk9^4baX#Y%Ja");
-    }
-
-    #[test]
-    fn decrypt_password_pkg_mismatch() {
-        let encryped_passwd = encrypt_password("password1", "pkg1").unwrap();
-        assert_eq!(decrypt_password(&encryped_passwd, "pkg2"), Err(String::from("InvalidPadding")));
-    }
-
-    #[test]
-    fn decrypt_password_origin() {
-        assert_eq!(
-            decrypt_password("N35GLo6e1JXk8HEjABg54Wtyn4pvyApBAwjvBKjN3Bo=", "cc.coolline.client.pro").unwrap(),
-            "*!hvk9^4baX#Y%Ja");
-    }
-
-    #[test]
-    fn gen_password_password() {
-        let iv: [u8; 16]  = [1; 16];
-        let key: [u8; 32] = [0x6E, 0x41, 0x79, 0x76, 0x26, 0x2F, 0x5B, 0x31,
-                             0x26, 0x5D, 0x44, 0x4E, 0x73, 0x48, 0x63, 0x44,
-                             0x30, 0x33, 0x2E, 0x52, 0x62, 0x5D, 0x69, 0x65,
-                             0x35, 0x78, 0x50, 0x43, 0x46, 0x28, 0x2C, 0x44];
-
-        let key_str = "nAyv&/[1&]DNsHcD03.Rb]ie5xPCF(,D";
-        assert_eq!(String::from_utf8(Vec::<u8>::from(key)).unwrap(), key_str);
-
-        let origin_key = "3,B]6e9Lnm2X(92)/Y_Mx#hjx-F-MvxD";
-        let encrypt_password = aes256_cbc_encrypt(origin_key.as_bytes(), &key, &iv).unwrap();
-
-        assert_eq!(
-            aes256_cbc_decrypt(&encrypt_password, &key, &iv).unwrap(),
-            "3,B]6e9Lnm2X(92)/Y_Mx#hjx-F-MvxD".as_bytes());
-    }
-
-    #[test]
-    fn getkey_work() {
-        assert_eq!(
-            String::from_utf8(getkey()).unwrap(),
-            String::from("3,B]6e9Lnm2X(92)/Y_Mx#hjx-F-MvxD"));
-    }
-
-    fn encrypt_password(origin_password: &str, pkg: &str) -> Result<String, String> {
-        let key = getkey();
-        let iv = md5::compute(pkg);
-        let encrypt_password = aes256_cbc_encrypt(origin_password.as_bytes(), &key, &iv.0)?;
-        Ok(base64::encode(encrypt_password))
-    }
-
-    fn aes256_cbc_encrypt(data: &[u8], key: &[u8], iv: &[u8])->Result<Vec<u8>, String> {
-        let mut encryptor = aes::cbc_encryptor(aes::KeySize::KeySize256, key, iv, blockmodes::PkcsPadding);
-
-        let mut final_result = Vec::<u8>::new();
-        let mut read_buffer = buffer::RefReadBuffer::new(data);
-        let mut buffer = [0; 4096];
-        let mut write_buffer = buffer::RefWriteBuffer::new(&mut buffer);
-
-        loop {
-            let result = match encryptor.encrypt(&mut read_buffer, &mut write_buffer, true) {
-                Ok(r) => r,
-                Err(code) => return Err(String::from(format!("{:?}",code))),
-            };
-
-            final_result.extend(write_buffer.take_read_buffer().take_remaining().iter().map(|&i| i));
-
-            match result {
-                BufferResult::BufferUnderflow => break,
-                BufferResult::BufferOverflow => {},
-            }
-        }
-
-        Ok(final_result)
-    }
 }
