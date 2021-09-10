@@ -1,6 +1,5 @@
 use aes::Aes256;
-use block_modes::{BlockMode, Cbc};
-use block_modes::block_padding::Pkcs7;
+use block_modes::{block_padding::Pkcs7, BlockMode, Cbc};
 
 type Aes256Cbc = Cbc<Aes256, Pkcs7>;
 
