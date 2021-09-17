@@ -1,6 +1,9 @@
 use aes::Aes256;
 use block_modes::{block_padding::Pkcs7, BlockMode, Cbc};
 
+#[cfg(feature = "host-dns")]
+pub mod host_dns;
+
 type Aes256Cbc = Cbc<Aes256, Pkcs7>;
 
 // fn parse_package_name(path: &str) -> &str {

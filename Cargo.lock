@@ -1648,6 +1648,7 @@ dependencies = [
  "block-modes",
  "byte_string",
  "byteorder",
+ "bytes",
  "cfg-if",
  "clap",
  "daemonize",
@@ -1660,11 +1661,13 @@ dependencies = [
  "log4rs",
  "mimalloc",
  "qrcode",
+ "rand",
  "rpmalloc",
  "shadowsocks-service",
  "snmalloc-rs",
  "tcmalloc",
  "tokio",
+ "trust-dns-resolver",
 ]
 
 [[package]]

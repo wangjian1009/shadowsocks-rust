@@ -1,23 +1,163 @@
 use log;
 use std::{ffi::CStr, os::raw::c_char};
-use tokio::{self, runtime::Builder};
-// use std::sync::mpsc;
+use tokio::{self, runtime::Builder, sync::mpsc};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod apple;
 
 mod local;
 
+#[cfg(feature = "host-dns")]
+use local::host_dns;
+
 use shadowsocks_service::{
-    config::{Config, ConfigType},
+    config::{Config, ConfigType, DnsConfig},
     run_local,
 };
+
+#[derive(Debug)]
+enum Command {
+    Stop,
+}
 
 /// shadowsocks version
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[repr(C)]
+pub struct SSLocal {
+    config: Config,
+    ctrl_tx: Option<mpsc::Sender<Command>>,
+}
+
+impl SSLocal {
+    pub fn new(str_config: &str) -> SSLocal {
+        log::info!("config {}", str_config);
+
+        let mut config = Config::load_from_str(&str_config, ConfigType::Local).unwrap();
+
+        for svr in config.server.iter_mut() {
+            let password = local::decrypt_password(svr.password()).unwrap();
+            log::info!("password {} ==> {}", svr.password(), password);
+            svr.set_password(password.as_str());
+            log::info!("server {} password {}", svr.addr(), svr.password());
+        }
+
+        if config.local.is_empty() {
+            log::error!(
+                "missing `local_address`, consider specifying it by \"local_address\" and \"local_port\" in configuration file");
+            panic!();
+        }
+
+        if config.server.is_empty() {
+            log::error!(
+            "missing proxy servers, consider specifying it by configuration file, check more details in https://shadowsocks.org/en/config/quick-guide.html"
+        );
+            panic!();
+        }
+
+        if let Err(err) = config.check_integrity() {
+            log::error!("config integrity check failed, {}", err);
+            panic!();
+        }
+
+        log::info!("loading config {}", config);
+
+        SSLocal { config, ctrl_tx: None }
+    }
+
+    #[cfg(feature = "host-dns")]
+    fn create_host_dns(&mut self) -> Option<host_dns::HostDns> {
+        match &self.config.dns {
+            DnsConfig::LocalDns(ref local_addr) => Some(host_dns::HostDns::new(local_addr.clone(), None)),
+            _ => None,
+        }
+    }
+
+    fn run(&mut self) {
+        let mut builder = Builder::new_current_thread();
+        let runtime = builder.enable_all().build().expect("create tokio Runtime");
+
+        runtime.block_on(async move {
+            let ctrl = self.start_ctrl();
+            let server = run_local(self.config.clone());
+
+            #[cfg(not(feature = "host-dns"))]
+            let use_host_dns = false;
+
+            #[cfg(feature = "host-dns")]
+            let use_host_dns = match &self.config.dns {
+                DnsConfig::LocalDns(_) => true,
+                _ => false,
+            };
+
+            #[cfg(feature = "host-dns")]
+            let host_dns = self.create_host_dns();
+
+            let dns = tokio::spawn(async move {
+                #[cfg(feature = "host-dns")]
+                if let Some(ref host_dns) = &host_dns {
+                    host_dns.run().await.unwrap();
+                }
+            });
+
+            tokio::pin!(ctrl);
+            tokio::pin!(server);
+
+            tokio::select! {
+                val = server => {
+                    match val {
+                        // Server future resolved without an error. This should never happen.
+                        Ok(..) => {
+                            log::info!("server exited unexpectly");
+                            // process::exit(common::EXIT_CODE_SERVER_EXIT_UNEXPECTLY);
+                        }
+                        // Server future resolved with error, which are listener errors in most cases
+                        Err(err) => {
+                            log::error!("server aborted with {}", err);
+                            // process::exit(common::EXIT_CODE_SERVER_ABORTED);
+                        }
+                    }
+                }
+                _ = ctrl => {
+                    log::error!("server aborted ctrl stop");
+                }
+                _ = dns => if use_host_dns {
+                    log::error!("server aborted host dns stop");
+                }
+            }
+        });
+    }
+
+    fn stop(&self) {
+        match &self.ctrl_tx {
+            None => {
+                log::error!("sslocal stop: not started");
+            }
+            Some(tx) => {
+                tx.blocking_send(Command::Stop).unwrap();
+            }
+        }
+    }
+
+    fn start_ctrl(&mut self) -> tokio::task::JoinHandle<()> {
+        let (tx, mut rx) = mpsc::channel(1);
+
+        self.ctrl_tx = Some(tx);
+
+        tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    Command::Stop => {
+                        break;
+                    }
+                }
+            }
+        })
+    }
+}
+
 #[no_mangle]
-fn lib_local_main(c_config: *const c_char) -> i32 {
+pub extern "C" fn lib_local_new(c_config: *const c_char) -> *mut SSLocal {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     apple::logger::init().unwrap();
 
@@ -25,68 +165,22 @@ fn lib_local_main(c_config: *const c_char) -> i32 {
 
     let str_config = unsafe { CStr::from_ptr(c_config).to_string_lossy().to_owned() };
 
-    log::info!("config {}", str_config);
+    Box::into_raw(Box::new(SSLocal::new(&str_config)))
+}
 
-    // let (tx, rx) = mpsc::channel();
-
-    let config = match Config::load_from_str(&str_config, ConfigType::Local) {
-        Ok(mut cfg) => {
-            for svr in cfg.server.iter_mut() {
-                let password = local::decrypt_password(svr.password()).unwrap();
-                log::info!("password {} ==> {}", svr.password(), password);
-                svr.set_password(password.as_str());
-                log::info!("server {} password {}", svr.addr(), svr.password());
-            }
-            cfg
-        }
-        Err(err) => {
-            log::error!("loading config {}, \"{}\"", err, &str_config);
-            return -1;
-        }
-    };
-
-    if config.local.is_empty() {
-        log::error!(
-            "missing `local_address`, consider specifying it by \"local_address\" and \"local_port\" in configuration file"
-        );
-        return -1;
+#[no_mangle]
+pub extern "C" fn lib_local_free(sslocal: *mut SSLocal) {
+    unsafe {
+        Box::from_raw(sslocal);
     }
+}
 
-    if config.server.is_empty() {
-        log::error!(
-            "missing proxy servers, consider specifying it by configuration file, check more details in https://shadowsocks.org/en/config/quick-guide.html"
-        );
-        return -1;
-    }
+#[no_mangle]
+pub extern "C" fn lib_local_run(ptr: *mut SSLocal) {
+    unsafe { (&mut *ptr).run() };
+}
 
-    if let Err(err) = config.check_integrity() {
-        log::error!("config integrity check failed, {}", err);
-        return -1;
-    }
-
-    log::info!("loading config {}", config);
-
-    let mut builder = Builder::new_current_thread();
-    let runtime = builder.enable_all().build().expect("create tokio Runtime");
-
-    runtime.block_on(async move {
-        let server = run_local(config);
-
-        tokio::pin!(server);
-
-        match server.await {
-            // Server future resolved without an error. This should never happen.
-            Ok(..) => {
-                log::info!("server exited unexpectly");
-                // process::exit(common::EXIT_CODE_SERVER_EXIT_UNEXPECTLY);
-            }
-            // Server future resolved with error, which are listener errors in most cases
-            Err(err) => {
-                log::error!("server aborted with {}", err);
-                // process::exit(common::EXIT_CODE_SERVER_ABORTED);
-            }
-        }
-    });
-
-    0
+#[no_mangle]
+pub extern "C" fn lib_local_stop(ptr: *mut SSLocal) {
+    unsafe { (&mut *ptr).stop() };
 }

@@ -9,17 +9,17 @@ pub struct AppleLogger {
     format: Box<dyn Fn(&log::Record) -> String + Sync + Send>,
 }
 
-pub struct LogBuilder {
-    format: Box<dyn Fn(&log::Record) -> String + Sync + Send>,
-}
-
 pub fn init() -> Result<(), log::SetLoggerError> {
     AppleLogger::new().init()
 }
 
 impl AppleLogger {
     pub fn new() -> AppleLogger {
-        LogBuilder::new().build()
+        AppleLogger {
+            format: Box::new(|record: &log::Record| {
+                format!("{}: {}", record.module_path().unwrap_or("unknown"), record.args())
+            }),
+        }
     }
 
     pub fn init(self) -> Result<(), log::SetLoggerError> {
@@ -58,31 +58,5 @@ impl log::Log for AppleLogger {
         unsafe {
             __apple_log(format.as_ptr());
         }
-    }
-}
-
-impl LogBuilder {
-    pub fn new() -> LogBuilder {
-        LogBuilder {
-            format: Box::new(|record: &log::Record| {
-                format!("{}: {}", record.module_path().unwrap_or("unknown"), record.args())
-            }),
-        }
-    }
-
-    pub fn format<F: 'static>(&mut self, format: F) -> &mut Self
-    where
-        F: Fn(&log::Record) -> String + Sync + Send,
-    {
-        self.format = Box::new(format);
-        self
-    }
-
-    pub fn init(self) -> Result<(), log::SetLoggerError> {
-        self.build().init()
-    }
-
-    pub fn build(self) -> AppleLogger {
-        AppleLogger { format: self.format }
     }
 }
