@@ -515,7 +515,16 @@ impl DnsClient {
         // Start querying name servers
         debug!("DNS lookup {:?} {}", query.query_type(), query.name());
 
-        match should_forward_by_query(&self.context, &self.balancer, query) {
+        // 原版的检查对于域名没有在acl配置中的，交由默认处理
+        // 此处将默认处理改为根据acl的黑、白名单配置确定
+        let mut acl_check_result = should_forward_by_query(&self.context, &self.balancer, query);
+        if acl_check_result.is_none() {
+            if let Some(acl) = self.context.acl() {
+                acl_check_result = Some(acl.is_default_in_proxy_list())
+            }
+        }
+
+        match acl_check_result {
             Some(true) => {
                 let remote_response = self.lookup_remote(query, remote_addr).await;
                 trace!("pick remote response (query): {:?}", remote_response);
