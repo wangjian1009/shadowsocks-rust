@@ -94,12 +94,7 @@ impl HostDns {
             info!("host dns unixstream accept one from {:?}", peer_addr);
 
             match &self.remote_addr {
-                Some(remote_addr) => tokio::spawn(HostDns::handle_stream(
-                    self.mode,
-                    stream,
-                    peer_addr,
-                    remote_addr.clone(),
-                )),
+                Some(remote_addr) => tokio::spawn(HostDns::handle_stream(stream, peer_addr, remote_addr.clone())),
                 None => {
                     error!("host dns TCP accept success, no upstream");
                     continue;
@@ -124,12 +119,7 @@ impl HostDns {
             };
 
             match &self.remote_addr {
-                Some(remote_addr) => tokio::spawn(HostDns::handle_stream(
-                    self.mode,
-                    stream,
-                    peer_addr,
-                    remote_addr.clone(),
-                )),
+                Some(remote_addr) => tokio::spawn(HostDns::handle_stream(stream, peer_addr, remote_addr.clone())),
                 None => {
                     error!("host dns TCP accept success, no upstream");
                     continue;
@@ -142,12 +132,7 @@ impl HostDns {
         Ok(())
     }
 
-    async fn handle_stream<T, AddrT>(
-        mode: Mode,
-        mut stream: T,
-        peer_addr: AddrT,
-        remote_addr: Arc<SocketAddr>,
-    ) -> io::Result<()>
+    async fn handle_stream<T, AddrT>(mut stream: T, peer_addr: AddrT, remote_addr: Arc<SocketAddr>) -> io::Result<()>
     where
         T: AsyncRead + AsyncWrite + Unpin,
         AddrT: Debug,
@@ -190,7 +175,7 @@ impl HostDns {
                 }
             };
 
-            let client = DnsClient { mode, attempts: 2 };
+            let client = DnsClient { attempts: 2 };
             let respond_message = match client.resolve(message, &remote_addr).await {
                 Ok(m) => m,
                 Err(err) => {
@@ -215,13 +200,12 @@ impl HostDns {
 }
 
 struct DnsClient {
-    mode: Mode,
     attempts: usize,
 }
 
 impl DnsClient {
-    fn new(mode: Mode) -> DnsClient {
-        DnsClient { mode, attempts: 2 }
+    fn new() -> DnsClient {
+        DnsClient { attempts: 2 }
     }
 
     async fn resolve(&self, request: Message, remote_addr: &SocketAddr) -> io::Result<Message> {

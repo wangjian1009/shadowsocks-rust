@@ -1,5 +1,5 @@
 use log;
-use std::{ffi::CStr, os::raw::c_char, ptr::null};
+use std::{ffi::CStr, os::raw::c_char};
 use tokio::{self, runtime::Builder, sync::mpsc};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -110,12 +110,10 @@ impl SSLocal {
             let dns = tokio::spawn(async move {
                 #[cfg(feature = "host-dns")]
                 if let Some(ref host_dns) = &host_dns {
-                    log::trace!("xxxxxxx run begin");
                     match host_dns.run().await {
                         Ok(()) => log::info!("host dns stop success"),
                         Err(err) => log::error!("host dns stop with error {}", err),
                     }
-                    log::trace!("xxxxxxx run end");
                 }
             });
 
@@ -156,6 +154,10 @@ impl SSLocal {
                 tx.blocking_send(Command::Stop).unwrap();
             }
         }
+    }
+
+    fn update_host_dns(&self, dns_servers: &str) {
+        log::info!("sslocal update host dns: {}", dns_servers)
     }
 
     fn start_ctrl(&mut self) -> tokio::task::JoinHandle<()> {
@@ -207,4 +209,12 @@ pub extern "C" fn lib_local_run(ptr: *mut SSLocal) {
 #[no_mangle]
 pub extern "C" fn lib_local_stop(ptr: *mut SSLocal) {
     unsafe { (&mut *ptr).stop() };
+}
+
+#[no_mangle]
+pub extern "C" fn lib_local_update_host_dns(ptr: *mut SSLocal, c_dns_servers: *const c_char) {
+    unsafe {
+        let dns_servers = CStr::from_ptr(c_dns_servers).to_string_lossy().to_owned();
+        (&mut *ptr).update_host_dns(&dns_servers);
+    };
 }
