@@ -5,6 +5,8 @@ use log::{error, info, trace};
 use rand::{thread_rng, Rng};
 use shadowsocks_service::{local::dns::NameServerAddr, shadowsocks::config::Mode};
 use std::{
+    fmt::Debug,
+    fs,
     io::{self, ErrorKind},
     net::SocketAddr,
     path::PathBuf,
@@ -65,8 +67,45 @@ impl HostDns {
     }
 
     #[cfg(unix)]
-    async fn run_unix_stream_server(&self, bind_addr: &PathBuf) -> io::Result<()> {
-        Ok(())
+    async fn run_unix_stream_server(&self, path: &PathBuf) -> io::Result<()> {
+        match fs::remove_file(path) {
+            Ok(_) => {}
+            Err(ref err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
+                error!("host dns unixstream listening: remote {:?} error, {}", path, err);
+                return Err(err);
+            }
+        }
+
+        let listener: UnixListener = UnixListener::bind(path)?;
+
+        info!("host dns unixstream listening on {:?}", path);
+
+        loop {
+            let (stream, peer_addr) = match listener.accept().await {
+                Ok(s) => s,
+                Err(err) => {
+                    error!("accept failed with error: {}", err);
+                    time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+
+            info!("host dns unixstream accept one from {:?}", peer_addr);
+
+            match &self.remote_addr {
+                Some(remote_addr) => tokio::spawn(HostDns::handle_stream(
+                    self.mode,
+                    stream,
+                    peer_addr,
+                    remote_addr.clone(),
+                )),
+                None => {
+                    error!("host dns TCP accept success, no upstream");
+                    continue;
+                }
+            };
+        }
     }
 
     async fn run_tcp_server(&self, bind_addr: &SocketAddr) -> io::Result<()> {
@@ -103,14 +142,15 @@ impl HostDns {
         Ok(())
     }
 
-    async fn handle_stream<T>(
+    async fn handle_stream<T, AddrT>(
         mode: Mode,
         mut stream: T,
-        peer_addr: SocketAddr,
+        peer_addr: AddrT,
         remote_addr: Arc<SocketAddr>,
     ) -> io::Result<()>
     where
         T: AsyncRead + AsyncWrite + Unpin,
+        AddrT: Debug,
     {
         let mut length_buf = [0u8; 2];
         let mut message_buf = BytesMut::new();
@@ -121,7 +161,7 @@ impl HostDns {
                     break;
                 }
                 Err(err) => {
-                    error!("udp tcp {} read length failed, error: {}", peer_addr, err);
+                    error!("host dns stream {:?} read length failed, error: {}", peer_addr, err);
                     return Err(err);
                 }
             }
@@ -137,7 +177,7 @@ impl HostDns {
             match stream.read_exact(&mut message_buf).await {
                 Ok(..) => {}
                 Err(err) => {
-                    error!("host dns tcp {} read message failed, error: {}", peer_addr, err);
+                    error!("host dns stream {:?} read message failed, error: {}", peer_addr, err);
                     return Err(err);
                 }
             }
@@ -145,7 +185,7 @@ impl HostDns {
             let message = match Message::from_vec(&message_buf) {
                 Ok(m) => m,
                 Err(err) => {
-                    error!("dns tcp {} parse message failed, error: {}", peer_addr, err);
+                    error!("host dns stream {:?} parse message failed, error: {}", peer_addr, err);
                     return Err(err.into());
                 }
             };
@@ -154,7 +194,7 @@ impl HostDns {
             let respond_message = match client.resolve(message, &remote_addr).await {
                 Ok(m) => m,
                 Err(err) => {
-                    error!("dns tcp {} lookup error: {}", peer_addr, err);
+                    error!("host dns stream {:?} lookup error: {}", peer_addr, err);
                     return Err(err);
                 }
             };
@@ -168,7 +208,7 @@ impl HostDns {
             stream.write_all(&buf).await?;
         }
 
-        trace!("dns tcp connection {} closed", peer_addr);
+        trace!("host dns stream connection {:?} closed", peer_addr);
 
         Ok(())
     }
