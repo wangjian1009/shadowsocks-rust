@@ -1,5 +1,5 @@
 use log;
-use std::{ffi::CStr, os::raw::c_char};
+use std::{ffi::CStr, ops::Deref, os::raw::c_char, sync::Arc};
 use tokio::{self, runtime::Builder, sync::mpsc};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -19,12 +19,13 @@ use shadowsocks_service::{
 #[derive(Debug)]
 enum Command {
     Stop,
+    #[cfg(feature = "host-dns")]
+    UpdateHostDns(Vec<String>),
 }
 
 /// shadowsocks version
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[repr(C)]
 pub struct SSLocal {
     config: Config,
     ctrl_tx: Option<mpsc::Sender<Command>>,
@@ -80,9 +81,9 @@ impl SSLocal {
     }
 
     #[cfg(feature = "host-dns")]
-    fn create_host_dns(&mut self) -> Option<HostDns> {
+    fn create_host_dns(&mut self) -> Option<Arc<HostDns>> {
         match &self.config.dns {
-            DnsConfig::LocalDns(ref local_addr) => Some(HostDns::new(local_addr.clone(), None)),
+            DnsConfig::LocalDns(ref local_addr) => Some(Arc::new(HostDns::new(local_addr.clone(), None))),
             _ => None,
         }
     }
@@ -92,29 +93,19 @@ impl SSLocal {
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
 
         runtime.block_on(async move {
-            let ctrl = self.start_ctrl();
-            let server = run_local(self.config.clone());
-
-            #[cfg(not(feature = "host-dns"))]
-            let use_host_dns = false;
-
-            #[cfg(feature = "host-dns")]
-            let use_host_dns = match &self.config.dns {
-                DnsConfig::LocalDns(_) => true,
-                _ => false,
-            };
-
             #[cfg(feature = "host-dns")]
             let host_dns = self.create_host_dns();
+            let ctrl = self.start_ctrl(host_dns.clone());
+            let server = run_local(self.config.clone());
 
             let dns = tokio::spawn(async move {
                 #[cfg(feature = "host-dns")]
-                if let Some(ref host_dns) = &host_dns {
-                    match host_dns.run().await {
+                if let Some(ref host_dns) = host_dns {
+                    match host_dns.deref().run().await {
                         Ok(()) => log::info!("host dns stop success"),
                         Err(err) => log::error!("host dns stop with error {}", err),
                     }
-                }
+                };
             });
 
             tokio::pin!(ctrl);
@@ -138,7 +129,7 @@ impl SSLocal {
                 _ = ctrl => {
                     log::error!("server aborted ctrl stop");
                 }
-                _ = dns => if use_host_dns {
+                _ = dns => {
                     log::error!("server aborted host dns stop");
                 }
             }
@@ -156,21 +147,47 @@ impl SSLocal {
         }
     }
 
+    #[cfg(feature = "host-dns")]
     fn update_host_dns(&self, dns_servers: &str) {
-        log::info!("sslocal update host dns: {}", dns_servers)
+        let servers: Vec<&str> = dns_servers.split(";").collect();
+        match &self.ctrl_tx {
+            None => {
+                log::error!("sslocal update host dns: not started");
+            }
+            Some(tx) => {
+                tx.blocking_send(Command::UpdateHostDns(servers.iter().map(|s| s.to_string()).collect()))
+                    .unwrap();
+            }
+        }
     }
 
-    fn start_ctrl(&mut self) -> tokio::task::JoinHandle<()> {
+    fn start_ctrl(&mut self, host_dns: Option<Arc<HostDns>>) -> tokio::task::JoinHandle<()> {
         let (tx, mut rx) = mpsc::channel(1);
 
         self.ctrl_tx = Some(tx);
 
         tokio::spawn(async move {
+            let host_dns: Option<&HostDns> = match &host_dns {
+                None => None,
+                Some(ref host_dns) => Some(host_dns.deref()),
+            };
+
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     Command::Stop => {
                         break;
                     }
+                    #[cfg(feature = "host-dns")]
+                    Command::UpdateHostDns(servers) => match &host_dns {
+                        None => {
+                            log::info!("sslocal update host dns: no host dns")
+                        }
+                        Some(host_dns) => {
+                            host_dns
+                                .update_servers(servers.iter().map(|s| s.as_str()).collect())
+                                .await
+                        }
+                    },
                 }
             }
         })
@@ -212,6 +229,7 @@ pub extern "C" fn lib_local_stop(ptr: *mut SSLocal) {
 }
 
 #[no_mangle]
+#[cfg(feature = "host-dns")]
 pub extern "C" fn lib_local_update_host_dns(ptr: *mut SSLocal, c_dns_servers: *const c_char) {
     unsafe {
         let dns_servers = CStr::from_ptr(c_dns_servers).to_string_lossy().to_owned();

@@ -8,9 +8,8 @@ use std::{
     fmt::Debug,
     fs,
     io::{self, ErrorKind},
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::PathBuf,
-    sync::Arc,
 };
 
 use trust_dns_resolver::proto::op::{header::MessageType, response_code::ResponseCode, Message, OpCode, Query};
@@ -18,6 +17,7 @@ use trust_dns_resolver::proto::op::{header::MessageType, response_code::Response
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpListener,
+    sync::Mutex,
     time::{self, Duration},
 };
 
@@ -27,7 +27,7 @@ use tokio::net::UnixListener;
 pub struct HostDns {
     mode: Mode,
     local_addr: NameServerAddr,
-    remote_addr: Option<Arc<SocketAddr>>,
+    remote_addr: Mutex<Option<SocketAddr>>,
 }
 
 impl HostDns {
@@ -35,10 +35,7 @@ impl HostDns {
         HostDns {
             mode: Mode::UdpOnly,
             local_addr,
-            remote_addr: match remote_addr {
-                Some(addr) => Some(Arc::new(addr)),
-                None => None,
-            },
+            remote_addr: Mutex::new(remote_addr),
         }
     }
 
@@ -64,6 +61,35 @@ impl HostDns {
             #[cfg(unix)]
             NameServerAddr::UnixSocketAddr(ref path) => self.run_unix_stream_server(path).await,
         }
+    }
+
+    #[allow(unused_assignments)]
+    pub async fn update_servers(&self, servers: Vec<&str>) {
+        log::info!("host dns update host dns: {:?}", servers);
+
+        let mut new_addr: Option<SocketAddr> = None;
+
+        for str_addr in servers.iter() {
+            new_addr = match str_addr.parse::<SocketAddr>() {
+                Ok(sock_addr) => Some(sock_addr),
+                Err(_err) => match str_addr.parse::<IpAddr>() {
+                    Ok(ip) => Some(SocketAddr::new(ip, 53)),
+                    Err(err) => {
+                        error!("host dns update host dns: parse {} fail, {}", str_addr, err);
+                        None
+                    }
+                },
+            };
+
+            if new_addr.is_some() {
+                break;
+            }
+        }
+
+        let mut cur_addr = *self.remote_addr.lock().await;
+
+        log::info!("host dns update host dns: {:?} ==> {:?}", cur_addr, new_addr);
+        cur_addr = new_addr;
     }
 
     #[cfg(unix)]
@@ -93,13 +119,12 @@ impl HostDns {
 
             info!("host dns unixstream accept one from {:?}", peer_addr);
 
-            match &self.remote_addr {
-                Some(remote_addr) => tokio::spawn(HostDns::handle_stream(stream, peer_addr, remote_addr.clone())),
-                None => {
-                    error!("host dns TCP accept success, no upstream");
-                    continue;
-                }
-            };
+            if let Some(remote_addr) = *self.remote_addr.lock().await {
+                tokio::spawn(HostDns::handle_stream(stream, peer_addr, remote_addr));
+            } else {
+                error!("host dns TCP accept success, no upstream");
+                continue;
+            }
         }
     }
 
@@ -118,21 +143,20 @@ impl HostDns {
                 }
             };
 
-            match &self.remote_addr {
-                Some(remote_addr) => tokio::spawn(HostDns::handle_stream(stream, peer_addr, remote_addr.clone())),
-                None => {
-                    error!("host dns TCP accept success, no upstream");
-                    continue;
-                }
+            if let Some(remote_addr) = *self.remote_addr.lock().await {
+                tokio::spawn(HostDns::handle_stream(stream, peer_addr, remote_addr));
+            } else {
+                error!("host dns TCP accept success, no upstream");
+                continue;
             };
         }
     }
 
-    async fn run_udp_server(&self, bind_addr: &SocketAddr) -> io::Result<()> {
+    async fn run_udp_server(&self, _bind_addr: &SocketAddr) -> io::Result<()> {
         Ok(())
     }
 
-    async fn handle_stream<T, AddrT>(mut stream: T, peer_addr: AddrT, remote_addr: Arc<SocketAddr>) -> io::Result<()>
+    async fn handle_stream<T, AddrT>(mut stream: T, peer_addr: AddrT, remote_addr: SocketAddr) -> io::Result<()>
     where
         T: AsyncRead + AsyncWrite + Unpin,
         AddrT: Debug,
@@ -175,7 +199,7 @@ impl HostDns {
                 }
             };
 
-            let client = DnsClient { attempts: 2 };
+            let client = DnsClient::new();
             let respond_message = match client.resolve(message, &remote_addr).await {
                 Ok(m) => m,
                 Err(err) => {
