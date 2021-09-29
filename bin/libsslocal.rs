@@ -83,7 +83,7 @@ impl SSLocal {
     #[cfg(feature = "host-dns")]
     fn create_host_dns(&mut self) -> Option<Arc<HostDns>> {
         match &self.config.dns {
-            DnsConfig::LocalDns(ref local_addr) => Some(Arc::new(HostDns::new(local_addr.clone(), None))),
+            DnsConfig::LocalDns(ref local_addr) => Some(Arc::new(HostDns::new(local_addr.clone()))),
             _ => None,
         }
     }

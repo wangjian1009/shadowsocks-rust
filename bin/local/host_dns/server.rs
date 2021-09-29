@@ -1,18 +1,17 @@
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{BufMut, BytesMut};
 use futures::future::{self, Either};
-use log::{error, info, trace};
-use rand::{thread_rng, Rng};
-use shadowsocks_service::{local::dns::NameServerAddr, shadowsocks::config::Mode};
+use log::{error, info};
+use shadowsocks_service::local::dns::NameServerAddr;
 use std::{
     fmt::Debug,
     fs,
     io::{self, ErrorKind},
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    net::{IpAddr, SocketAddr},
     path::PathBuf,
 };
 
-use trust_dns_resolver::proto::op::{header::MessageType, response_code::ResponseCode, Message, OpCode, Query};
+use trust_dns_resolver::proto::{error::ProtoError, op::Message};
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -24,24 +23,23 @@ use tokio::{
 #[cfg(unix)]
 use tokio::net::UnixListener;
 
+use super::upstream::DnsClient;
+
 pub struct HostDns {
-    mode: Mode,
     local_addr: NameServerAddr,
-    remote_addr: Mutex<Option<SocketAddr>>,
+    remote_addrs: Mutex<Vec<SocketAddr>>,
+    base_query_timeout: Duration,
+    base_query_try: usize,
 }
 
 impl HostDns {
-    pub fn new(local_addr: NameServerAddr, remote_addr: Option<SocketAddr>) -> HostDns {
+    pub fn new(local_addr: NameServerAddr) -> HostDns {
         HostDns {
-            mode: Mode::UdpOnly,
             local_addr,
-            remote_addr: Mutex::new(remote_addr),
+            remote_addrs: Mutex::new(vec![]),
+            base_query_timeout: Duration::from_secs(5),
+            base_query_try: 1,
         }
-    }
-
-    /// Set remote server mode
-    pub fn set_mode(&mut self, mode: Mode) {
-        self.mode = mode;
     }
 
     /// Run server
@@ -67,29 +65,27 @@ impl HostDns {
     pub async fn update_servers(&self, servers: Vec<&str>) {
         log::info!("host dns update host dns: {:?}", servers);
 
-        let mut new_addr: Option<SocketAddr> = None;
+        let mut new_addrs: Vec<SocketAddr> = vec![];
 
         for str_addr in servers.iter() {
-            new_addr = match str_addr.parse::<SocketAddr>() {
-                Ok(sock_addr) => Some(sock_addr),
+            match str_addr.parse::<SocketAddr>() {
+                Ok(sock_addr) => {
+                    new_addrs.push(sock_addr);
+                }
                 Err(_err) => match str_addr.parse::<IpAddr>() {
-                    Ok(ip) => Some(SocketAddr::new(ip, 53)),
+                    Ok(ip) => new_addrs.push(SocketAddr::new(ip, 53)),
                     Err(err) => {
                         error!("host dns update host dns: parse {} fail, {}", str_addr, err);
-                        None
                     }
                 },
             };
-
-            if new_addr.is_some() {
-                break;
-            }
         }
 
-        let mut cur_addr = *self.remote_addr.lock().await;
+        let mut guard_addrs = self.remote_addrs.lock().await;
 
-        log::info!("host dns update host dns: {:?} ==> {:?}", cur_addr, new_addr);
-        cur_addr = new_addr;
+        log::info!("host dns update host dns: {:?} ==> {:?}", guard_addrs, new_addrs);
+
+        *guard_addrs = new_addrs;
     }
 
     #[cfg(unix)]
@@ -119,11 +115,19 @@ impl HostDns {
 
             info!("host dns unixstream accept one from {:?}", peer_addr);
 
-            if let Some(remote_addr) = *self.remote_addr.lock().await {
-                tokio::spawn(HostDns::handle_stream(stream, peer_addr, remote_addr));
-            } else {
+            let servers = self.get_servers().await;
+
+            if servers.is_empty() {
                 error!("host dns TCP accept success, no upstream");
                 continue;
+            } else {
+                tokio::spawn(HostDns::handle_stream(
+                    stream,
+                    peer_addr,
+                    servers,
+                    self.base_query_timeout,
+                    self.base_query_try,
+                ));
             }
         }
     }
@@ -143,12 +147,20 @@ impl HostDns {
                 }
             };
 
-            if let Some(remote_addr) = *self.remote_addr.lock().await {
-                tokio::spawn(HostDns::handle_stream(stream, peer_addr, remote_addr));
-            } else {
+            let servers = self.get_servers().await;
+
+            if servers.is_empty() {
                 error!("host dns TCP accept success, no upstream");
                 continue;
-            };
+            } else {
+                tokio::spawn(HostDns::handle_stream(
+                    stream,
+                    peer_addr,
+                    servers,
+                    self.base_query_timeout,
+                    self.base_query_try,
+                ));
+            }
         }
     }
 
@@ -156,7 +168,13 @@ impl HostDns {
         Ok(())
     }
 
-    async fn handle_stream<T, AddrT>(mut stream: T, peer_addr: AddrT, remote_addr: SocketAddr) -> io::Result<()>
+    async fn handle_stream<T, AddrT>(
+        mut stream: T,
+        peer_addr: AddrT,
+        servers: Vec<SocketAddr>,
+        base_query_timeout: Duration,
+        base_query_try: usize,
+    ) -> io::Result<()>
     where
         T: AsyncRead + AsyncWrite + Unpin,
         AddrT: Debug,
@@ -199,114 +217,127 @@ impl HostDns {
                 }
             };
 
-            let client = DnsClient::new();
-            let respond_message = match client.resolve(message, &remote_addr).await {
-                Ok(m) => m,
-                Err(err) => {
-                    error!("host dns stream {:?} lookup error: {}", peer_addr, err);
-                    return Err(err);
+            let mut respond_message: Option<Message> = None;
+            let mut last_error: Option<ProtoError> = None;
+
+            for server in (&servers).into_iter() {
+                respond_message = match HostDns::resolve(&message, &server, base_query_timeout, base_query_try).await {
+                    Ok(respond_message) => Some(respond_message),
+                    Err(err) => {
+                        last_error = Some(err);
+                        continue;
+                    }
                 }
-            };
+            }
 
-            let mut buf = respond_message.to_vec()?;
-            let length = buf.len();
-            buf.resize(length + 2, 0);
-            buf.copy_within(..length, 2);
-            BigEndian::write_u16(&mut buf[..2], length as u16);
+            match respond_message {
+                None => match last_error {
+                    None => return Err(io::Error::new(ErrorKind::Other, "no any response")),
+                    Some(err) => return Err(io::Error::new(ErrorKind::Other, err.clone())),
+                },
+                Some(respond_message) => {
+                    let mut buf = respond_message.to_vec()?;
+                    let length = buf.len();
+                    buf.resize(length + 2, 0);
+                    buf.copy_within(..length, 2);
+                    BigEndian::write_u16(&mut buf[..2], length as u16);
 
-            stream.write_all(&buf).await?;
+                    stream.write_all(&buf).await?;
+                }
+            }
         }
-
-        trace!("host dns stream connection {:?} closed", peer_addr);
 
         Ok(())
     }
-}
 
-struct DnsClient {
-    attempts: usize,
-}
+    async fn resolve(
+        msg: &Message,
+        server: &SocketAddr,
+        base_query_timeout: Duration,
+        base_query_try: usize,
+    ) -> Result<Message, ProtoError> {
+        let udp_query = HostDns::resolve_udp(msg, server, base_query_timeout, base_query_try);
+        let tcp_query = async move {
+            // Send TCP query after 500ms, because UDP will always return faster than TCP, there is no need to send queries simutaneously
+            time::sleep(Duration::from_millis(500)).await;
 
-impl DnsClient {
-    fn new() -> DnsClient {
-        DnsClient { attempts: 2 }
-    }
+            HostDns::resolve_tcp(msg, server, base_query_timeout, base_query_try).await
+        };
 
-    async fn resolve(&self, request: Message, remote_addr: &SocketAddr) -> io::Result<Message> {
-        let mut message = Message::new();
-        message.set_id(request.id());
-        message.set_recursion_desired(true);
-        message.set_recursion_available(true);
-        message.set_message_type(MessageType::Response);
+        tokio::pin!(udp_query);
+        tokio::pin!(tcp_query);
 
-        if !request.recursion_desired() {
-            // RD is required by default. Otherwise it may not get valid respond from remote servers
-
-            message.set_recursion_desired(false);
-            message.set_response_code(ResponseCode::NotImp);
-        } else if request.op_code() != OpCode::Query || request.message_type() != MessageType::Query {
-            // Other ops are not supported
-
-            message.set_response_code(ResponseCode::NotImp);
-        } else if request.query_count() > 0 {
-            // Make queries according to ACL rules
-
-            let r = self.lookup_local(&request.queries()[0], remote_addr).await;
-            if let Ok(result) = r {
-                for rec in result.answers() {
-                    trace!("native dns answer: {:?}", rec);
-                }
-                message = result;
-                message.set_id(request.id());
-            } else {
-                message.set_response_code(ResponseCode::ServFail);
-            }
+        match future::select(udp_query, tcp_query).await {
+            Either::Left((Ok(m), ..)) => Ok(m),
+            Either::Left((Err(..), next)) => next.await.map_err(From::from),
+            Either::Right((Ok(m), ..)) => Ok(m),
+            Either::Right((Err(..), next)) => next.await.map_err(From::from),
         }
-        Ok(message)
     }
 
-    async fn lookup_local(&self, query: &Query, local_addr: &SocketAddr) -> io::Result<Message> {
-        let mut last_err = io::Error::new(ErrorKind::InvalidData, "resolve empty");
+    async fn resolve_udp(
+        msg: &Message,
+        server: &SocketAddr,
+        timeout: Duration,
+        retry_count: usize,
+    ) -> Result<Message, ProtoError> {
+        let mut last_err: Option<ProtoError> = None;
 
-        for _ in 0..self.attempts {
-            match self.lookup_local_inner(query, local_addr).await {
-                Ok(m) => {
-                    return Ok(m);
+        for _ in 0..retry_count {
+            let mut client = match DnsClient::connect_udp(server).await {
+                Ok(client) => client,
+                Err(error) => {
+                    last_err = Some(error.into());
+                    continue;
                 }
-                Err(err) => last_err = err,
-            }
+            };
+
+            let res = match client.lookup_timeout(msg.clone(), timeout).await {
+                Ok(msg) => msg,
+                Err(error) => {
+                    last_err = Some(error.into());
+                    continue;
+                }
+            };
+
+            return Ok(res);
         }
 
-        Err(last_err)
+        Err(last_err.unwrap())
     }
 
-    async fn lookup_local_inner(&self, query: &Query, local_addr: &SocketAddr) -> io::Result<Message> {
-        let mut message = Message::new();
-        message.set_id(thread_rng().gen());
-        message.set_recursion_desired(true);
-        message.add_query(query.clone());
+    async fn resolve_tcp(
+        msg: &Message,
+        server: &SocketAddr,
+        timeout: Duration,
+        retry_count: usize,
+    ) -> Result<Message, ProtoError> {
+        let mut last_err: Option<ProtoError> = None;
 
-        // let udp_query = self
-        //     .client_cache
-        //     .lookup_udp_local(ns, message.clone(), self.context.connect_opts_ref());
-        // let tcp_query = async move {
-        //     // Send TCP query after 500ms, because UDP will always return faster than TCP, there is no need to send queries simutaneously
-        //     time::sleep(Duration::from_millis(500)).await;
+        for _ in 0..retry_count {
+            let mut client = match DnsClient::connect_tcp(server).await {
+                Ok(client) => client,
+                Err(error) => {
+                    last_err = Some(error.into());
+                    continue;
+                }
+            };
 
-        //     self.client_cache
-        //         .lookup_tcp_local(ns, message, self.context.connect_opts_ref())
-        //         .await
-        // };
+            let res = match client.lookup_timeout(msg.clone(), timeout).await {
+                Ok(msg) => msg,
+                Err(error) => {
+                    last_err = Some(error.into());
+                    continue;
+                }
+            };
 
-        // tokio::pin!(udp_query);
-        // tokio::pin!(tcp_query);
+            return Ok(res);
+        }
 
-        // match future::select(udp_query, tcp_query).await {
-        //     Either::Left((Ok(m), ..)) => Ok(m),
-        //     Either::Left((Err(..), next)) => next.await.map_err(From::from),
-        //     Either::Right((Ok(m), ..)) => Ok(m),
-        //     Either::Right((Err(..), next)) => next.await.map_err(From::from),
-        // }
-        Err(io::Error::new(ErrorKind::InvalidData, "resolve empty"))
+        Err(last_err.unwrap())
+    }
+
+    async fn get_servers(&self) -> Vec<SocketAddr> {
+        (*self.remote_addrs.lock().await).clone()
     }
 }

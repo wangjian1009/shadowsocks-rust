@@ -23,15 +23,15 @@ pub enum DnsClient {
 
 impl DnsClient {
     /// Connect to local provided TCP DNS server
-    pub async fn connect_tcp(ns: SocketAddr) -> io::Result<DnsClient> {
-        let stream = TcpStream::connect(&ns).await?;
+    pub async fn connect_tcp(ns: &SocketAddr) -> io::Result<DnsClient> {
+        let stream = TcpStream::connect(ns).await?;
         Ok(DnsClient::Tcp { stream })
     }
 
     /// Connect to local provided UDP DNS server
-    pub async fn connect_udp(ns: SocketAddr) -> io::Result<DnsClient> {
+    pub async fn connect_udp(ns: &SocketAddr) -> io::Result<DnsClient> {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
-        socket.connect(&ns).await?;
+        socket.connect(ns).await?;
         Ok(DnsClient::Udp { socket })
     }
 
