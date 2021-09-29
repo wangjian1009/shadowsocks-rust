@@ -148,8 +148,7 @@ impl SSLocal {
     }
 
     #[cfg(feature = "host-dns")]
-    fn update_host_dns(&self, dns_servers: &str) {
-        let servers: Vec<&str> = dns_servers.split(";").collect();
+    fn update_host_dns(&self, servers: &Vec<&str>) {
         match &self.ctrl_tx {
             None => {
                 log::error!("sslocal update host dns: not started");
@@ -231,8 +230,15 @@ pub extern "C" fn lib_local_stop(ptr: *mut SSLocal) {
 #[no_mangle]
 #[cfg(feature = "host-dns")]
 pub extern "C" fn lib_local_update_host_dns(ptr: *mut SSLocal, c_dns_servers: *const c_char) {
+    use std::ptr;
+
     unsafe {
-        let dns_servers = CStr::from_ptr(c_dns_servers).to_string_lossy().to_owned();
-        (&mut *ptr).update_host_dns(&dns_servers);
+        if c_dns_servers == ptr::null() {
+            (&mut *ptr).update_host_dns(&vec![]);
+        } else {
+            let dns_servers = CStr::from_ptr(c_dns_servers).to_string_lossy().to_owned();
+            let servers: Vec<&str> = dns_servers.split(";").collect();
+            (&mut *ptr).update_host_dns(&servers);
+        }
     };
 }
