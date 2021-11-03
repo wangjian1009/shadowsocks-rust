@@ -27,7 +27,10 @@ use tokio::{
 
 use crate::net::{utils::ignore_until_end, MonProxyStream};
 
-use super::context::ServiceContext;
+use super::{
+    connection::{InConnectionGuard, OutConnectionGuard},
+    context::ServiceContext,
+};
 
 pub struct TcpServer {
     context: Arc<ServiceContext>,
@@ -102,6 +105,9 @@ struct TcpServerClient {
 
 impl TcpServerClient {
     async fn serve(mut self) -> io::Result<()> {
+        let connection_stat = self.context.connection_stat();
+        let _ = InConnectionGuard::new(connection_stat.as_ref());
+
         let target_addr = match Address::read_from(&mut self.stream).await {
             Ok(a) => a,
             Err(Socks5Error::IoError(ref err)) if err.kind() == ErrorKind::UnexpectedEof => {
@@ -171,6 +177,8 @@ impl TcpServerClient {
                 return Err(err);
             }
         };
+
+        let _ = OutConnectionGuard::new(connection_stat.as_ref());
 
         // https://github.com/shadowsocks/shadowsocks-rust/issues/232
         //

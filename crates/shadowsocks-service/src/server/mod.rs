@@ -13,7 +13,9 @@ use crate::{
 
 pub use self::server::Server;
 
+mod connection;
 pub mod context;
+mod manager;
 #[allow(clippy::module_inception)]
 pub mod server;
 mod tcprelay;

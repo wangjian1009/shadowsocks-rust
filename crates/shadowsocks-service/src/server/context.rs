@@ -12,6 +12,8 @@ use shadowsocks::{
 
 use crate::{acl::AccessControl, net::FlowStat};
 
+use super::connection::ConnectionStat;
+
 /// Server Service Context
 pub struct ServiceContext {
     context: SharedContext,
@@ -19,6 +21,9 @@ pub struct ServiceContext {
 
     // Access Control
     acl: Option<Arc<AccessControl>>,
+
+    // Connection statistic report
+    connection_stat: Arc<ConnectionStat>,
 
     // Flow statistic report
     flow_stat: Arc<FlowStat>,
@@ -30,6 +35,7 @@ impl Default for ServiceContext {
             context: Context::new_shared(ServerType::Server),
             connect_opts: ConnectOpts::default(),
             acl: None,
+            connection_stat: Arc::new(ConnectionStat::new()),
             flow_stat: Arc::new(FlowStat::new()),
         }
     }
@@ -69,6 +75,16 @@ impl ServiceContext {
     /// Get Access Control List reference
     pub fn acl(&self) -> Option<&AccessControl> {
         self.acl.as_deref()
+    }
+
+    /// Get cloned connection statistic
+    pub fn connection_stat(&self) -> Arc<ConnectionStat> {
+        self.connection_stat.clone()
+    }
+
+    /// Get connection statistic reference
+    pub fn connection_stat_ref(&self) -> &ConnectionStat {
+        self.connection_stat.as_ref()
     }
 
     /// Get cloned flow statistic

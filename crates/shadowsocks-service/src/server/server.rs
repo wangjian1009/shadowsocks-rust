@@ -1,7 +1,6 @@
 //! Shadowsocks Server instance
 
 use std::{
-    collections::HashMap,
     io::{self, ErrorKind},
     sync::Arc,
     time::Duration,
@@ -14,13 +13,18 @@ use shadowsocks::{
     dns_resolver::DnsResolver,
     net::{AcceptOpts, ConnectOpts},
     plugin::{Plugin, PluginMode},
-    ManagerClient,
 };
 use tokio::time;
 
 use crate::{acl::AccessControl, net::FlowStat};
 
-use super::{context::ServiceContext, tcprelay::TcpServer, udprelay::UdpServer};
+use super::{
+    connection::ConnectionStat,
+    context::ServiceContext,
+    manager::ManagerClient,
+    tcprelay::TcpServer,
+    udprelay::UdpServer,
+};
 
 /// Shadowsocks Server
 pub struct Server {
@@ -48,6 +52,16 @@ impl Server {
             manager_addr: None,
             accept_opts: AcceptOpts::default(),
         }
+    }
+
+    /// Get connection statistic
+    pub fn connection_stat(&self) -> Arc<ConnectionStat> {
+        self.context.connection_stat()
+    }
+
+    /// Get connection statistic reference
+    pub fn connection_stat_ref(&self) -> &ConnectionStat {
+        self.context.connection_stat_ref()
     }
 
     /// Get flow statistic
@@ -176,13 +190,22 @@ impl Server {
                     error!("failed to connect manager {}, error: {}", manager_addr, err);
                 }
                 Ok(mut client) => {
-                    use shadowsocks::manager::protocol::StatRequest;
+                    use super::manager::{ServerStat, StatRequest};
 
-                    let mut stat = HashMap::new();
                     let flow = self.flow_stat_ref();
-                    stat.insert(self.svr_cfg.addr().port(), flow.tx() + flow.rx());
+                    let connection = self.connection_stat_ref();
 
-                    let req = StatRequest { stat };
+                    let mut req = StatRequest::new();
+                    req.stats.insert(
+                        0,
+                        ServerStat {
+                            tx: flow.tx(),
+                            rx: flow.rx(),
+                            cin: connection.cin(),
+                            cout: connection.count(),
+                            cin_by_ip: 0,
+                        },
+                    );
 
                     if let Err(err) = client.stat(&req).await {
                         error!(
