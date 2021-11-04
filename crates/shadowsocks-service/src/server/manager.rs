@@ -66,3 +66,28 @@ impl ManagerClient {
         Ok(())
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use super::{ServerStat, StatRequest};
+
+    #[test]
+    pub fn to_json() {
+        let mut req = StatRequest::new();
+        req.stats.insert(
+            0,
+            ServerStat {
+                tx: 1,
+                rx: 2,
+                cin: 3,
+                cout: 4,
+                cin_by_ip: 5,
+            },
+        );
+        let req_serialized = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            "{\"0\":{\"tx\":1,\"rx\":2,\"cin\":3,\"cout\":4,\"cin_by_ip\":5}}",
+            req_serialized
+        );
+    }
+}
