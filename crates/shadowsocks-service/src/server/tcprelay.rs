@@ -106,7 +106,7 @@ struct TcpServerClient {
 impl TcpServerClient {
     async fn serve(mut self) -> io::Result<()> {
         let connection_stat = self.context.connection_stat();
-        let _ = InConnectionGuard::new(connection_stat.as_ref());
+        let _in_guard = InConnectionGuard::new(connection_stat.as_ref());
 
         let target_addr = match Address::read_from(&mut self.stream).await {
             Ok(a) => a,
@@ -178,7 +178,7 @@ impl TcpServerClient {
             }
         };
 
-        let _ = OutConnectionGuard::new(connection_stat.as_ref());
+        let _out_guard = OutConnectionGuard::new(connection_stat.as_ref());
 
         // https://github.com/shadowsocks/shadowsocks-rust/issues/232
         //

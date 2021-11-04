@@ -71,7 +71,7 @@ pub struct InConnectionGuard<'a> {
 
 impl<'a> Drop for InConnectionGuard<'a> {
     fn drop(&mut self) {
-        self.stat.in_count.fetch_sub(1, Ordering::AcqRel);
+        self.stat.remove_in_connection();
     }
 }
 
@@ -88,7 +88,7 @@ pub struct OutConnectionGuard<'a> {
 
 impl<'a> Drop for OutConnectionGuard<'a> {
     fn drop(&mut self) {
-        self.stat.out_count.fetch_sub(1, Ordering::AcqRel);
+        self.stat.remove_out_connection();
     }
 }
 
@@ -100,13 +100,23 @@ impl<'a> OutConnectionGuard<'a> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::ConnectionStat;
+pub mod tests {
+    use super::{ConnectionStat, OutConnectionGuard};
 
     #[test]
-    fn aa() {
-        let conn_stat = ConnectionStat::new();
+    pub fn out_conn_basic() {
+        let conn_stat = ConnectionStat::default();
         conn_stat.add_out_connection();
         assert_eq!(1, conn_stat.count());
+    }
+
+    #[test]
+    pub fn out_conn_guard() {
+        let conn_stat = ConnectionStat::default();
+        {
+            let _guard = OutConnectionGuard::new(&conn_stat);
+            assert_eq!(1, conn_stat.count());
+        }
+        assert_eq!(0, conn_stat.count());
     }
 }
