@@ -27,10 +27,7 @@ use tokio::{
 
 use crate::net::{utils::ignore_until_end, MonProxyStream};
 
-use super::{
-    connection::{InConnectionGuard, OutConnectionGuard},
-    context::ServiceContext,
-};
+use super::{connection::ConnectionInfo, context::ServiceContext};
 
 pub struct TcpServer {
     context: Arc<ServiceContext>,
@@ -53,6 +50,7 @@ impl TcpServer {
 
         loop {
             let flow_stat = self.context.flow_stat();
+            let connection_stat = self.context.connection_stat();
 
             let (local_stream, peer_addr) =
                 match listener.accept_map(|s| MonProxyStream::from_stream(s, flow_stat)).await {
@@ -64,18 +62,26 @@ impl TcpServer {
                     }
                 };
 
+            let conn = connection_stat.add_in_connection(peer_addr).await;
+
             let client = TcpServerClient {
                 context: self.context.clone(),
                 method: svr_cfg.method(),
+                conn,
                 peer_addr,
                 stream: local_stream,
                 timeout: svr_cfg.timeout(),
             };
 
+            let connection_stat = connection_stat.clone();
             tokio::spawn(async move {
+                let conn_id = client.conn.id;
+
                 if let Err(err) = client.serve().await {
                     debug!("tcp server stream aborted with error: {}", err);
                 }
+
+                connection_stat.remove_in_connection(&conn_id).await
             });
         }
     }
@@ -98,6 +104,7 @@ where
 struct TcpServerClient {
     context: Arc<ServiceContext>,
     method: CipherKind,
+    conn: Arc<ConnectionInfo>,
     peer_addr: SocketAddr,
     stream: ProxyServerStream<MonProxyStream<TokioTcpStream>>,
     timeout: Option<Duration>,
@@ -106,7 +113,6 @@ struct TcpServerClient {
 impl TcpServerClient {
     async fn serve(mut self) -> io::Result<()> {
         let connection_stat = self.context.connection_stat();
-        let _in_guard = InConnectionGuard::new(connection_stat.as_ref());
 
         let target_addr = match Address::read_from(&mut self.stream).await {
             Ok(a) => a,
@@ -178,7 +184,7 @@ impl TcpServerClient {
             }
         };
 
-        let _out_guard = OutConnectionGuard::new(connection_stat.as_ref());
+        let _out_guard = connection_stat.add_out_connection();
 
         // https://github.com/shadowsocks/shadowsocks-rust/issues/232
         //

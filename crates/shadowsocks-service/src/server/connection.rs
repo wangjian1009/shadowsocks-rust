@@ -1,23 +1,40 @@
-use std::sync::atomic::Ordering;
+use std::{
+    collections::HashMap,
+    ops::Deref,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
+};
 
-// use std::net::IpAddr;
-// use tokio::sync::Mutex;
+use crate::net::FlowStat;
 
-type ConnectionCounter = std::sync::atomic::AtomicU32;
+use std::net::SocketAddr;
+use tokio::sync::Mutex;
+
+type ConnectionCounter = AtomicU32;
+
+pub struct ConnectionInfo {
+    pub id: u32,
+    pub source_addr: SocketAddr,
+    pub flow: FlowStat,
+}
 
 /// Connection statistic
 pub struct ConnectionStat {
-    out_count: ConnectionCounter,
-    in_count: ConnectionCounter,
-    // in_conns: Mutex<HashMap<IpAddr, u32>>,
+    out_conn_count: ConnectionCounter,
+    in_conn_max: ConnectionCounter,
+    in_conn_count: ConnectionCounter,
+    in_conns: Mutex<HashMap<u32, Arc<ConnectionInfo>>>,
 }
 
 impl Default for ConnectionStat {
     fn default() -> Self {
         ConnectionStat {
-            out_count: ConnectionCounter::new(0),
-            in_count: ConnectionCounter::new(0),
-            // in_conns: Mutex::new(HashMap::new()),
+            out_conn_count: ConnectionCounter::new(0),
+            in_conn_max: ConnectionCounter::new(0),
+            in_conn_count: ConnectionCounter::new(0),
+            in_conns: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -30,55 +47,52 @@ impl ConnectionStat {
 
     /// Incoming connection count
     pub fn cin(&self) -> u32 {
-        self.in_count.load(Ordering::Relaxed)
+        self.in_conn_count.load(Ordering::Relaxed)
     }
 
     /// Outgoing connection count
     pub fn count(&self) -> u32 {
-        self.out_count.load(Ordering::Relaxed)
+        self.out_conn_count.load(Ordering::Relaxed)
     }
 
-    // pub async fn add_in_connection(&self, addr: &IpAddr) {
-    //     let mut in_conns = self.in_conns.lock().await;
-    //     let count = in_conns.entry(*addr).or_insert(0);
-    //     *count += 1;
-    // }
+    pub async fn add_in_connection(&self, source_addr: SocketAddr) -> Arc<ConnectionInfo> {
+        self.in_conn_count.fetch_add(1, Ordering::AcqRel);
+        let conn_id = self.in_conn_max.fetch_add(1, Ordering::AcqRel);
 
-    // pub async fn remove_in_connection(&self, addr: &IpAddr) {
-    //     let conns = self.in_conns.lock().await;
-    // }
+        let mut in_conns = self.in_conns.lock().await;
 
-    pub fn add_in_connection(&self) {
-        self.in_count.fetch_add(1, Ordering::AcqRel);
+        let conn = Arc::new(ConnectionInfo {
+            id: conn_id,
+            source_addr,
+            flow: FlowStat::default(),
+        });
+        in_conns.insert(conn_id, conn.clone());
+
+        conn
     }
 
-    pub fn remove_in_connection(&self) {
-        self.in_count.fetch_sub(1, Ordering::AcqRel);
+    pub async fn remove_in_connection(&self, id: &u32) {
+        self.in_conn_count.fetch_sub(1, Ordering::AcqRel);
+
+        let mut in_conns = self.in_conns.lock().await;
+        in_conns.remove(id);
     }
 
-    pub fn add_out_connection(&self) {
-        self.out_count.fetch_add(1, Ordering::AcqRel);
+    pub async fn query_in_connections(&self) -> Vec<Arc<ConnectionInfo>> {
+        let mut result: Vec<Arc<ConnectionInfo>> = Vec::new();
+
+        let in_conns = self.in_conns.lock().await;
+
+        for (_, value) in in_conns.deref() {
+            result.push(value.clone());
+        }
+
+        result
     }
 
-    pub fn remove_out_connection(&self) {
-        self.out_count.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-pub struct InConnectionGuard<'a> {
-    stat: &'a ConnectionStat,
-}
-
-impl<'a> Drop for InConnectionGuard<'a> {
-    fn drop(&mut self) {
-        self.stat.remove_in_connection();
-    }
-}
-
-impl<'a> InConnectionGuard<'a> {
-    pub fn new(stat: &'a ConnectionStat) -> InConnectionGuard {
-        stat.add_in_connection();
-        InConnectionGuard { stat }
+    pub fn add_out_connection(&self) -> OutConnectionGuard<'_> {
+        self.out_conn_count.fetch_add(1, Ordering::AcqRel);
+        OutConnectionGuard::new(self)
     }
 }
 
@@ -88,33 +102,41 @@ pub struct OutConnectionGuard<'a> {
 
 impl<'a> Drop for OutConnectionGuard<'a> {
     fn drop(&mut self) {
-        self.stat.remove_out_connection();
+        self.stat.out_conn_count.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
 impl<'a> OutConnectionGuard<'a> {
     pub fn new(stat: &'a ConnectionStat) -> OutConnectionGuard {
-        stat.add_out_connection();
         OutConnectionGuard { stat }
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use super::{ConnectionStat, OutConnectionGuard};
+    use tokio_test;
+
+    use super::ConnectionStat;
 
     #[test]
-    pub fn out_conn_basic() {
+    pub fn in_conn_guard() {
         let conn_stat = ConnectionStat::default();
-        conn_stat.add_out_connection();
-        assert_eq!(1, conn_stat.count());
+        tokio_test::block_on(async {
+            let addr = "127.0.0.1:8080".parse().unwrap();
+            let conn = conn_stat.add_in_connection(addr).await;
+            assert_eq!(1, conn_stat.cin());
+
+            conn_stat.remove_in_connection(&conn.id).await;
+            assert_eq!(0, conn_stat.cin());
+            assert_eq!(0, conn_stat.query_in_connections().await.len());
+        });
     }
 
     #[test]
     pub fn out_conn_guard() {
         let conn_stat = ConnectionStat::default();
         {
-            let _guard = OutConnectionGuard::new(&conn_stat);
+            let _guard = conn_stat.add_out_connection();
             assert_eq!(1, conn_stat.count());
         }
         assert_eq!(0, conn_stat.count());
