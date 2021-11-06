@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ops::Deref,
     sync::{
         atomic::{AtomicU32, Ordering},
@@ -9,7 +9,7 @@ use std::{
 
 use crate::net::FlowStat;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use tokio::sync::Mutex;
 
 type ConnectionCounter = AtomicU32;
@@ -53,6 +53,18 @@ impl ConnectionStat {
     /// Outgoing connection count
     pub fn count(&self) -> u32 {
         self.out_conn_count.load(Ordering::Relaxed)
+    }
+
+    pub async fn cin_by_ip(&self) -> u32 {
+        let in_conns = self.in_conns.lock().await;
+
+        let mut ips = HashSet::<IpAddr>::new();
+
+        for conn in in_conns.deref().values() {
+            ips.insert(conn.source_addr.ip());
+        }
+
+        ips.len() as u32
     }
 
     pub async fn add_in_connection(&self, source_addr: SocketAddr) -> Arc<ConnectionInfo> {
@@ -122,13 +134,15 @@ pub mod tests {
     pub fn in_conn_guard() {
         let conn_stat = ConnectionStat::default();
         tokio_test::block_on(async {
-            let addr = "127.0.0.1:8080".parse().unwrap();
-            let conn = conn_stat.add_in_connection(addr).await;
-            assert_eq!(1, conn_stat.cin());
+            let conn1 = conn_stat.add_in_connection("127.0.0.1:8080".parse().unwrap()).await;
+            let _conn2 = conn_stat.add_in_connection("127.0.0.1:8081".parse().unwrap()).await;
+            let _conn3 = conn_stat.add_in_connection("127.0.0.2:8080".parse().unwrap()).await;
+            assert_eq!(3, conn_stat.cin());
+            assert_eq!(2, conn_stat.cin_by_ip().await);
 
-            conn_stat.remove_in_connection(&conn.id).await;
-            assert_eq!(0, conn_stat.cin());
-            assert_eq!(0, conn_stat.query_in_connections().await.len());
+            conn_stat.remove_in_connection(&conn1.id).await;
+            assert_eq!(2, conn_stat.cin());
+            assert_eq!(2, conn_stat.query_in_connections().await.len());
         });
     }
 

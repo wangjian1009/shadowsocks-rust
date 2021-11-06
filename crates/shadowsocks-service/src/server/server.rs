@@ -15,6 +15,7 @@ use shadowsocks::{
     plugin::{Plugin, PluginMode},
 };
 use tokio::time;
+use trust_dns_resolver::proto::tcp::tokio::connect;
 
 use crate::{acl::AccessControl, net::FlowStat};
 
@@ -203,7 +204,7 @@ impl Server {
                             rx: flow.rx(),
                             cin: connection.cin(),
                             cout: connection.count(),
-                            cin_by_ip: 0,
+                            cin_by_ip: connection.cin_by_ip().await,
                         },
                     );
 
