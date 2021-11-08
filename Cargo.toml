@@ -69,6 +69,7 @@ default = [
 local = ["shadowsocks-service/local"]
 # Enable remote server
 server = ["shadowsocks-service/server"]
+server-maintain = ["shadowsocks-service/server-maintain"]
 # Enable manager server
 manager = ["shadowsocks-service/manager"]
 # Enable utility

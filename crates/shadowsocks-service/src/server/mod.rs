@@ -15,6 +15,8 @@ pub use self::server::Server;
 
 mod connection;
 pub mod context;
+#[cfg(feature = "server-maintain")]
+mod maintain;
 mod manager;
 #[allow(clippy::module_inception)]
 pub mod server;
@@ -113,9 +115,26 @@ pub async fn run(config: Config) -> io::Result<()> {
         servers.push(server);
     }
 
+    #[cfg(feature = "server-maintain")]
+    let mut maintain_svr = None;
+
+    #[cfg(feature = "server-maintain")]
+    if config.maintain_addr.is_some() {
+        let mut server_contexts = Vec::new();
+        for ref server in &servers {
+            server_contexts.push(server.get_context());
+        }
+        maintain_svr = Some(maintain::MaintainServer::new(server_contexts));
+    }
+
     let mut vfut = Vec::with_capacity(servers.len());
     for server in servers {
         vfut.push(server.run().boxed());
+    }
+
+    #[cfg(feature = "server-maintain")]
+    if let Some(maintain_svr) = maintain_svr {
+        vfut.push(maintain_svr.run(config.maintain_addr.unwrap()).boxed());
     }
 
     let (res, ..) = future::select_all(vfut).await;

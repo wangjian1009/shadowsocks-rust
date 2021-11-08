@@ -29,6 +29,8 @@ full = [
 local = []
 # Enable remote server
 server = []
+server-maintain = ["hyper"]
+
 # Enable manager server
 manager = ["server"]
 

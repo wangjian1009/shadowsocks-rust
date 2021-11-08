@@ -15,7 +15,6 @@ use shadowsocks::{
     plugin::{Plugin, PluginMode},
 };
 use tokio::time;
-use trust_dns_resolver::proto::tcp::tokio::connect;
 
 use crate::{acl::AccessControl, net::FlowStat};
 
@@ -53,6 +52,10 @@ impl Server {
             manager_addr: None,
             accept_opts: AcceptOpts::default(),
         }
+    }
+
+    pub fn get_context(&self) -> Arc<ServiceContext> {
+        self.context.clone()
     }
 
     /// Get connection statistic

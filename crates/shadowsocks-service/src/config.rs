@@ -60,6 +60,7 @@ use std::{
 use cfg_if::cfg_if;
 #[cfg(feature = "local-tun")]
 use ipnet::IpNet;
+
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "local-tunnel", feature = "local-dns"))]
 use shadowsocks::relay::socks5::Address;
@@ -874,6 +875,10 @@ pub struct Config {
     /// Manager's configuration
     pub manager: Option<ManagerConfig>,
 
+    /// Maintain's configuration
+    #[cfg(feature = "server-maintain")]
+    pub maintain_addr: Option<SocketAddr>,
+
     /// Config is for Client or Server
     pub config_type: ConfigType,
 
@@ -987,6 +992,9 @@ impl Config {
             udp_max_associations: None,
 
             acl: None,
+
+            #[cfg(feature = "server-maintain")]
+            maintain_addr: None,
 
             #[cfg(feature = "local-flow-stat")]
             stat_path: None,

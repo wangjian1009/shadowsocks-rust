@@ -7,7 +7,11 @@
 //! *It should be notice that the extented configuration file is not suitable for the server
 //! side.*
 
-use std::{net::IpAddr, process, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    process,
+    time::Duration,
+};
 
 use clap::{clap_app, Arg};
 use futures::future::{self, Either};
@@ -120,6 +124,13 @@ fn main() {
             );
         }
 
+        #[cfg(feature = "server-maintain")]
+        {
+            app = clap_app!(@app (app)
+                            (@arg MAINTAIN_ADDR: --("maintain-addr") +takes_value {validator::validate_server_addr} "Maintain server address")
+            );
+        }
+
         let matches = app
             .arg(
                 Arg::with_name("IPV6_FIRST")
@@ -186,6 +197,12 @@ fn main() {
             }
 
             config.server.push(sc);
+        }
+
+        #[cfg(feature = "server-maintain")]
+        if let Some(maintain_addr) = matches.value_of("MAINTAIN_ADDR") {
+            let maintain_addr = maintain_addr.parse::<SocketAddr>().expect("maintain-addr");
+            config.maintain_addr = Some(maintain_addr);
         }
 
         if let Some(bind_addr) = matches.value_of("OUTBOUND_BIND_ADDR") {
