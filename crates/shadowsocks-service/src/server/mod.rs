@@ -120,11 +120,13 @@ pub async fn run(config: Config) -> io::Result<()> {
 
     #[cfg(feature = "server-maintain")]
     if config.maintain_addr.is_some() {
-        let mut server_contexts = Vec::new();
+        let mut server_infos = Vec::new();
         for ref server in &servers {
-            server_contexts.push(server.get_context());
+            server_infos.push(maintain::ServerInfo {
+                context: server.get_context(),
+            });
         }
-        maintain_svr = Some(maintain::MaintainServer::new(server_contexts));
+        maintain_svr = Some(maintain::MaintainServer::new(server_infos));
     }
 
     let mut vfut = Vec::with_capacity(servers.len());
