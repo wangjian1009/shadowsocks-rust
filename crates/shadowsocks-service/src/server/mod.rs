@@ -62,8 +62,6 @@ pub async fn run(config: Config) -> io::Result<()> {
         vpn_protect_path: config.outbound_vpn_protect_path,
 
         bind_local_addr: config.outbound_bind_addr,
-
-        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))]
         bind_interface: config.outbound_bind_interface,
 
         ..Default::default()
@@ -111,6 +109,12 @@ pub async fn run(config: Config) -> io::Result<()> {
         if let Some(ref acl) = acl {
             server.set_acl(acl.clone());
         }
+
+        if config.ipv6_first {
+            server.set_ipv6_first(config.ipv6_first);
+        }
+
+        server.set_security_config(&config.security);
 
         servers.push(server);
     }

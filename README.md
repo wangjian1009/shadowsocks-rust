@@ -1,11 +1,17 @@
 # shadowsocks
 
+[![License](https://img.shields.io/github/license/zonyitoo/shadowsocks-rust.svg)](https://github.com/zonyitoo/shadowsocks-rust)
 [![Build & Test](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-and-test.yml)
 [![Build Releases](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-release.yml/badge.svg)](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-release.yml)
 [![Build Nightly Releases](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-nightly-release.yml/badge.svg)](https://github.com/shadowsocks/shadowsocks-rust/actions/workflows/build-nightly-release.yml)
-[![License](https://img.shields.io/github/license/zonyitoo/shadowsocks-rust.svg)](https://github.com/zonyitoo/shadowsocks-rust)
+
 [![crates.io](https://img.shields.io/crates/v/shadowsocks-rust.svg)](https://crates.io/crates/shadowsocks-rust)
 [![Release](https://img.shields.io/github/release/shadowsocks/shadowsocks-rust.svg)](https://github.com/shadowsocks/shadowsocks-rust/releases)
+[![archlinuxcn shadowsocks-rust-git](https://img.shields.io/badge/dynamic/json?label=archlinuxcn-git&query=%24.latest.pkgver&url=https%3A%2F%2Fbuild.archlinuxcn.org%2Fapi%2Fpackages%2Fshadowsocks-rust-git)](https://build.archlinuxcn.org/)
+[![archlinuxcn shadowsocks-rust-opt-git](https://img.shields.io/badge/dynamic/json?label=archlinuxcn-opt-git&query=%24.latest.pkgver&url=https%3A%2F%2Fbuild.archlinuxcn.org%2Fapi%2Fpackages%2Fshadowsocks-rust-git)](https://build.archlinuxcn.org/)
+
+[![Get it from the Snap Store](https://snapcraft.io/static/images/badges/en/snap-store-black.svg)](https://snapcraft.io/shadowsocks-rust)
+
 
 This is a port of [shadowsocks](https://github.com/shadowsocks/shadowsocks).
 
@@ -16,6 +22,12 @@ shadowsocks is a fast tunnel proxy that helps you bypass firewalls.
 | [**shadowsocks**](https://crates.io/crates/shadowsocks)                 | [![crates.io](https://img.shields.io/crates/v/shadowsocks.svg)](https://crates.io/crates/shadowsocks) [![docs.rs](https://img.shields.io/docsrs/shadowsocks)](https://docs.rs/shadowsocks) shadowsocks core protocol                                        |
 | [**shadowsocks-service**](https://crates.io/crates/shadowsocks-service) | [![crates.io](https://img.shields.io/crates/v/shadowsocks-service.svg)](https://crates.io/crates/shadowsocks-service) [![docs.rs](https://img.shields.io/docsrs/shadowsocks-service)](https://docs.rs/shadowsocks-service) Services for serving shadowsocks |
 | [**shadowsocks-rust**](https://crates.io/crates/shadowsocks-rust)       | [![crates.io](https://img.shields.io/crates/v/shadowsocks-rust.svg)](https://crates.io/crates/shadowsocks-rust) Binaries running common shadowsocks services                                                                                                |
+
+Related Projects:
+
+- [spyophobia/shadowsocks-gtk-rs](https://github.com/spyophobia/shadowsocks-gtk-rs) A GUI on Linux for `sslocal` using GTK, [discussion](https://github.com/shadowsocks/shadowsocks-rust/issues/664)
+- [honwen/openwrt-shadowsocks-rust](https://github.com/honwen/openwrt-shadowsocks-rust) OpenWRT solution for `sslocal`, [discussion](https://github.com/honwen/openwrt-shadowsocks-rust)
+- [cg31/shadowsocks-windows-gui-rust](https://github.com/cg31/shadowsocks-windows-gui-rust) Windows GUI client, [discussion](https://github.com/shadowsocks/shadowsocks-rust/issues/375)
 
 ## Build & Install
 
@@ -552,7 +564,16 @@ Example configuration:
     "nofile": 10240,
 
     // Try to resolve domain name to IPv6 (AAAA) addresses first
-    "ipv6_first": false
+    "ipv6_first": false,
+
+    // Balancer customization
+    "balancer": {
+        // MAX Round-Trip-Time (RTT) of servers
+        // The timeout seconds of each individual checks
+        "max_server_rtt": 5,
+        // Interval seconds between each check
+        "check_interval": 10,
+    }
 }
 ```
 
@@ -624,7 +645,17 @@ Example configuration:
 [outbound_block_list]
 127.0.0.1/8
 ::1
-(^|\.)baidu.com
+# Using regular expression
+^[a-z]{5}\.baidu\.com
+# Match exactly
+|baidu.com
+# Match with subdomains
+||google.com
+# An internationalized domain name should be converted to punycode
+# |☃-⌘.com - WRONG
+|xn----dqo34k.com
+# ||джpумлатест.bрфa - WRONG
+||xn--p-8sbkgc5ag7bhce.xn--ba-lmcq
 
 # CLIENTS
 # For sslocal, ..., bypasses all targets by default
@@ -632,7 +663,7 @@ Example configuration:
 
 # Proxy these addresses
 [proxy_list]
-(^|\.)google.com
+||google.com
 8.8.8.8
 ```
 
