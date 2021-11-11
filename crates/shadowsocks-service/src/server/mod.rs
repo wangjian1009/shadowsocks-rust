@@ -123,6 +123,7 @@ pub async fn run(config: Config) -> io::Result<()> {
         let mut server_infos = Vec::new();
         for ref server in &servers {
             server_infos.push(maintain::ServerInfo {
+                addr: server.config().addr().clone(),
                 context: server.get_context(),
             });
         }

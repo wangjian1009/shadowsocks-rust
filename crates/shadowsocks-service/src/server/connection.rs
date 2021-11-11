@@ -5,9 +5,11 @@ use std::{
         atomic::{AtomicU32, Ordering},
         Arc,
     },
+    time,
 };
 
 use crate::net::FlowStat;
+use shadowsocks::relay::socks5::Address;
 
 use std::net::{IpAddr, SocketAddr};
 use tokio::sync::Mutex;
@@ -16,7 +18,10 @@ type ConnectionCounter = AtomicU32;
 
 pub struct ConnectionInfo {
     pub id: u32,
+    pub creation_time: time::Instant,
+    pub touch_time: Mutex<time::Instant>,
     pub source_addr: SocketAddr,
+    pub remote_addr: Mutex<Option<Address>>,
     pub flow: FlowStat,
 }
 
@@ -75,7 +80,10 @@ impl ConnectionStat {
 
         let conn = Arc::new(ConnectionInfo {
             id: conn_id,
+            creation_time: time::Instant::now(),
+            touch_time: Mutex::new(time::Instant::now()),
             source_addr,
+            remote_addr: Mutex::new(None),
             flow: FlowStat::default(),
         });
         in_conns.insert(conn_id, conn.clone());

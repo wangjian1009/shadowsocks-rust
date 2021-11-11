@@ -29,7 +29,7 @@ full = [
 local = []
 # Enable remote server
 server = []
-server-maintain = ["hyper"]
+server-maintain = ["hyper", "csv"]
 
 # Enable manager server
 manager = ["server"]
@@ -88,6 +88,7 @@ bytes = "1.0"
 byte_string = "1.0"
 byteorder = "1.3"
 rand = { version = "0.8", optional = true }
+csv = { version = "1.1", optional = true }
 
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false }
