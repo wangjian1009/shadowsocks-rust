@@ -54,10 +54,11 @@ impl DnsClientCache {
 
         for _ in 0..self.retry_count {
             let key = DnsClientKey::TcpLocal(ns);
-            let mut client = match self
-                .get_client_or_create(&key, async { DnsClient::connect_tcp_local(ns, connect_opts).await })
-                .await
-            {
+
+            let connect_fut = async { DnsClient::connect_tcp_local(ns, connect_opts).await };
+            tokio::pin!(connect_fut);
+
+            let mut client = match self.get_client_or_create(&key, connect_fut).await {
                 Ok(client) => client,
                 Err(err) => {
                     last_err = Some(From::from(err));
@@ -91,10 +92,11 @@ impl DnsClientCache {
 
         for _ in 0..self.retry_count {
             let key = DnsClientKey::UdpLocal(ns);
-            let mut client = match self
-                .get_client_or_create(&key, async { DnsClient::connect_udp_local(ns, connect_opts).await })
-                .await
-            {
+
+            let connect_fut = async { DnsClient::connect_udp_local(ns, connect_opts).await };
+            tokio::pin!(connect_fut);
+
+            let mut client = match self.get_client_or_create(&key, connect_fut).await {
                 Ok(client) => client,
                 Err(err) => {
                     last_err = Some(From::from(err));
@@ -163,19 +165,18 @@ impl DnsClientCache {
 
         let key = DnsClientKey::UdpRemote(ns.clone());
         for _ in 0..self.retry_count {
-            let mut client = match self
-                .get_client_or_create(&key, async {
-                    DnsClient::connect_tcp_remote(
-                        context.context(),
-                        svr_cfg,
-                        ns,
-                        context.connect_opts_ref(),
-                        context.flow_stat(),
-                    )
-                    .await
-                })
+            let connect_fut = async {
+                DnsClient::connect_tcp_remote(
+                    context.context(),
+                    svr_cfg,
+                    ns,
+                    context.connect_opts_ref(),
+                    context.flow_stat(),
+                )
                 .await
-            {
+            };
+            tokio::pin!(connect_fut);
+            let mut client = match self.get_client_or_create(&key, connect_fut).await {
                 Ok(client) => client,
                 Err(err) => {
                     last_err = Some(From::from(err));
