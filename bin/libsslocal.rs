@@ -93,9 +93,9 @@ impl SSLocal {
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
 
         runtime.block_on(async move {
-            #[cfg(feature = "host-dns")]
             let host_dns = self.create_host_dns();
             let ctrl = self.start_ctrl(host_dns.clone());
+
             let server = run_local(self.config.clone());
 
             let dns = tokio::spawn(async move {
@@ -109,7 +109,8 @@ impl SSLocal {
             });
 
             tokio::pin!(ctrl);
-            tokio::pin!(server);
+
+            tokio::pin!(server, dns);
 
             tokio::select! {
                 val = server => {

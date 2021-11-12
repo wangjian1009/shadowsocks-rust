@@ -194,12 +194,11 @@ macro_rules! lookup_then_connect {
 
             result.expect("impossible")
         };
+        tokio::pin!(connect_v4, connect_v6);
 
         if has_v4 && !has_v6 {
-            tokio::pin!(connect_v4);
             connect_v4.await
         } else if !has_v4 && has_v6 {
-            tokio::pin!(connect_v6);
             connect_v6.await
         } else {
             if ipv6_first {
