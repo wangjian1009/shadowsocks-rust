@@ -199,7 +199,7 @@ pub extern "C" fn lib_local_new(c_config: *const c_char, c_acl_path: *const c_ch
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     apple::logger::init().unwrap();
 
-    log::info!("shadowsocks {}", VERSION);
+    log::info!("shadowsocks local {} build {}", VERSION, build_time::build_time_utc!());
 
     let str_config = unsafe { CStr::from_ptr(c_config).to_string_lossy().to_owned() };
 
