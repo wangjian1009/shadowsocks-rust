@@ -2,6 +2,7 @@
 
 use std::{
     io::{self, ErrorKind},
+    net::{Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
@@ -13,6 +14,7 @@ use shadowsocks::{
     dns_resolver::DnsResolver,
     net::{AcceptOpts, ConnectOpts},
     plugin::{Plugin, PluginMode},
+    ServerAddr,
 };
 use tokio::time;
 
@@ -211,9 +213,23 @@ impl Server {
                     let flow = self.flow_stat_ref();
                     let connection = self.connection_stat_ref();
 
+                    let addr = match self.svr_cfg.addr() {
+                        ServerAddr::SocketAddr(ref addr) => match addr {
+                            SocketAddr::V4(ref addr) => {
+                                if addr.ip() == &Ipv4Addr::UNSPECIFIED {
+                                    format!("{}", addr.port())
+                                } else {
+                                    format!("{}", addr)
+                                }
+                            }
+                            SocketAddr::V6(ref addr) => format!("{}", addr),
+                        },
+                        ServerAddr::DomainName(ref path, port) => format!("{}:{}", path, port),
+                    };
+
                     let mut req = StatRequest::new();
                     req.stats.insert(
-                        0,
+                        addr,
                         ServerStat {
                             tx: flow.tx(),
                             rx: flow.rx(),

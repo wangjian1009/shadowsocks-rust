@@ -16,7 +16,7 @@ pub struct ServerStat {
 
 #[derive(Debug)]
 pub struct StatRequest {
-    pub stats: HashMap<u16, ServerStat>,
+    pub stats: HashMap<String, ServerStat>,
 }
 
 impl Serialize for StatRequest {
