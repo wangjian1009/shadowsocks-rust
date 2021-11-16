@@ -21,7 +21,7 @@ required-features = ["local"]
 [[bin]]
 name = "ssserver"
 path = "bin/ssserver.rs"
-required-features = ["server"]
+required-features = ["server", "server-maintain"]
 
 [[bin]]
 name = "ssurl"
@@ -36,7 +36,7 @@ required-features = ["manager"]
 [lib]
 name = "sslocal"
 path = "bin/libsslocal.rs"
-required-features = ["local"]
+required-features = ["local", "host-dns"]
 crate-type = ["staticlib"]
 
 [workspace]
@@ -56,7 +56,9 @@ default = [
     "logging",
     "trust-dns",
     "local",
+    "host-dns",
     "server",
+    "server-maintain",
     "manager",
     "utility",
     "local-http",
@@ -124,7 +126,7 @@ stream-cipher = ["shadowsocks-service/stream-cipher"]
 aead-cipher-extra = ["shadowsocks-service/aead-cipher-extra"]
 
 # Enable host dns
-host-dns = ["trust-dns-resolver", "rand"]
+host-dns = ["trust-dns-resolver", "rand", "local-dns"]
 
 # Enable detection against replay attack
 replay-attack-detect = ["shadowsocks-service/replay-attack-detect"]

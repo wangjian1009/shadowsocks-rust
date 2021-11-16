@@ -14,6 +14,17 @@ edition = "2018"
 maintenance = { status = "passively-maintained" }
 
 [features]
+default = [
+    "local",
+    "server",
+    "manager",
+    "trust-dns",
+    "local-http",
+    "local-redir",
+    "local-tunnel",
+    "local-socks4",
+]
+
 full = [
     "local",
     "server",

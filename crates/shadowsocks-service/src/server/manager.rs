@@ -70,7 +70,10 @@ impl ManagerClient {
 
 #[cfg(test)]
 pub mod tests {
-    use super::{ServerStat, StatRequest};
+    use shadowsocks::config::ServerType;
+
+    use super::*;
+    use std::str::FromStr;
 
     #[test]
     pub fn to_json() {
@@ -87,8 +90,35 @@ pub mod tests {
         );
         let req_serialized = serde_json::to_string(&req).unwrap();
         assert_eq!(
-            "stat: {\"0\":{\"tx\":1,\"rx\":2,\"cin\":3,\"cout\":4,\"cin_by_ip\":5}}",
+            "{\"0\":{\"tx\":1,\"rx\":2,\"cin\":3,\"cout\":4,\"cin_by_ip\":5}}",
             req_serialized
         );
+    }
+
+    #[tokio::test]
+    pub async fn send() {
+        let manager_addr = ManagerAddr::from_str("127.0.0.1:8080").unwrap();
+
+        let ctx = Context::new(ServerType::Server);
+
+        let connect_opts = ConnectOpts::default();
+
+        let mut cli = ManagerClient::connect(&ctx, &manager_addr, &connect_opts)
+            .await
+            .unwrap();
+
+        let mut req = StatRequest::new();
+        req.stats.insert(
+            "0".to_string(),
+            ServerStat {
+                tx: 1,
+                rx: 2,
+                cin: 3,
+                cout: 4,
+                cin_by_ip: 5,
+            },
+        );
+
+        cli.stat(&req).await.unwrap();
     }
 }
