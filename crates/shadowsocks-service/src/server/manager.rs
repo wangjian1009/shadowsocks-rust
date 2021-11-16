@@ -58,6 +58,7 @@ impl ManagerClient {
     /// Send `stat` report
     pub async fn stat(&mut self, req: &StatRequest) -> Result<(), Error> {
         let req_serialized = serde_json::to_string(&req)?;
+        let req_serialized = format!("stat: {}", req_serialized);
         let buf = req_serialized.as_bytes();
         let n = self.socket.send(&buf).await?;
         if n != buf.len() {
@@ -86,7 +87,7 @@ pub mod tests {
         );
         let req_serialized = serde_json::to_string(&req).unwrap();
         assert_eq!(
-            "{\"0\":{\"tx\":1,\"rx\":2,\"cin\":3,\"cout\":4,\"cin_by_ip\":5}}",
+            "stat: {\"0\":{\"tx\":1,\"rx\":2,\"cin\":3,\"cout\":4,\"cin_by_ip\":5}}",
             req_serialized
         );
     }
