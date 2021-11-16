@@ -76,7 +76,7 @@ pub mod tests {
     pub fn to_json() {
         let mut req = StatRequest::new();
         req.stats.insert(
-            0,
+            "0",
             ServerStat {
                 tx: 1,
                 rx: 2,
