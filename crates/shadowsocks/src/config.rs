@@ -158,6 +158,12 @@ pub struct ServerConfig {
     /// Handshake timeout (connect)
     timeout: Option<Duration>,
 
+    /// Request recv timeout
+    request_recv_timeout: Duration,
+
+    /// Idle timeout
+    idle_timeout: Duration,
+
     /// Plugin config
     plugin: Option<PluginConfig>,
     /// Plugin address
@@ -193,6 +199,8 @@ impl ServerConfig {
             method,
             enc_key,
             timeout: None,
+            request_recv_timeout: Duration::from_secs(60),
+            idle_timeout: Duration::from_secs(1740),
             plugin: None,
             plugin_addr: None,
             remarks: None,
@@ -286,6 +294,26 @@ impl ServerConfig {
     /// Timeout
     pub fn timeout(&self) -> Option<Duration> {
         self.timeout
+    }
+
+    /// Set Request Recv Timeout
+    pub fn set_request_recv_timeout(&mut self, timeout: Duration) {
+        self.request_recv_timeout = timeout;
+    }
+
+    /// Request Recv Timeout
+    pub fn request_recv_timeout(&self) -> &Duration {
+        &self.request_recv_timeout
+    }
+
+    /// Set Idle Timeout
+    pub fn set_idle_timeout(&mut self, idle_timeout: Duration) {
+        self.idle_timeout = idle_timeout;
+    }
+
+    /// Idle Timeout
+    pub fn idle_timeout(&self) -> &Duration {
+        &self.idle_timeout
     }
 
     /// Get server's remark

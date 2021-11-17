@@ -35,8 +35,6 @@ pub struct TcpServer {
     accept_opts: AcceptOpts,
 }
 
-const MAX_REQUEST_TIMEOUT: u64 = 60;
-
 impl TcpServer {
     pub fn new(context: Arc<ServiceContext>, accept_opts: AcceptOpts) -> TcpServer {
         TcpServer { context, accept_opts }
@@ -74,6 +72,7 @@ impl TcpServer {
                 peer_addr,
                 stream: local_stream,
                 timeout: svr_cfg.timeout(),
+                request_recv_timeout: svr_cfg.request_recv_timeout().clone(),
             };
 
             let connection_stat = connection_stat.clone();
@@ -111,20 +110,17 @@ struct TcpServerClient {
     peer_addr: SocketAddr,
     stream: ProxyServerStream<MonProxyStream<TokioTcpStream>>,
     timeout: Option<Duration>,
+    request_recv_timeout: Duration,
 }
 
 impl TcpServerClient {
     async fn serve(mut self) -> io::Result<()> {
         let connection_stat = self.context.connection_stat();
 
-        let request_timeout = MAX_REQUEST_TIMEOUT + rand::random::<u64>() % MAX_REQUEST_TIMEOUT;
+        let request_timeout = self.request_recv_timeout
+            + Duration::from_secs(rand::random::<u64>() % self.request_recv_timeout.as_secs());
 
-        let target_addr = match time::timeout(
-            Duration::from_secs(request_timeout),
-            Address::read_from(&mut self.stream),
-        )
-        .await
-        {
+        let target_addr = match time::timeout(request_timeout, Address::read_from(&mut self.stream)).await {
             Ok(Ok(a)) => a,
             Ok(Err(Socks5Error::IoError(ref err))) if err.kind() == ErrorKind::UnexpectedEof => {
                 debug!(
