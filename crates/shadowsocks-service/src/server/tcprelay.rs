@@ -1,5 +1,6 @@
 //! Shadowsocks TCP server
 
+use rand;
 use std::{
     future::Future,
     io::{self, ErrorKind},
@@ -33,6 +34,8 @@ pub struct TcpServer {
     context: Arc<ServiceContext>,
     accept_opts: AcceptOpts,
 }
+
+const MAX_REQUEST_TIMEOUT: u64 = 60;
 
 impl TcpServer {
     pub fn new(context: Arc<ServiceContext>, accept_opts: AcceptOpts) -> TcpServer {
@@ -114,16 +117,23 @@ impl TcpServerClient {
     async fn serve(mut self) -> io::Result<()> {
         let connection_stat = self.context.connection_stat();
 
-        let target_addr = match Address::read_from(&mut self.stream).await {
-            Ok(a) => a,
-            Err(Socks5Error::IoError(ref err)) if err.kind() == ErrorKind::UnexpectedEof => {
+        let request_timeout = MAX_REQUEST_TIMEOUT + rand::random::<u64>() % MAX_REQUEST_TIMEOUT;
+
+        let target_addr = match time::timeout(
+            Duration::from_secs(request_timeout),
+            Address::read_from(&mut self.stream),
+        )
+        .await
+        {
+            Ok(Ok(a)) => a,
+            Ok(Err(Socks5Error::IoError(ref err))) if err.kind() == ErrorKind::UnexpectedEof => {
                 debug!(
                     "handshake failed, received EOF before a complete target Address, peer: {}",
                     self.peer_addr
                 );
                 return Ok(());
             }
-            Err(err) => {
+            Ok(Err(err)) => {
                 // https://github.com/shadowsocks/shadowsocks-rust/issues/292
                 //
                 // Keep connection open.
@@ -146,6 +156,10 @@ impl TcpServerClient {
                     res
                 );
 
+                return Ok(());
+            }
+            Err(err) => {
+                warn!("handshake timeout. peer: {}, error: {}", self.peer_addr, err);
                 return Ok(());
             }
         };

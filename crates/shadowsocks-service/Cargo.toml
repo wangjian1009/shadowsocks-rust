@@ -39,7 +39,7 @@ full = [
 # Enable local server
 local = []
 # Enable remote server
-server = []
+server = ["rand"]
 server-maintain = ["hyper", "csv"]
 
 # Enable manager server
