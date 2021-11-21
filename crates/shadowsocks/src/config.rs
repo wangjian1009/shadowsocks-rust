@@ -159,10 +159,10 @@ pub struct ServerConfig {
     timeout: Option<Duration>,
 
     /// Request recv timeout
-    request_recv_timeout: Duration,
+    request_recv_timeout: Option<Duration>,
 
     /// Idle timeout
-    idle_timeout: Duration,
+    idle_timeout: Option<Duration>,
 
     /// Plugin config
     plugin: Option<PluginConfig>,
@@ -199,8 +199,8 @@ impl ServerConfig {
             method,
             enc_key,
             timeout: None,
-            request_recv_timeout: Duration::from_secs(60),
-            idle_timeout: Duration::from_secs(1740),
+            request_recv_timeout: None,
+            idle_timeout: None,
             plugin: None,
             plugin_addr: None,
             remarks: None,
@@ -298,22 +298,22 @@ impl ServerConfig {
 
     /// Set Request Recv Timeout
     pub fn set_request_recv_timeout(&mut self, timeout: Duration) {
-        self.request_recv_timeout = timeout;
+        self.request_recv_timeout = Some(timeout);
     }
 
     /// Request Recv Timeout
-    pub fn request_recv_timeout(&self) -> &Duration {
-        &self.request_recv_timeout
+    pub fn request_recv_timeout(&self) -> Option<Duration> {
+        self.request_recv_timeout
     }
 
     /// Set Idle Timeout
     pub fn set_idle_timeout(&mut self, idle_timeout: Duration) {
-        self.idle_timeout = idle_timeout;
+        self.idle_timeout = Some(idle_timeout);
     }
 
     /// Idle Timeout
-    pub fn idle_timeout(&self) -> &Duration {
-        &self.idle_timeout
+    pub fn idle_timeout(&self) -> Option<Duration> {
+        self.idle_timeout
     }
 
     /// Get server's remark

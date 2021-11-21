@@ -53,7 +53,9 @@ fn main() {
             (@arg SERVER_ADDR: -s --("server-addr") +takes_value {validator::validate_server_addr} requires[PASSWORD ENCRYPT_METHOD] "Server address")
             (@arg PASSWORD: -k --password +takes_value requires[SERVER_ADDR] "Server's password")
             (@arg ENCRYPT_METHOD: -m --("encrypt-method") +takes_value requires[SERVER_ADDR] possible_values(available_ciphers()) "Server's encryption method")
-            (@arg TIMEOUT: --timeout +takes_value {validator::validate_u64} requires[SERVER_ADDR] "Server's timeout seconds for TCP relay")
+            (@arg TIMEOUT: --timeout +takes_value {validator::validate_u64} requires[SERVER_ADDR] "Server's upstream connect timeout seconds for TCP relay")
+            (@arg REQUEST_RECV_TIMEOUT: --("request-recv-timeout") +takes_value {validator::validate_u64} requires[SERVER_ADDR] "request(upstream address) read timeout seconds for TCP relay")
+            (@arg IDLE_TIMEOUT: --("idle-timeout") +takes_value {validator::validate_u64} requires[SERVER_ADDR] "idle timeout seconds for TCP relay")
             (@arg UDP_ONLY: -u conflicts_with[TCP_AND_UDP] requires[SERVER_ADDR] "Server mode UDP_ONLY")
             (@arg TCP_AND_UDP: -U requires[SERVER_ADDR] "Server mode TCP_AND_UDP")
 
@@ -166,9 +168,27 @@ fn main() {
                 .map(|t| t.parse::<u64>().expect("timeout"))
                 .map(Duration::from_secs);
 
+            let request_recv_timeout = matches
+                .value_of("REQUEST_RECV_TIMEOUT")
+                .map(|t| t.parse::<u64>().expect("request-recv-timeout"))
+                .map(Duration::from_secs);
+
+            let idle_timeout = matches
+                .value_of("IDLE_TIMEOUT")
+                .map(|t| t.parse::<u64>().expect("idle-timeout"))
+                .map(Duration::from_secs);
+
             let mut sc = ServerConfig::new(svr_addr, password.to_owned(), method);
             if let Some(timeout) = timeout {
                 sc.set_timeout(timeout);
+            }
+
+            if let Some(request_recv_timeout) = request_recv_timeout {
+                sc.set_request_recv_timeout(request_recv_timeout);
+            }
+
+            if let Some(idle_timeout) = idle_timeout {
+                sc.set_idle_timeout(idle_timeout);
             }
 
             if let Some(p) = matches.value_of("PLUGIN") {

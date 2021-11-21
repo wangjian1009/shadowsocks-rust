@@ -58,9 +58,18 @@ impl TcpServer {
 
             let (local_stream, peer_addr) = match listener
                 .accept_map(|s| {
-                    let base_sleep = Arc::new(Mutex::new(Sleep::new(svr_cfg.idle_timeout().clone())));
-                    idle_timeout = Some(base_sleep.clone());
-                    MonProxyStream::from_stream(s, flow_stat, Some(base_sleep))
+                    if let Some(cfg_idle_timeout) = svr_cfg.idle_timeout() {
+                        idle_timeout = Some(Arc::new(Mutex::new(Sleep::new(cfg_idle_timeout))));
+                    }
+
+                    MonProxyStream::from_stream(
+                        s,
+                        flow_stat,
+                        match &idle_timeout {
+                            Some(ref idle_timeout) => Some(idle_timeout.clone()),
+                            None => None,
+                        },
+                    )
                 })
                 .await
             {
@@ -82,7 +91,7 @@ impl TcpServer {
                 stream: local_stream,
                 timeout: svr_cfg.timeout(),
                 request_recv_timeout: svr_cfg.request_recv_timeout().clone(),
-                idle_timeout: idle_timeout.unwrap(),
+                idle_timeout,
             };
 
             let connection_stat = connection_stat.clone();
@@ -120,27 +129,35 @@ struct TcpServerClient {
     peer_addr: SocketAddr,
     stream: ProxyServerStream<MonProxyStream<TokioTcpStream>>,
     timeout: Option<Duration>,
-    request_recv_timeout: Duration,
-    idle_timeout: Arc<Mutex<Sleep>>,
+    request_recv_timeout: Option<Duration>,
+    idle_timeout: Option<Arc<Mutex<Sleep>>>,
 }
 
 impl TcpServerClient {
     async fn serve(mut self) -> io::Result<()> {
         let connection_stat = self.context.connection_stat();
 
-        let request_timeout = self.request_recv_timeout
-            + Duration::from_secs(rand::random::<u64>() % self.request_recv_timeout.as_secs());
+        let mut request_timeout = None;
+        if let Some(base_timeout) = self.request_recv_timeout {
+            request_timeout = Some(base_timeout + Duration::from_secs(rand::random::<u64>() % base_timeout.as_secs()));
+        }
 
-        let target_addr = match time::timeout(request_timeout, Address::read_from(&mut self.stream)).await {
-            Ok(Ok(a)) => a,
-            Ok(Err(Socks5Error::IoError(ref err))) if err.kind() == ErrorKind::UnexpectedEof => {
+        let target_addr = match match request_timeout {
+            None => Address::read_from(&mut self.stream).await,
+            Some(d) => match time::timeout(d, Address::read_from(&mut self.stream)).await {
+                Ok(r) => r,
+                Err(..) => Err(Socks5Error::IoError(ErrorKind::TimedOut.into())),
+            },
+        } {
+            Ok(a) => a,
+            Err(Socks5Error::IoError(ref err)) if err.kind() == ErrorKind::UnexpectedEof => {
                 debug!(
                     "handshake failed, received EOF before a complete target Address, peer: {}",
                     self.peer_addr
                 );
                 return Ok(());
             }
-            Ok(Err(err)) => {
+            Err(err) => {
                 // https://github.com/shadowsocks/shadowsocks-rust/issues/292
                 //
                 // Keep connection open.
@@ -163,10 +180,6 @@ impl TcpServerClient {
                     res
                 );
 
-                return Ok(());
-            }
-            Err(err) => {
-                warn!("handshake timeout. peer: {}, error: {}", self.peer_addr, err);
                 return Ok(());
             }
         };
@@ -245,13 +258,7 @@ impl TcpServerClient {
             self.context.connect_opts_ref()
         );
 
-        match copy_encrypted_bidirectional(
-            self.method,
-            &mut self.stream,
-            &mut remote_stream,
-            Some(self.idle_timeout),
-        )
-        .await
+        match copy_encrypted_bidirectional(self.method, &mut self.stream, &mut remote_stream, &self.idle_timeout).await
         {
             Ok((rn, wn)) => {
                 trace!(

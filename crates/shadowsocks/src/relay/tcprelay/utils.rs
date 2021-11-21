@@ -310,21 +310,21 @@ pub async fn copy_encrypted_bidirectional<E, P>(
     method: CipherKind,
     encrypted: &mut E,
     plain: &mut P,
-    idle_timeout: Option<Arc<Mutex<Sleep>>>,
+    idle_timeout: &Option<Arc<Mutex<Sleep>>>,
 ) -> Result<(u64, u64), std::io::Error>
 where
     E: AsyncRead + AsyncWrite + Unpin + ?Sized,
     P: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
-    let idle_timeout_b = match &idle_timeout {
-        Some(ref idle_timeout) => Some(idle_timeout.clone()),
-        None => None,
+    let (idle_timeout_a, idle_timeout_b) = match &idle_timeout {
+        Some(ref idle_timeout) => (Some(idle_timeout.clone()), Some(idle_timeout.clone())),
+        None => (None, None),
     };
 
     CopyBidirectional {
         a: encrypted,
         b: plain,
-        a_to_b: TransferState::Running(CopyBuffer::new(encrypted_read_buffer_size(method), idle_timeout)),
+        a_to_b: TransferState::Running(CopyBuffer::new(encrypted_read_buffer_size(method), idle_timeout_a)),
         b_to_a: TransferState::Running(CopyBuffer::new(plain_read_buffer_size(method), idle_timeout_b)),
     }
     .await
