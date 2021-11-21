@@ -86,7 +86,7 @@ impl DnsClient {
         flow_stat: Arc<FlowStat>,
     ) -> io::Result<DnsClient> {
         let stream = ProxyClientStream::connect_with_opts_map(context, svr_cfg, ns, connect_opts, |s| {
-            MonProxyStream::from_stream(s, flow_stat)
+            MonProxyStream::from_stream(s, flow_stat, None)
         })
         .await?;
         Ok(DnsClient::TcpRemote { stream })

@@ -47,8 +47,8 @@ async fn handle_tcp_tunnel_server_client(
     let (mut sr, mut sw) = stream.into_split();
     let (mut mr, mut mw) = remote.split();
 
-    let l2r = copy_from_encrypted(method, &mut sr, &mut mw);
-    let r2l = copy_to_encrypted(method, &mut mr, &mut sw);
+    let l2r = copy_from_encrypted(method, &mut sr, &mut mw, None);
+    let r2l = copy_to_encrypted(method, &mut mr, &mut sw, None);
 
     tokio::pin!(l2r);
     tokio::pin!(r2l);
@@ -72,8 +72,8 @@ async fn handle_tcp_tunnel_local_client(
     let (mut lr, mut lw) = stream.split();
     let (mut sr, mut sw) = remote.into_split();
 
-    let l2s = copy_to_encrypted(svr_cfg.method(), &mut lr, &mut sw);
-    let s2l = copy_from_encrypted(svr_cfg.method(), &mut sr, &mut lw);
+    let l2s = copy_to_encrypted(svr_cfg.method(), &mut lr, &mut sw, None);
+    let s2l = copy_from_encrypted(svr_cfg.method(), &mut sr, &mut lw, None);
 
     tokio::pin!(l2s);
     tokio::pin!(s2l);

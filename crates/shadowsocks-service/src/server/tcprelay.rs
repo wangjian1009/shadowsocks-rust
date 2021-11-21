@@ -17,12 +17,14 @@ use shadowsocks::{
         socks5::{Address, Error as Socks5Error},
         tcprelay::{utils::copy_encrypted_bidirectional, ProxyServerStream},
     },
+    timeout::Sleep,
     ProxyListener,
     ServerConfig,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream as TokioTcpStream,
+    sync::Mutex,
     time,
 };
 
@@ -52,16 +54,23 @@ impl TcpServer {
         loop {
             let flow_stat = self.context.flow_stat();
             let connection_stat = self.context.connection_stat();
+            let mut idle_timeout = None;
 
-            let (local_stream, peer_addr) =
-                match listener.accept_map(|s| MonProxyStream::from_stream(s, flow_stat)).await {
-                    Ok(s) => s,
-                    Err(err) => {
-                        error!("tcp server accept failed with error: {}", err);
-                        time::sleep(Duration::from_secs(1)).await;
-                        continue;
-                    }
-                };
+            let (local_stream, peer_addr) = match listener
+                .accept_map(|s| {
+                    let base_sleep = Arc::new(Mutex::new(Sleep::new(svr_cfg.idle_timeout().clone())));
+                    idle_timeout = Some(base_sleep.clone());
+                    MonProxyStream::from_stream(s, flow_stat, Some(base_sleep))
+                })
+                .await
+            {
+                Ok(s) => s,
+                Err(err) => {
+                    error!("tcp server accept failed with error: {}", err);
+                    time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
 
             let conn = connection_stat.add_in_connection(peer_addr).await;
 
@@ -73,6 +82,7 @@ impl TcpServer {
                 stream: local_stream,
                 timeout: svr_cfg.timeout(),
                 request_recv_timeout: svr_cfg.request_recv_timeout().clone(),
+                idle_timeout: idle_timeout.unwrap(),
             };
 
             let connection_stat = connection_stat.clone();
@@ -111,6 +121,7 @@ struct TcpServerClient {
     stream: ProxyServerStream<MonProxyStream<TokioTcpStream>>,
     timeout: Option<Duration>,
     request_recv_timeout: Duration,
+    idle_timeout: Arc<Mutex<Sleep>>,
 }
 
 impl TcpServerClient {
@@ -234,7 +245,14 @@ impl TcpServerClient {
             self.context.connect_opts_ref()
         );
 
-        match copy_encrypted_bidirectional(self.method, &mut self.stream, &mut remote_stream).await {
+        match copy_encrypted_bidirectional(
+            self.method,
+            &mut self.stream,
+            &mut remote_stream,
+            Some(self.idle_timeout),
+        )
+        .await
+        {
             Ok((rn, wn)) => {
                 trace!(
                     "tcp tunnel {} <-> {} closed, L2R {} bytes, R2L {} bytes",

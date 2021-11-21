@@ -77,7 +77,7 @@ impl AutoProxyClientStream {
             server.server_config(),
             addr,
             context.connect_opts_ref(),
-            |stream| MonProxyStream::from_stream(stream, flow_stat),
+            |stream| MonProxyStream::from_stream(stream, flow_stat, None),
         )
         .await
         {

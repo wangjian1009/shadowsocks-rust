@@ -8,9 +8,13 @@ use std::{
 };
 
 use pin_project::pin_project;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    sync::Mutex,
+};
 
 use super::flow::FlowStat;
+use shadowsocks::timeout::Sleep;
 
 /// Monitored `ProxyStream`
 #[pin_project]
@@ -18,12 +22,21 @@ pub struct MonProxyStream<S> {
     #[pin]
     stream: S,
     flow_stat: Arc<FlowStat>,
+    idle_timeout: Option<Arc<Mutex<Sleep>>>,
 }
 
 impl<S> MonProxyStream<S> {
     #[inline]
-    pub fn from_stream(stream: S, flow_stat: Arc<FlowStat>) -> MonProxyStream<S> {
-        MonProxyStream { stream, flow_stat }
+    pub fn from_stream(
+        stream: S,
+        flow_stat: Arc<FlowStat>,
+        idle_timeout: Option<Arc<Mutex<Sleep>>>,
+    ) -> MonProxyStream<S> {
+        MonProxyStream {
+            stream,
+            flow_stat,
+            idle_timeout,
+        }
     }
 
     #[inline]
@@ -34,6 +47,13 @@ impl<S> MonProxyStream<S> {
     #[inline]
     pub fn get_mut(&mut self) -> &mut S {
         &mut self.stream
+    }
+
+    pub fn get_idle_timeout(&self) -> Option<Arc<Mutex<Sleep>>> {
+        match &self.idle_timeout {
+            None => None,
+            Some(idle_timeout) => Some(idle_timeout.clone()),
+        }
     }
 }
 
@@ -49,6 +69,13 @@ where
             Poll::Ready(Ok(())) => {
                 let n = buf.filled().len();
                 this.flow_stat.incr_rx(n as u64);
+                if let Some(ref idle_timeout) = this.idle_timeout {
+                    let idle_timeout = idle_timeout.clone();
+                    tokio::spawn(async move {
+                        let mut idle_timeout = idle_timeout.lock().await;
+                        idle_timeout.reschedule().await;
+                    });
+                }
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
@@ -67,6 +94,13 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(n)) => {
                 this.flow_stat.incr_tx(n as u64);
+                if let Some(ref idle_timeout) = this.idle_timeout {
+                    let idle_timeout = idle_timeout.clone();
+                    tokio::spawn(async move {
+                        let mut idle_timeout = idle_timeout.lock().await;
+                        idle_timeout.reschedule().await;
+                    });
+                }
                 Poll::Ready(Ok(n))
             }
             Poll::Ready(Err(err)) => Poll::Ready(Err(err)),

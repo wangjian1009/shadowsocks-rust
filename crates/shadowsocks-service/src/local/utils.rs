@@ -72,7 +72,7 @@ where
         }
     }
 
-    match copy_encrypted_bidirectional(svr_cfg.method(), shadow, plain).await {
+    match copy_encrypted_bidirectional(svr_cfg.method(), shadow, plain, None).await {
         Ok((wn, rn)) => {
             trace!(
                 "tcp tunnel {} <-> {} (proxied) closed, L2R {} bytes, R2L {} bytes",

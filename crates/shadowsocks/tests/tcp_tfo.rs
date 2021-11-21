@@ -60,8 +60,8 @@ async fn tcp_tunnel_tfo() {
                 let (mut lr, mut lw) = stream.into_split();
                 let (mut rr, mut rw) = remote.into_split();
 
-                let l2r = copy_from_encrypted(CipherKind::NONE, &mut lr, &mut rw);
-                let r2l = copy_to_encrypted(CipherKind::NONE, &mut rr, &mut lw);
+                let l2r = copy_from_encrypted(CipherKind::NONE, &mut lr, &mut rw, None);
+                let r2l = copy_to_encrypted(CipherKind::NONE, &mut rr, &mut lw, None);
 
                 tokio::pin!(l2r);
                 tokio::pin!(r2l);

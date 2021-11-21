@@ -5,16 +5,24 @@
 
 use std::{
     future::Future,
-    io,
+    io::{self, Error, ErrorKind},
+    ops::DerefMut,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 
-use futures::ready;
+use futures::{ready, FutureExt};
 use pin_project::pin_project;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    sync::Mutex,
+};
 
-use crate::crypto::v1::{CipherCategory, CipherKind};
+use crate::{
+    crypto::v1::{CipherCategory, CipherKind},
+    timeout::Sleep,
+};
 
 #[derive(Debug)]
 struct CopyBuffer {
@@ -23,16 +31,18 @@ struct CopyBuffer {
     cap: usize,
     amt: u64,
     buf: Box<[u8]>,
+    idle_timeout: Option<Arc<Mutex<Sleep>>>,
 }
 
 impl CopyBuffer {
-    fn new(buffer_size: usize) -> Self {
+    fn new(buffer_size: usize, idle_timeout: Option<Arc<Mutex<Sleep>>>) -> Self {
         Self {
             read_done: false,
             pos: 0,
             cap: 0,
             amt: 0,
             buf: vec![0; buffer_size].into_boxed_slice(),
+            idle_timeout,
         }
     }
 
@@ -47,6 +57,25 @@ impl CopyBuffer {
         W: AsyncWrite + ?Sized,
     {
         loop {
+            if let Some(ref idle_timeout) = self.idle_timeout {
+                let mut lock_fut = idle_timeout.lock().boxed();
+                let lock_fut_pin = Pin::new(&mut lock_fut);
+                match lock_fut_pin.poll(cx) {
+                    Poll::Ready(ref mut sleep) => {
+                        let mut sleep = sleep.deref_mut();
+                        let sleep_pin = Pin::new(&mut sleep);
+                        if let Poll::Ready(_) = sleep_pin.poll(cx) {
+                            let err = Error::new(ErrorKind::TimedOut, "idle timeout");
+                            return Poll::Ready(Result::Err(err));
+                        }
+                    }
+                    Poll::Pending => return Poll::Pending,
+                }
+            }
+
+            // let check_timeout
+            // let pinfut1 =  Pin::new(&mut fut1);
+
             // If our buffer is empty, then we need to read some data to
             // continue.
             if self.pos == self.cap && !self.read_done {
@@ -113,7 +142,12 @@ where
 }
 
 /// Copy data from encrypted reader to plain writer
-pub async fn copy_from_encrypted<ER, PW>(method: CipherKind, reader: &mut ER, writer: &mut PW) -> io::Result<u64>
+pub async fn copy_from_encrypted<ER, PW>(
+    method: CipherKind,
+    reader: &mut ER,
+    writer: &mut PW,
+    idle_timeout: Option<Arc<Mutex<Sleep>>>,
+) -> io::Result<u64>
 where
     ER: AsyncRead + Unpin + ?Sized,
     PW: AsyncWrite + Unpin + ?Sized,
@@ -121,13 +155,18 @@ where
     Copy {
         reader,
         writer,
-        buf: CopyBuffer::new(encrypted_read_buffer_size(method)),
+        buf: CopyBuffer::new(encrypted_read_buffer_size(method), idle_timeout),
     }
     .await
 }
 
 /// Copy data from plain reader to encrypted writer
-pub async fn copy_to_encrypted<PR, EW>(method: CipherKind, reader: &mut PR, writer: &mut EW) -> io::Result<u64>
+pub async fn copy_to_encrypted<PR, EW>(
+    method: CipherKind,
+    reader: &mut PR,
+    writer: &mut EW,
+    idle_timeout: Option<Arc<Mutex<Sleep>>>,
+) -> io::Result<u64>
 where
     PR: AsyncRead + Unpin + ?Sized,
     EW: AsyncWrite + Unpin + ?Sized,
@@ -135,7 +174,7 @@ where
     Copy {
         reader,
         writer,
-        buf: CopyBuffer::new(plain_read_buffer_size(method)),
+        buf: CopyBuffer::new(plain_read_buffer_size(method), idle_timeout),
     }
     .await
 }
@@ -271,16 +310,22 @@ pub async fn copy_encrypted_bidirectional<E, P>(
     method: CipherKind,
     encrypted: &mut E,
     plain: &mut P,
+    idle_timeout: Option<Arc<Mutex<Sleep>>>,
 ) -> Result<(u64, u64), std::io::Error>
 where
     E: AsyncRead + AsyncWrite + Unpin + ?Sized,
     P: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
+    let idle_timeout_b = match &idle_timeout {
+        Some(ref idle_timeout) => Some(idle_timeout.clone()),
+        None => None,
+    };
+
     CopyBidirectional {
         a: encrypted,
         b: plain,
-        a_to_b: TransferState::Running(CopyBuffer::new(encrypted_read_buffer_size(method))),
-        b_to_a: TransferState::Running(CopyBuffer::new(plain_read_buffer_size(method))),
+        a_to_b: TransferState::Running(CopyBuffer::new(encrypted_read_buffer_size(method), idle_timeout)),
+        b_to_a: TransferState::Running(CopyBuffer::new(plain_read_buffer_size(method), idle_timeout_b)),
     }
     .await
 }
