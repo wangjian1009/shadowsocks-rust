@@ -6,6 +6,7 @@ use serde::{ser::SerializeMap, Serialize, Serializer};
 use shadowsocks::{context::Context, manager::datagram::ManagerDatagram, net::ConnectOpts, ManagerAddr};
 
 #[derive(Serialize, Debug)]
+#[serde(rename_all = "kebab-case")]
 pub struct ServerStat {
     pub tx: u64,
     pub rx: u64,
@@ -90,7 +91,7 @@ pub mod tests {
         );
         let req_serialized = serde_json::to_string(&req).unwrap();
         assert_eq!(
-            "{\"0\":{\"tx\":1,\"rx\":2,\"cin\":3,\"cout\":4,\"cin_by_ip\":5}}",
+            "{\"0\":{\"tx\":1,\"rx\":2,\"cin\":3,\"cout\":4,\"cin-by-ip\":5}}",
             req_serialized
         );
     }
