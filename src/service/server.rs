@@ -18,6 +18,9 @@ use shadowsocks_service::{
     },
 };
 
+#[cfg(feature = "rate-limit")]
+use shadowsocks_service::net::BoundWidth;
+
 #[cfg(feature = "logging")]
 use crate::logging;
 use crate::{
@@ -107,6 +110,13 @@ pub fn define_command_line_options<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
     {
         app = clap_app!(@app (app)
             (@arg MAINTAIN_ADDR: --("maintain-addr") +takes_value {validator::validate_server_addr} "Maintain server address")
+        );
+    }
+
+    #[cfg(feature = "rate-limit")]
+    {
+        app = clap_app!(@app (app)
+            (@arg CONN_LIMIT_RATE: --("conn-limit-rate") +takes_value {validator::validate_bound_width} "connection speed rate limit per connection")
         );
     }
 
@@ -245,6 +255,18 @@ pub fn main(matches: &ArgMatches<'_>) {
 
         if matches.is_present("TCP_FAST_OPEN") {
             config.fast_open = true;
+        }
+
+        #[cfg(feature = "rate-limit")]
+        if let Some(connection_speed_limit) = matches.value_of("CONN_LIMIT_RATE") {
+            use std::str::FromStr;
+
+            let connection_speed_limit =
+                BoundWidth::from_str(connection_speed_limit).expect("speed limit with b/s or Kb/s or Mb/s or Gb/s");
+            connection_speed_limit
+                .to_quota_byte_per_second()
+                .expect("speed limit rante error!");
+            config.speed_limit = Some(connection_speed_limit);
         }
 
         match clap::value_t!(matches.value_of("TCP_KEEP_ALIVE"), u64) {

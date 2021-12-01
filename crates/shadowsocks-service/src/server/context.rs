@@ -12,6 +12,9 @@ use shadowsocks::{
 
 use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
 
+#[cfg(feature = "rate-limit")]
+use crate::net::BoundWidth;
+
 use super::connection::ConnectionStat;
 
 /// Server Service Context
@@ -27,6 +30,10 @@ pub struct ServiceContext {
 
     // Flow statistic report
     flow_stat: Arc<FlowStat>,
+
+    // Connection rate limit
+    #[cfg(feature = "rate-limit")]
+    connection_bound_width: Option<BoundWidth>,
 }
 
 impl Default for ServiceContext {
@@ -37,6 +44,8 @@ impl Default for ServiceContext {
             acl: None,
             connection_stat: Arc::new(ConnectionStat::new()),
             flow_stat: Arc::new(FlowStat::new()),
+            #[cfg(feature = "rate-limit")]
+            connection_bound_width: None,
         }
     }
 }
@@ -75,6 +84,18 @@ impl ServiceContext {
     /// Get Access Control List reference
     pub fn acl(&self) -> Option<&AccessControl> {
         self.acl.as_deref()
+    }
+
+    /// Set Connection bound width
+    #[cfg(feature = "rate-limit")]
+    pub fn set_connection_bound_width(&mut self, connection_bound_width: Option<BoundWidth>) {
+        self.connection_bound_width = connection_bound_width;
+    }
+
+    /// Get Connection bound width
+    #[cfg(feature = "rate-limit")]
+    pub fn connection_bound_width(&self) -> Option<&BoundWidth> {
+        self.connection_bound_width.as_ref()
     }
 
     /// Get cloned connection statistic

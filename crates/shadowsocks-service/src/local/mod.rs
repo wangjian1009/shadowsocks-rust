@@ -145,7 +145,7 @@ pub async fn create(config: Config) -> io::Result<Server> {
 
     #[cfg(feature = "rate-limit")]
     {
-        if let Some(bound_width) = config.connection_speed_limit {
+        if let Some(bound_width) = config.speed_limit {
             log::info!("bound-width={}", bound_width);
             let quota = bound_width.to_quota_byte_per_second().unwrap();
             let rate_limiter = RateLimiter::new(quota);

@@ -177,7 +177,7 @@ pub fn define_command_line_options<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
     #[cfg(feature = "rate-limit")]
     {
         app = clap_app!(@app (app)
-                        (@arg LIMIT_RATE: --("limit-rate") +takes_value {validator::validate_bound_width} "download speed rate limit per connection")
+            (@arg LIMIT_RATE: --("limit-rate") +takes_value {validator::validate_bound_width} "global speed rate limit")
         );
     }
 
@@ -472,15 +472,14 @@ pub fn main(matches: &ArgMatches<'_>) {
         }
 
         #[cfg(feature = "rate-limit")]
-        if let Some(connection_speed_limit) = matches.value_of("LIMIT_RATE") {
+        if let Some(speed_limit) = matches.value_of("LIMIT_RATE") {
             use std::str::FromStr;
 
-            let connection_speed_limit =
-                BoundWidth::from_str(connection_speed_limit).expect("speed limit with b/s or Kb/s or Mb/s or Gb/s");
-            connection_speed_limit
+            let speed_limit = BoundWidth::from_str(speed_limit).expect("speed limit with b/s or Kb/s or Mb/s or Gb/s");
+            speed_limit
                 .to_quota_byte_per_second()
                 .expect("speed limit rante error!");
-            config.connection_speed_limit = Some(connection_speed_limit);
+            config.speed_limit = Some(speed_limit);
         }
 
         match clap::value_t!(matches.value_of("TCP_KEEP_ALIVE"), u64) {

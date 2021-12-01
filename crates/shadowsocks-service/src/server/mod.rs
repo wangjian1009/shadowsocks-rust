@@ -98,6 +98,7 @@ pub async fn run(config: Config) -> io::Result<()> {
 
         server.set_connect_opts(connect_opts.clone());
         server.set_accept_opts(accept_opts.clone());
+        server.set_connection_bound_width(config.speed_limit.clone());
 
         if let Some(c) = config.udp_max_associations {
             server.set_udp_capacity(c);

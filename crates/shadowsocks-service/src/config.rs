@@ -999,7 +999,7 @@ pub struct Config {
 
     /// Speed limit
     #[cfg(feature = "rate-limit")]
-    pub connection_speed_limit: Option<BoundWidth>,
+    pub speed_limit: Option<BoundWidth>,
 
     /// `RLIMIT_NOFILE` option for *nix systems
     #[cfg(all(unix, not(target_os = "android")))]
@@ -1133,7 +1133,7 @@ impl Config {
             keep_alive: None,
 
             #[cfg(feature = "rate-limit")]
-            connection_speed_limit: None,
+            speed_limit: None,
 
             #[cfg(all(unix, not(target_os = "android")))]
             nofile: None,
@@ -1677,7 +1677,7 @@ impl Config {
         // Speed limit
         #[cfg(feature = "rate-limit")]
         if let Some(d) = config.connection_speed_limit {
-            nconfig.connection_speed_limit = Some(d)
+            nconfig.speed_limit = Some(d)
         }
 
         // UDP

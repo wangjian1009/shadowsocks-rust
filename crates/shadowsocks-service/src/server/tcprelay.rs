@@ -12,7 +12,7 @@ use std::{
 use log::{debug, error, info, trace, warn};
 use shadowsocks::{
     crypto::v1::CipherKind,
-    net::{AcceptOpts, TcpStream as OutboundTcpStream},
+    net::{AcceptOpts, TcpStream as BaseOutboundTcpStream},
     relay::{
         socks5::{Address, Error as Socks5Error},
         tcprelay::{utils::copy_encrypted_bidirectional, ProxyServerStream},
@@ -31,6 +31,19 @@ use tokio::{
 use crate::net::{utils::ignore_until_end, MonProxyStream};
 
 use super::{connection::ConnectionInfo, context::ServiceContext};
+
+use cfg_if::cfg_if;
+cfg_if! {
+    if #[cfg(feature = "rate-limit")] {
+        use crate::net::RateLimiter;
+        type InboundTcpStream = crate::net::RateLimitedStream<TokioTcpStream>;
+        type OutboundTcpStream = crate::net::RateLimitedStream<BaseOutboundTcpStream>;
+    }
+    else {
+        type InboundTcpStream = TokioTcpStream;
+        type OutboundTcpStream = BaseOutboundTcpStream;
+    }
+}
 
 pub struct TcpServer {
     context: Arc<ServiceContext>,
@@ -54,13 +67,28 @@ impl TcpServer {
         loop {
             let flow_stat = self.context.flow_stat();
             let connection_stat = self.context.connection_stat();
+            #[cfg(feature = "rate-limit")]
+            let connection_bound_width = self.context.connection_bound_width();
+
             let mut idle_timeout = None;
+
+            #[cfg(feature = "rate-limit")]
+            let mut rate_limiter = None;
 
             let (local_stream, peer_addr) = match listener
                 .accept_map(|s| {
                     if let Some(cfg_idle_timeout) = svr_cfg.idle_timeout() {
                         idle_timeout = Some(Arc::new(Mutex::new(Sleep::new(cfg_idle_timeout))));
                     }
+
+                    #[cfg(feature = "rate-limit")]
+                    if let Some(connection_bound_width) = connection_bound_width {
+                        let quota = connection_bound_width.to_quota_byte_per_second().unwrap();
+                        rate_limiter = Some(Arc::new(RateLimiter::new(quota)));
+                    }
+
+                    #[cfg(feature = "rate-limit")]
+                    let s = InboundTcpStream::from_stream(s, rate_limiter.clone());
 
                     MonProxyStream::from_stream(
                         s,
@@ -92,6 +120,8 @@ impl TcpServer {
                 timeout: svr_cfg.timeout(),
                 request_recv_timeout: svr_cfg.request_recv_timeout().clone(),
                 idle_timeout,
+                #[cfg(feature = "rate-limit")]
+                rate_limiter,
             };
 
             let connection_stat = connection_stat.clone();
@@ -127,10 +157,12 @@ struct TcpServerClient {
     method: CipherKind,
     conn: Arc<ConnectionInfo>,
     peer_addr: SocketAddr,
-    stream: ProxyServerStream<MonProxyStream<TokioTcpStream>>,
+    stream: ProxyServerStream<MonProxyStream<InboundTcpStream>>,
     timeout: Option<Duration>,
     request_recv_timeout: Option<Duration>,
     idle_timeout: Option<Arc<Mutex<Sleep>>>,
+    #[cfg(feature = "rate-limit")]
+    rate_limiter: Option<Arc<RateLimiter>>,
 }
 
 impl TcpServerClient {
@@ -199,9 +231,10 @@ impl TcpServerClient {
             return Ok(());
         }
 
+        #[allow(unused_mut)]
         let mut remote_stream = match timeout_fut(
             self.timeout,
-            OutboundTcpStream::connect_remote_with_opts(
+            BaseOutboundTcpStream::connect_remote_with_opts(
                 self.context.context_ref(),
                 &target_addr,
                 self.context.connect_opts_ref(),
@@ -218,6 +251,9 @@ impl TcpServerClient {
                 return Err(err);
             }
         };
+
+        #[cfg(feature = "rate-limit")]
+        let mut remote_stream = OutboundTcpStream::from_stream(remote_stream, self.rate_limiter);
 
         let _out_guard = connection_stat.add_out_connection();
 

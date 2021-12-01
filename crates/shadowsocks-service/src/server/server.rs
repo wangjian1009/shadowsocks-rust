@@ -28,6 +28,9 @@ use super::{
     udprelay::UdpServer,
 };
 
+#[cfg(feature = "rate-limit")]
+use crate::net::BoundWidth;
+
 /// Shadowsocks Server
 pub struct Server {
     context: Arc<ServiceContext>,
@@ -84,6 +87,13 @@ impl Server {
     pub fn set_connect_opts(&mut self, opts: ConnectOpts) {
         let context = Arc::get_mut(&mut self.context).expect("cannot set ConnectOpts on a shared context");
         context.set_connect_opts(opts)
+    }
+
+    /// Set Connection bound width
+    #[cfg(feature = "rate-limit")]
+    pub fn set_connection_bound_width(&mut self, connection_bound_width: Option<BoundWidth>) {
+        let context = Arc::get_mut(&mut self.context).expect("cannot set ConnectOpts on a shared context");
+        context.set_connection_bound_width(connection_bound_width);
     }
 
     /// Set UDP association's expiry duration
