@@ -1,14 +1,7 @@
-use log;
 use std::{ffi::CStr, ops::Deref, os::raw::c_char, sync::Arc};
 use tokio::{self, runtime::Builder, sync::mpsc};
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-mod apple;
-
-mod local;
-
-#[cfg(feature = "host-dns")]
-use local::HostDns;
+use super::{decrypt_password, HostDns};
 
 use shadowsocks_service::{
     acl::AccessControl,
@@ -23,9 +16,6 @@ enum Command {
     UpdateHostDns(Vec<String>),
 }
 
-/// shadowsocks version
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 pub struct SSLocal {
     config: Config,
     ctrl_tx: Option<mpsc::Sender<Command>>,
@@ -38,7 +28,7 @@ impl SSLocal {
         let mut config = Config::load_from_str(&str_config, ConfigType::Local).unwrap();
 
         for svr in config.server.iter_mut() {
-            let password = local::decrypt_password(svr.password()).unwrap();
+            let password = decrypt_password(svr.password()).unwrap();
             log::info!("password {} ==> {}", svr.password(), password);
             svr.set_password(password.as_str());
             log::info!("server {} password {}", svr.addr(), svr.password());
@@ -197,9 +187,9 @@ impl SSLocal {
 #[no_mangle]
 pub extern "C" fn lib_local_new(c_config: *const c_char, c_acl_path: *const c_char) -> *mut SSLocal {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    apple::logger::init().unwrap();
+    super::apple::logger::init().unwrap();
 
-    log::info!("shadowsocks local {} build {}", VERSION, build_time::build_time_utc!());
+    log::info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
 
     let str_config = unsafe { CStr::from_ptr(c_config).to_string_lossy().to_owned() };
 
