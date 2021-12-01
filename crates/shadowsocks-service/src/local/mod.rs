@@ -137,6 +137,14 @@ pub async fn create(config: Config) -> io::Result<Server> {
 
     context.set_security_config(&config.security);
 
+    #[cfg(feature = "rate-limit")]
+    {
+        if let Some(bound_width) = config.connection_speed_limit {
+            print!("xxxxxx: bound-width={}\n", bound_width);
+            context.set_connection_speed_limit(Some(bound_width.to_quota_byte_per_second().unwrap()));
+        }
+    }
+
     assert!(!config.local.is_empty(), "no valid local server configuration");
 
     let context = Arc::new(context);

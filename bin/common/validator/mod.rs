@@ -10,6 +10,9 @@ use ipnet::IpNet;
 use shadowsocks_service::local::dns::NameServerAddr;
 use shadowsocks_service::shadowsocks::{relay::socks5::Address, ManagerAddr, ServerAddr, ServerConfig};
 
+#[cfg(feature = "rate-limit")]
+use shadowsocks_service::net::BoundWidth;
+
 macro_rules! validate_type {
     ($name:ident, $ty:ty, $help:expr) => {
         pub fn $name(v: String) -> Result<(), String> {
@@ -20,6 +23,9 @@ macro_rules! validate_type {
         }
     };
 }
+
+#[cfg(feature = "rate-limit")]
+validate_type!(validate_bound_width, BoundWidth, "should be b/s or kb/s or mb/s");
 
 validate_type!(
     validate_server_addr,

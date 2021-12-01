@@ -6,3 +6,14 @@ pub mod flow;
 pub mod mon_socket;
 pub mod mon_stream;
 pub mod utils;
+
+use cfg_if::cfg_if;
+cfg_if! {
+    if #[cfg(feature = "rate-limit")] {
+        mod rate_limited_stream;
+        mod bound_width;
+
+        pub use bound_width::BoundWidth;
+        pub use rate_limited_stream::{RateLimitedStream, RateLimitedTcpStream};
+    }
+}

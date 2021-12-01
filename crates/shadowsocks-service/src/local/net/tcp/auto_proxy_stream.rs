@@ -10,12 +10,13 @@ use std::{
 
 use pin_project::pin_project;
 use shadowsocks::{
-    net::TcpStream,
+    net::TcpStream as BaseTcpStream,
     relay::{
         socks5::Address,
         tcprelay::proxy_stream::{ProxyClientStream, ProxyClientStreamReadHalf, ProxyClientStreamWriteHalf},
     },
 };
+
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, ReadHalf, WriteHalf};
 
 use crate::{
@@ -25,11 +26,21 @@ use crate::{
 
 use super::auto_proxy_io::AutoProxyIo;
 
+use cfg_if::cfg_if;
+cfg_if! {
+    if #[cfg(feature = "rate-limit")] {
+        type TcpStream = crate::net::RateLimitedTcpStream;
+    }
+    else {
+        type TcpStream = BaseTcpStream;
+    }
+}
+
 /// Unified stream for bypassed and proxied connections
 #[pin_project(project = AutoProxyClientStreamProj)]
 pub enum AutoProxyClientStream {
     Proxied(#[pin] ProxyClientStream<MonProxyStream<TcpStream>>),
-    Bypassed(#[pin] TcpStream),
+    Bypassed(#[pin] BaseTcpStream),
 }
 
 impl AutoProxyClientStream {
@@ -57,8 +68,13 @@ impl AutoProxyClientStream {
     {
         // Connect directly.
         let addr = addr.into();
-        let stream =
-            TcpStream::connect_remote_with_opts(context.context_ref(), &addr, context.connect_opts_ref()).await?;
+        let stream = shadowsocks::net::TcpStream::connect_remote_with_opts(
+            context.context_ref(),
+            &addr,
+            context.connect_opts_ref(),
+        )
+        .await?;
+
         Ok(AutoProxyClientStream::Bypassed(stream))
     }
 
@@ -77,7 +93,11 @@ impl AutoProxyClientStream {
             server.server_config(),
             addr,
             context.connect_opts_ref(),
-            |stream| MonProxyStream::from_stream(stream, flow_stat, None),
+            |stream| {
+                #[cfg(feature = "rate-limit")]
+                let stream = TcpStream::from_stream(stream, context.connection_speed_limit());
+                MonProxyStream::from_stream(stream, flow_stat, None)
+            },
         )
         .await
         {
@@ -184,7 +204,7 @@ impl AutoProxyClientStream {
 #[pin_project(project = AutoProxyClientStreamReadHalfProj)]
 pub enum AutoProxyClientStreamReadHalf {
     Proxied(#[pin] ProxyClientStreamReadHalf<MonProxyStream<TcpStream>>),
-    Bypassed(#[pin] ReadHalf<TcpStream>),
+    Bypassed(#[pin] ReadHalf<BaseTcpStream>),
 }
 
 impl AutoProxyIo for AutoProxyClientStreamReadHalf {
@@ -205,7 +225,7 @@ impl AsyncRead for AutoProxyClientStreamReadHalf {
 #[pin_project(project = AutoProxyClientStreamWriteHalfProj)]
 pub enum AutoProxyClientStreamWriteHalf {
     Proxied(#[pin] ProxyClientStreamWriteHalf<MonProxyStream<TcpStream>>),
-    Bypassed(#[pin] WriteHalf<TcpStream>),
+    Bypassed(#[pin] WriteHalf<BaseTcpStream>),
 }
 
 impl AutoProxyIo for AutoProxyClientStreamWriteHalf {

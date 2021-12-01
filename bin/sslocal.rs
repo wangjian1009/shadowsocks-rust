@@ -27,6 +27,11 @@ use shadowsocks_service::{
     },
 };
 
+#[cfg(feature = "rate-limit")]
+use shadowsocks_service::net::BoundWidth;
+#[cfg(feature = "rate-limit")]
+use std::str::FromStr;
+
 #[cfg(feature = "logging")]
 use self::common::logging;
 use self::common::{monitor, validator};
@@ -163,6 +168,13 @@ fn main() {
                     (@arg DNS_LOCAL_ADDR: --("dns-addr") +takes_value requires_all(&["LOCAL_ADDR", "REMOTE_DNS_ADDR"]) {validator::validate_server_addr} "DNS address, listen to this address if specified")
                 );
             }
+        }
+
+        #[cfg(feature = "rate-limit")]
+        {
+            app = clap_app!(@app (app)
+                            (@arg LIMIT_RATE: --("limit-rate") +takes_value {validator::validate_bound_width} "download speed rate limit per connection")
+            );
         }
 
         #[cfg(feature = "local-tun")]
@@ -418,6 +430,16 @@ fn main() {
 
         if matches.is_present("TCP_FAST_OPEN") {
             config.fast_open = true;
+        }
+
+        #[cfg(feature = "rate-limit")]
+        if let Some(connection_speed_limit) = matches.value_of("LIMIT_RATE") {
+            let connection_speed_limit =
+                BoundWidth::from_str(connection_speed_limit).expect("speed limit with b/s or Kb/s or Mb/s or Gb/s");
+            connection_speed_limit
+                .to_quota_byte_per_second()
+                .expect("speed limit rante error!");
+            config.connection_speed_limit = Some(connection_speed_limit);
         }
 
         if let Some(keep_alive) = matches.value_of("TCP_KEEP_ALIVE") {

@@ -23,6 +23,7 @@ default = [
     "local-redir",
     "local-tunnel",
     "local-socks4",
+    "rate-limit",
 ]
 
 full = [
@@ -34,6 +35,7 @@ full = [
     "local-redir",
     "local-tunnel",
     "local-socks4",
+    "rate-limit",
 ]
 
 # Enable local server
@@ -44,6 +46,9 @@ server-maintain = ["hyper", "csv"]
 
 # Enable manager server
 manager = ["server"]
+
+# Enable Rate limit
+rate-limit = ["governor", "nonzero_ext", "futures-timer", "quanta", "lazy_static"]
 
 # Enables trust-dns for replacing tokio's builtin DNS resolver
 trust-dns = ["trust-dns-resolver", "shadowsocks/trust-dns"]
@@ -133,6 +138,12 @@ etherparse = { version = "0.9", optional = true }
 
 serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
+
+governor = { version = "0.3.2", optional = true }
+nonzero_ext = { version = "0.2", optional = true }
+futures-timer = { version = "3.0.2", optional = true }
+quanta = { version = "0.4.1", optional = true }
+lazy_static = { version = "1", optional = true }
 
 shadowsocks = { version = "1.12.0", path = "../shadowsocks" }
 

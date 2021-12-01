@@ -74,6 +74,9 @@ use crate::acl::AccessControl;
 #[cfg(feature = "local-dns")]
 use crate::local::dns::NameServerAddr;
 
+#[cfg(feature = "rate-limit")]
+use crate::net::BoundWidth;
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 enum SSDnsConfig {
@@ -146,6 +149,9 @@ struct SSConfig {
     no_delay: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     keep_alive: Option<u64>,
+    #[cfg(feature = "rate-limit")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connection_speed_limit: Option<BoundWidth>,
     #[cfg(all(unix, not(target_os = "android")))]
     #[serde(skip_serializing_if = "Option::is_none")]
     nofile: Option<u64>,
@@ -957,6 +963,10 @@ pub struct Config {
     /// If this is not set, sockets will be set with a default timeout
     pub keep_alive: Option<Duration>,
 
+    /// Speed limit
+    #[cfg(feature = "rate-limit")]
+    pub connection_speed_limit: Option<BoundWidth>,
+
     /// `RLIMIT_NOFILE` option for *nix systems
     #[cfg(all(unix, not(target_os = "android")))]
     pub nofile: Option<u64>,
@@ -1086,6 +1096,9 @@ impl Config {
             no_delay: false,
             fast_open: false,
             keep_alive: None,
+
+            #[cfg(feature = "rate-limit")]
+            connection_speed_limit: None,
 
             #[cfg(all(unix, not(target_os = "android")))]
             nofile: None,
@@ -1618,6 +1631,12 @@ impl Config {
         // TCP Keep-Alive
         if let Some(d) = config.keep_alive {
             nconfig.keep_alive = Some(Duration::from_secs(d));
+        }
+
+        // Speed limit
+        #[cfg(feature = "rate-limit")]
+        if let Some(d) = config.connection_speed_limit {
+            nconfig.connection_speed_limit = Some(d)
         }
 
         // UDP

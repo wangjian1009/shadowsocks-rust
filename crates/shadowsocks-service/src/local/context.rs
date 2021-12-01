@@ -16,6 +16,9 @@ use shadowsocks::{
 #[cfg(feature = "local-dns")]
 use tokio::sync::Mutex;
 
+#[cfg(feature = "rate-limit")]
+use governor::Quota;
+
 use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
 
 /// Local Service Context
@@ -33,6 +36,9 @@ pub struct ServiceContext {
     // For DNS relay's ACL domain name reverse lookup -- whether the IP shall be forwarded
     #[cfg(feature = "local-dns")]
     reverse_lookup_cache: Mutex<LruCache<IpAddr, bool>>,
+
+    #[cfg(feature = "rate-limit")]
+    connection_speed_limit: Option<Quota>,
 }
 
 impl Default for ServiceContext {
@@ -55,6 +61,8 @@ impl ServiceContext {
                 Duration::from_secs(3 * 24 * 60 * 60),
                 10240, // XXX: It should be enough for a normal user.
             )),
+            #[cfg(feature = "rate-limit")]
+            connection_speed_limit: None,
         }
     }
 
@@ -178,5 +186,17 @@ impl ServiceContext {
     pub fn set_security_config(&mut self, security: &SecurityConfig) {
         let context = Arc::get_mut(&mut self.context).expect("cannot set security on a shared context");
         context.set_replay_attack_policy(security.replay_attack.policy);
+    }
+
+    /// Set connection speed limit
+    #[cfg(feature = "rate-limit")]
+    pub fn set_connection_speed_limit(&mut self, connection_speed_limit: Option<Quota>) {
+        self.connection_speed_limit = connection_speed_limit;
+    }
+
+    /// Connection speed limit
+    #[cfg(feature = "rate-limit")]
+    pub fn connection_speed_limit(&self) -> Option<Quota> {
+        self.connection_speed_limit
     }
 }

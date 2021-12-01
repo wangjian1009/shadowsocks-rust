@@ -36,7 +36,7 @@ required-features = ["manager"]
 [lib]
 name = "sslocal"
 path = "bin/libsslocal.rs"
-required-features = ["local", "host-dns"]
+required-features = ["local"]
 crate-type = ["staticlib"]
 
 [workspace]
@@ -65,6 +65,7 @@ default = [
     "local-tunnel",
     "local-socks4",
     "multi-threaded",
+    "rate-limit",
 ]
 
 # Enable local server
@@ -128,6 +129,9 @@ aead-cipher-extra = ["shadowsocks-service/aead-cipher-extra"]
 # Enable host dns
 host-dns = ["trust-dns-resolver", "rand", "local-dns"]
 
+# Enable rate limit
+rate-limit = ["shadowsocks-service/rate-limit", "governor"]
+
 # Enable detection against replay attack
 replay-attack-detect = ["shadowsocks-service/replay-attack-detect"]
 
@@ -152,6 +156,8 @@ tokio = { version = "1", features = ["rt", "signal"] }
 aes = "0.7"
 block-modes = "0.8"
 base64 = "0.13.0"
+
+governor = { version = "0.3.2", optional = true }
 
 ipnet = { version = "2.3", optional = true }
 
