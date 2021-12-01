@@ -26,6 +26,9 @@ use crate::{
     dns::build_dns_resolver,
 };
 
+#[cfg(feature = "rate-limit")]
+use crate::net::RateLimiter;
+
 use self::{
     context::ServiceContext,
     loadbalancing::{PingBalancer, PingBalancerBuilder},
@@ -140,8 +143,10 @@ pub async fn create(config: Config) -> io::Result<Server> {
     #[cfg(feature = "rate-limit")]
     {
         if let Some(bound_width) = config.connection_speed_limit {
-            print!("xxxxxx: bound-width={}\n", bound_width);
-            context.set_connection_speed_limit(Some(bound_width.to_quota_byte_per_second().unwrap()));
+            log::info!("bound-width={}", bound_width);
+            let quota = bound_width.to_quota_byte_per_second().unwrap();
+            let rate_limiter = RateLimiter::new(quota);
+            context.set_rate_limiter(Some(Arc::new(rate_limiter)));
         }
     }
 

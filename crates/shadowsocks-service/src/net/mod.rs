@@ -14,6 +14,6 @@ cfg_if! {
         mod bound_width;
 
         pub use bound_width::BoundWidth;
-        pub use rate_limited_stream::{RateLimitedStream, RateLimitedTcpStream};
+        pub use rate_limited_stream::{RateLimiter, RateLimitedStream, RateLimitedTcpStream};
     }
 }

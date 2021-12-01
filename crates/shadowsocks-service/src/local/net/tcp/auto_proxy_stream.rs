@@ -95,7 +95,7 @@ impl AutoProxyClientStream {
             context.connect_opts_ref(),
             |stream| {
                 #[cfg(feature = "rate-limit")]
-                let stream = TcpStream::from_stream(stream, context.connection_speed_limit());
+                let stream = TcpStream::from_stream(stream, context.rate_limiter());
                 MonProxyStream::from_stream(stream, flow_stat, None)
             },
         )

@@ -1,12 +1,5 @@
 //! TCP stream with rate limited
-use std::{
-    io::{self, IoSlice},
-    net::SocketAddr,
-    num::NonZeroU32,
-    pin::Pin,
-    task::{self, Poll},
-    time::{Duration, Instant},
-};
+use std::{io::{self, IoSlice}, net::SocketAddr, num::NonZeroU32, pin::Pin, sync::Arc, task::{self, Poll}, time::{Duration, Instant}};
 
 use futures::Future;
 use futures_timer::Delay;
@@ -22,7 +15,23 @@ use governor::{
 };
 use nonzero_ext::*;
 
-type RateLimiter = governor::RateLimiter<NotKeyed, InMemoryState, MonotonicClock>;
+type BaseRateLimiter = governor::RateLimiter<NotKeyed, InMemoryState, MonotonicClock>;
+
+pub struct RateLimiter {
+    pub(crate) limiter: BaseRateLimiter,
+    pub(crate) max_burst: u32,
+}
+
+impl RateLimiter {
+    pub fn new(quota: Quota) -> RateLimiter {
+        let max_burst = quota.burst_size().get();
+        let limiter = BaseRateLimiter::direct_with_clock(quota, &MonotonicClock::default());
+        RateLimiter {
+            limiter,
+            max_burst,
+        }
+    }
+}
 
 #[derive(PartialEq, Debug, Clone)]
 enum State {
@@ -32,8 +41,7 @@ enum State {
 }
 
 struct RateLimitedContext {
-    limiter: RateLimiter,
-    max_burst: u32,
+    limiter: Arc<RateLimiter>,
     delay: Delay,
     jitter: Jitter,
     state: State,
@@ -47,16 +55,13 @@ pub struct RateLimitedStream<S> {
 
 impl<S> RateLimitedStream<S> {
     #[inline]
-    pub fn from_stream(stream: S, quota: Option<Quota>) -> RateLimitedStream<S> {
+    pub fn from_stream(stream: S, limiter: Option<Arc<RateLimiter>>) -> RateLimitedStream<S> {
         RateLimitedStream {
             stream,
-            limiter_ctx: match quota {
-                Some(quota) => {
-                    let max_burst = quota.burst_size().get();
-                    let limiter = RateLimiter::direct_with_clock(quota, &MonotonicClock::default());
+            limiter_ctx: match limiter {
+                Some(limiter) => {
                     Some(RateLimitedContext {
                         limiter,
-                        max_burst,
                         delay: Delay::new(Duration::new(0, 0)),
                         jitter: Jitter::new(Duration::new(0, 0), Duration::new(0, 0)),
                         state: State::ReadInner,
@@ -93,7 +98,7 @@ where
         loop {
             match self.limiter_ctx.as_ref().unwrap().state.clone() {
                 State::ReadInner => {
-                    let max_burst = self.limiter_ctx.as_ref().unwrap().max_burst;
+                    let max_burst = self.limiter_ctx.as_ref().unwrap().limiter.max_burst;
                     let mut recv_buf = buf.take(max_burst as usize);
                     let stream = Pin::new(&mut self.stream);
                     match stream.poll_read(cx, &mut recv_buf) {
@@ -118,7 +123,7 @@ where
                 State::CheckNextRead => {
                     let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
                     let readed = limiter_ctx.readed.unwrap();
-                    match limiter_ctx.limiter.check_n(readed) {
+                    match limiter_ctx.limiter.limiter.check_n(readed) {
                         Err(err) => match err {
                             NegativeMultiDecision::BatchNonConforming(_, negative) => {
                                 // 需要等待一定时间

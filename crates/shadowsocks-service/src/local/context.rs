@@ -17,7 +17,7 @@ use shadowsocks::{
 use tokio::sync::Mutex;
 
 #[cfg(feature = "rate-limit")]
-use governor::Quota;
+use crate::net::RateLimiter;
 
 use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
 
@@ -38,7 +38,7 @@ pub struct ServiceContext {
     reverse_lookup_cache: Mutex<LruCache<IpAddr, bool>>,
 
     #[cfg(feature = "rate-limit")]
-    connection_speed_limit: Option<Quota>,
+    rate_limiter: Option<Arc<RateLimiter>>,
 }
 
 impl Default for ServiceContext {
@@ -62,7 +62,7 @@ impl ServiceContext {
                 10240, // XXX: It should be enough for a normal user.
             )),
             #[cfg(feature = "rate-limit")]
-            connection_speed_limit: None,
+            rate_limiter: None,
         }
     }
 
@@ -188,15 +188,15 @@ impl ServiceContext {
         context.set_replay_attack_policy(security.replay_attack.policy);
     }
 
-    /// Set connection speed limit
+    /// set rate limit
     #[cfg(feature = "rate-limit")]
-    pub fn set_connection_speed_limit(&mut self, connection_speed_limit: Option<Quota>) {
-        self.connection_speed_limit = connection_speed_limit;
+    pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<RateLimiter>>) {
+        self.rate_limiter = rate_limiter;
     }
 
-    /// Connection speed limit
+    /// rate limit
     #[cfg(feature = "rate-limit")]
-    pub fn connection_speed_limit(&self) -> Option<Quota> {
-        self.connection_speed_limit
+    pub fn rate_limiter(&self) -> Option<Arc<RateLimiter>> {
+        self.rate_limiter.clone()
     }
 }
