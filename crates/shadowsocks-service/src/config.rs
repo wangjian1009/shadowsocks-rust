@@ -1001,6 +1001,14 @@ pub struct Config {
     #[cfg(feature = "rate-limit")]
     pub speed_limit: Option<BoundWidth>,
 
+    /// connection limit per ip
+    #[cfg(feature = "server-limit")]
+    pub limit_connection_per_ip: Option<u32>,
+
+    /// limited connection close delay
+    #[cfg(feature = "server-limit")]
+    pub limit_connection_close_delay: Option<Duration>,
+
     /// `RLIMIT_NOFILE` option for *nix systems
     #[cfg(all(unix, not(target_os = "android")))]
     pub nofile: Option<u64>,
@@ -1134,6 +1142,11 @@ impl Config {
 
             #[cfg(feature = "rate-limit")]
             speed_limit: None,
+
+            #[cfg(feature = "server-limit")]
+            limit_connection_per_ip: None,
+            #[cfg(feature = "server-limit")]
+            limit_connection_close_delay: None,
 
             #[cfg(all(unix, not(target_os = "android")))]
             nofile: None,

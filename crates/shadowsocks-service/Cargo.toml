@@ -23,6 +23,8 @@ default = [
     "local-redir",
     "local-tunnel",
     "local-socks4",
+    "server-maintain",
+    "server-limit",
     "rate-limit",
 ]
 
@@ -35,6 +37,8 @@ full = [
     "local-redir",
     "local-tunnel",
     "local-socks4",
+    "server-maintain",
+    "server-limit",
     "rate-limit",
 ]
 
@@ -43,6 +47,7 @@ local = []
 # Enable remote server
 server = ["rand"]
 server-maintain = ["hyper", "csv"]
+server-limit = []
 
 # Enable manager server
 manager = ["server"]

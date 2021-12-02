@@ -109,7 +109,39 @@ impl TcpServer {
                 }
             };
 
+            #[cfg(not(feature = "server-limit"))]
             let conn = connection_stat.add_in_connection(peer_addr).await;
+
+            #[cfg(feature = "server-limit")]
+            let (conn, in_count_guard) = match connection_stat
+                .check_add_in_connection(peer_addr, self.context.limit_connection_per_ip())
+                .await
+            {
+                Ok(r) => r,
+                Err(_err) => {
+                    match self.context.limit_connection_close_delay() {
+                        None => error!(
+                            "tcp server: from {} limit {} reached, close immediately",
+                            peer_addr.ip(),
+                            self.context.limit_connection_per_ip().unwrap(),
+                        ),
+                        Some(delay) => {
+                            error!(
+                                "tcp server: from {} limit {} reached, close delay {:?}",
+                                peer_addr.ip(),
+                                self.context.limit_connection_per_ip().unwrap(),
+                                delay
+                            );
+                            let delay = *delay;
+                            tokio::spawn(async move {
+                                let _local_stream = local_stream;
+                                tokio::time::sleep(delay).await;
+                            });
+                        }
+                    }
+                    continue;
+                }
+            };
 
             let client = TcpServerClient {
                 context: self.context.clone(),
@@ -132,7 +164,11 @@ impl TcpServer {
                     debug!("tcp server stream aborted with error: {}", err);
                 }
 
-                connection_stat.remove_in_connection(&conn_id).await
+                #[cfg(feature = "server-limit")]
+                connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
+
+                #[cfg(not(feature = "server-limit"))]
+                connection_stat.remove_in_connection(&conn_id).await;
             });
         }
     }

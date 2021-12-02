@@ -1,6 +1,6 @@
 //! Shadowsocks Local Server Context
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use shadowsocks::{
     config::ServerType,
@@ -34,6 +34,11 @@ pub struct ServiceContext {
     // Connection rate limit
     #[cfg(feature = "rate-limit")]
     connection_bound_width: Option<BoundWidth>,
+
+    #[cfg(feature = "server-limit")]
+    limit_connection_per_ip: Option<u32>,
+    #[cfg(feature = "server-limit")]
+    limit_connection_close_delay: Option<Duration>,
 }
 
 impl Default for ServiceContext {
@@ -46,6 +51,10 @@ impl Default for ServiceContext {
             flow_stat: Arc::new(FlowStat::new()),
             #[cfg(feature = "rate-limit")]
             connection_bound_width: None,
+            #[cfg(feature = "server-limit")]
+            limit_connection_per_ip: None,
+            #[cfg(feature = "server-limit")]
+            limit_connection_close_delay: None,
         }
     }
 }
@@ -96,6 +105,26 @@ impl ServiceContext {
     #[cfg(feature = "rate-limit")]
     pub fn connection_bound_width(&self) -> Option<&BoundWidth> {
         self.connection_bound_width.as_ref()
+    }
+
+    #[cfg(feature = "server-limit")]
+    pub fn set_limit_connection_per_ip(&mut self, limit_connection_per_ip: Option<u32>) {
+        self.limit_connection_per_ip = limit_connection_per_ip;
+    }
+
+    #[cfg(feature = "server-limit")]
+    pub fn limit_connection_per_ip(&self) -> Option<u32> {
+        self.limit_connection_per_ip
+    }
+
+    #[cfg(feature = "server-limit")]
+    pub fn set_limit_connection_close_delay(&mut self, delay: Option<Duration>) {
+        self.limit_connection_close_delay = delay;
+    }
+
+    #[cfg(feature = "server-limit")]
+    pub fn limit_connection_close_delay(&self) -> Option<&Duration> {
+        self.limit_connection_close_delay.as_ref()
     }
 
     /// Get cloned connection statistic

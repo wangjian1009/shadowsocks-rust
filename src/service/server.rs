@@ -120,6 +120,14 @@ pub fn define_command_line_options<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
         );
     }
 
+    #[cfg(feature = "server-limit")]
+    {
+        app = clap_app!(@app (app)
+            (@arg CONN_LIMIT_PER_IP: --("conn-limit-per-ip") +takes_value {validator::validate_u32} "connection limit per ip")
+            (@arg CONN_LIMIT_CLOSE_DELAY: --("conn-limited-close-delay") +takes_value {validator::validate_u32} "limited connection close delay seconds")
+        );
+    }
+
     // FIXME: -6 is not a identifier, so we cannot build it with clap_app!
     app = app.arg(
         Arg::with_name("IPV6_FIRST")
@@ -267,6 +275,23 @@ pub fn main(matches: &ArgMatches<'_>) {
                 .to_quota_byte_per_second()
                 .expect("speed limit rante error!");
             config.speed_limit = Some(connection_speed_limit);
+        }
+
+        #[cfg(feature = "server-limit")]
+        if let Some(limit_connection_per_ip) = matches
+            .value_of("CONN_LIMIT_PER_IP")
+            .map(|t| t.parse::<u32>().expect("conn-limit-per-ip"))
+        {
+            config.limit_connection_per_ip = Some(limit_connection_per_ip);
+        }
+
+        #[cfg(feature = "server-limit")]
+        if let Some(limit_connection_close_delay) = matches
+            .value_of("CONN_LIMIT_CLOSE_DELAY")
+            .map(|t| t.parse::<u64>().expect("conn-limited-close-delay"))
+            .map(Duration::from_secs)
+        {
+            config.limit_connection_close_delay = Some(limit_connection_close_delay);
         }
 
         match clap::value_t!(matches.value_of("TCP_KEEP_ALIVE"), u64) {

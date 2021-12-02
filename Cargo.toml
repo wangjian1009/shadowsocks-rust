@@ -62,6 +62,7 @@ default = [
     "host-dns",
     "server",
     "server-maintain",
+    "server-limit",
     "manager",
     "utility",
     "service",
@@ -79,6 +80,7 @@ local = ["shadowsocks-service/local"]
 # Enable remote server
 server = ["shadowsocks-service/server"]
 server-maintain = ["shadowsocks-service/server-maintain"]
+server-limit =  ["shadowsocks-service/server-limit"]
 # Enable manager server
 manager = ["shadowsocks-service/manager"]
 # Enable utility

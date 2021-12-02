@@ -96,6 +96,20 @@ impl Server {
         context.set_connection_bound_width(connection_bound_width);
     }
 
+    /// Set connection limit per ip
+    #[cfg(feature = "server-limit")]
+    pub fn set_limit_connection_per_ip(&mut self, limit_connection_per_ip: Option<u32>) {
+        let context = Arc::get_mut(&mut self.context).expect("cannot set ConnectOpts on a shared context");
+        context.set_limit_connection_per_ip(limit_connection_per_ip);
+    }
+
+    /// Set limited connection close delay
+    #[cfg(feature = "server-limit")]
+    pub fn set_limit_connection_close_delay(&mut self, duration: Option<Duration>) {
+        let context = Arc::get_mut(&mut self.context).expect("cannot set ConnectOpts on a shared context");
+        context.set_limit_connection_close_delay(duration);
+    }
+
     /// Set UDP association's expiry duration
     pub fn set_udp_expiry_duration(&mut self, d: Duration) {
         self.udp_expiry_duration = Some(d);
