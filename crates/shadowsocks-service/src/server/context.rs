@@ -1,6 +1,6 @@
 //! Shadowsocks Local Server Context
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use shadowsocks::{
     config::ServerType,
@@ -14,6 +14,12 @@ use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
 
 #[cfg(feature = "rate-limit")]
 use crate::net::BoundWidth;
+
+#[cfg(feature = "server-mock")]
+#[derive(Clone, Copy)]
+pub enum ServerMockProtocol {
+    DNS,
+}
 
 use super::connection::ConnectionStat;
 
@@ -39,6 +45,9 @@ pub struct ServiceContext {
     limit_connection_per_ip: Option<u32>,
     #[cfg(feature = "server-limit")]
     limit_connection_close_delay: Option<Duration>,
+
+    #[cfg(feature = "server-mock")]
+    mock_servers: Option<HashMap<Address, ServerMockProtocol>>,
 }
 
 impl Default for ServiceContext {
@@ -55,6 +64,8 @@ impl Default for ServiceContext {
             limit_connection_per_ip: None,
             #[cfg(feature = "server-limit")]
             limit_connection_close_delay: None,
+            #[cfg(feature = "server-mock")]
+            mock_servers: None,
         }
     }
 }
@@ -125,6 +136,24 @@ impl ServiceContext {
     #[cfg(feature = "server-limit")]
     pub fn limit_connection_close_delay(&self) -> Option<&Duration> {
         self.limit_connection_close_delay.as_ref()
+    }
+
+    #[cfg(feature = "server-mock")]
+    pub fn set_mock_server_protocol(&mut self, addr: Address, protocol: ServerMockProtocol) {
+        if self.mock_servers.is_none() {
+            self.mock_servers = Some(HashMap::new());
+        }
+
+        self.mock_servers.as_mut().unwrap().insert(addr, protocol);
+    }
+
+    #[cfg(feature = "server-mock")]
+    pub fn mock_server_protocol(&self, addr: &Address) -> Option<ServerMockProtocol> {
+        match &self.mock_servers {
+            Some(mock_servers) => mock_servers.get(addr).copied(),
+
+            None => None,
+        }
     }
 
     /// Get cloned connection statistic

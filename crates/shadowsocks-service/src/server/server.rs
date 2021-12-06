@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use cfg_if::cfg_if;
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use log::{error, trace};
 use shadowsocks::{
@@ -30,6 +31,13 @@ use super::{
 
 #[cfg(feature = "rate-limit")]
 use crate::net::BoundWidth;
+
+cfg_if! {
+    if #[cfg(any(feature = "server-mock"))] {
+        use shadowsocks::relay::socks5::Address;
+        use super::context::ServerMockProtocol;
+    }
+}
 
 /// Shadowsocks Server
 pub struct Server {
@@ -92,22 +100,29 @@ impl Server {
     /// Set Connection bound width
     #[cfg(feature = "rate-limit")]
     pub fn set_connection_bound_width(&mut self, connection_bound_width: Option<BoundWidth>) {
-        let context = Arc::get_mut(&mut self.context).expect("cannot set ConnectOpts on a shared context");
+        let context = Arc::get_mut(&mut self.context).expect("cannot set connection_bound_width on a shared context");
         context.set_connection_bound_width(connection_bound_width);
     }
 
     /// Set connection limit per ip
     #[cfg(feature = "server-limit")]
     pub fn set_limit_connection_per_ip(&mut self, limit_connection_per_ip: Option<u32>) {
-        let context = Arc::get_mut(&mut self.context).expect("cannot set ConnectOpts on a shared context");
+        let context = Arc::get_mut(&mut self.context).expect("cannot set limit_connection_per_ip on a shared context");
         context.set_limit_connection_per_ip(limit_connection_per_ip);
     }
 
     /// Set limited connection close delay
     #[cfg(feature = "server-limit")]
     pub fn set_limit_connection_close_delay(&mut self, duration: Option<Duration>) {
-        let context = Arc::get_mut(&mut self.context).expect("cannot set ConnectOpts on a shared context");
+        let context =
+            Arc::get_mut(&mut self.context).expect("cannot set limit_connection_close_delay on a shared context");
         context.set_limit_connection_close_delay(duration);
+    }
+
+    #[cfg(feature = "server-mock")]
+    pub fn set_mock_server_protocol(&mut self, addr: Address, protocol: ServerMockProtocol) {
+        let context = Arc::get_mut(&mut self.context).expect("cannot set ServerMockProtocol on a shared context");
+        context.set_mock_server_protocol(addr, protocol);
     }
 
     /// Set UDP association's expiry duration

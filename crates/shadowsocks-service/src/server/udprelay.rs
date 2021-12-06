@@ -26,6 +26,16 @@ use crate::net::MonProxySocket;
 
 use super::context::ServiceContext;
 
+use cfg_if::cfg_if;
+cfg_if! {
+    if #[cfg(feature = "server-mock")] {
+        use super::context::ServerMockProtocol;
+        use super::dns::process_dns_udp_request;
+    }
+    else {
+    }
+}
+
 type AssociationMap = LruCache<SocketAddr, UdpAssociation>;
 type SharedAssociationMap = Arc<Mutex<AssociationMap>>;
 
@@ -111,6 +121,25 @@ impl UdpServer {
                     continue;
                 }
             };
+
+            #[cfg(feature = "server-mock")]
+            match self.context.mock_server_protocol(&target_addr) {
+                Some(protocol) => match protocol {
+                    ServerMockProtocol::DNS => {
+                        let context = self.context.clone();
+                        let inbound = listener.clone();
+                        let process_dns = async move {
+                            let output_buf =
+                                process_dns_udp_request(context.dns_resolver(), &peer_addr, &target_addr, &buffer[..n])
+                                    .await?;
+                            inbound.send_to(peer_addr, &target_addr, &output_buf[..]).await
+                        };
+                        tokio::spawn(process_dns);
+                        continue;
+                    }
+                },
+                None => {}
+            }
 
             if self.context.check_outbound_blocked(&target_addr).await {
                 error!("udp client {} outbound {} blocked by ACL rules", peer_addr, target_addr);

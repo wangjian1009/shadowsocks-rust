@@ -21,6 +21,9 @@ use shadowsocks_service::{
 #[cfg(feature = "rate-limit")]
 use shadowsocks_service::net::BoundWidth;
 
+#[cfg(feature = "server-mock")]
+use shadowsocks_service::shadowsocks::relay::socks5::Address;
+
 #[cfg(feature = "logging")]
 use crate::logging;
 use crate::{
@@ -125,6 +128,13 @@ pub fn define_command_line_options<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
         app = clap_app!(@app (app)
             (@arg CONN_LIMIT_PER_IP: --("conn-limit-per-ip") +takes_value {validator::validate_u32} "connection limit per ip")
             (@arg CONN_LIMIT_CLOSE_DELAY: --("conn-limited-close-delay") +takes_value {validator::validate_u32} "limited connection close delay seconds")
+        );
+    }
+
+    #[cfg(feature = "server-mock")]
+    {
+        app = clap_app!(@app (app)
+            (@arg MOCK_DNS: --("mock-dns") +takes_value {validator::validate_address} "mock proxied dns connection to local")
         );
     }
 
@@ -292,6 +302,15 @@ pub fn main(matches: &ArgMatches<'_>) {
             .map(Duration::from_secs)
         {
             config.limit_connection_close_delay = Some(limit_connection_close_delay);
+        }
+
+        #[cfg(feature = "server-mock")]
+        {
+            if let Some(mock_dns_vec) = matches.values_of("MOCK_DNS") {
+                for addr in mock_dns_vec.map(|t| Address::parse_with_dft_port(t, 53).expect("mock dns address")) {
+                    config.mock_dns.push(addr);
+                }
+            }
         }
 
         match clap::value_t!(matches.value_of("TCP_KEEP_ALIVE"), u64) {

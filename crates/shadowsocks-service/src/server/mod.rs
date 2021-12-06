@@ -2,6 +2,7 @@
 
 use std::{io, sync::Arc, time::Duration};
 
+use cfg_if::cfg_if;
 use futures::{future, FutureExt};
 use log::trace;
 use shadowsocks::net::{AcceptOpts, ConnectOpts};
@@ -22,6 +23,13 @@ mod manager;
 pub mod server;
 mod tcprelay;
 mod udprelay;
+
+cfg_if! {
+    if #[cfg(feature = "server-mock")] {
+        pub mod dns;
+        use context::ServerMockProtocol;
+    }
+}
 
 /// Default TCP Keep Alive timeout
 ///
@@ -106,6 +114,11 @@ pub async fn run(config: Config) -> io::Result<()> {
         server.set_limit_connection_per_ip(config.limit_connection_per_ip.clone());
         #[cfg(feature = "server-limit")]
         server.set_limit_connection_close_delay(config.limit_connection_close_delay.clone());
+
+        #[cfg(feature = "server-mock")]
+        for mock_dns in &config.mock_dns {
+            server.set_mock_server_protocol(mock_dns.clone(), ServerMockProtocol::DNS);
+        }
 
         if let Some(c) = config.udp_max_associations {
             server.set_udp_capacity(c);

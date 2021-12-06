@@ -1,0 +1,307 @@
+use log::error;
+use std::{io, net::SocketAddr};
+
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+use byteorder::{BigEndian, ByteOrder};
+use bytes::{BufMut, BytesMut};
+
+use trust_dns_resolver::proto::{
+    op::{header::MessageType, response_code::ResponseCode, Message, OpCode},
+    rr::{RData, Record, RecordType},
+};
+
+use shadowsocks::{dns_resolver::DnsResolver, relay::socks5::Address};
+
+pub async fn run_dns_tcp_stream<'a, I: AsyncRead + Unpin, O: AsyncWrite + Unpin>(
+    dns_resolver: &'a DnsResolver,
+    peer_addr: &'a SocketAddr,
+    target_addr: &'a Address,
+    input: &'a mut I,
+    output: &'a mut O,
+) -> io::Result<()> {
+    let mut length_buf = [0u8; 2];
+    let mut message_buf = BytesMut::new();
+    loop {
+        match input.read_exact(&mut length_buf).await {
+            Ok(..) => {}
+            Err(ref err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                break;
+            }
+            Err(err) => {
+                error!(
+                    "mock dns {}: {}: udp tcp read length failed, error: {}",
+                    target_addr, peer_addr, err
+                );
+                return Err(err);
+            }
+        }
+
+        let length = BigEndian::read_u16(&length_buf) as usize;
+
+        message_buf.clear();
+        message_buf.reserve(length);
+        unsafe {
+            message_buf.advance_mut(length);
+        }
+
+        match input.read_exact(&mut message_buf).await {
+            Ok(..) => {}
+            Err(err) => {
+                error!(
+                    "mock dns {}: {}: dns tcp read message failed, error: {}",
+                    target_addr, peer_addr, err
+                );
+                return Err(err);
+            }
+        }
+
+        let request = match Message::from_vec(&message_buf) {
+            Ok(m) => m,
+            Err(err) => {
+                error!(
+                    "mock dns {}: {}: dns tcp parse message failed, error: {}",
+                    target_addr, peer_addr, err
+                );
+                return Err(err.into());
+            }
+        };
+
+        let response = resolve(dns_resolver, peer_addr, target_addr, request).await;
+
+        let mut buf = response.to_vec()?;
+        let length = buf.len();
+        buf.resize(length + 2, 0);
+        buf.copy_within(..length, 2);
+        BigEndian::write_u16(&mut buf[..2], length as u16);
+
+        output.write_all(&buf).await?;
+    }
+
+    log::trace!("mock dns {}: {}: dns tcp connection closed", target_addr, peer_addr);
+
+    Ok(())
+}
+
+pub async fn process_dns_udp_request(
+    dns_resolver: &DnsResolver,
+    peer_addr: &SocketAddr,
+    target_addr: &Address,
+    input: &[u8],
+) -> io::Result<Vec<u8>> {
+    let request = match Message::from_vec(input) {
+        Ok(m) => m,
+        Err(err) => {
+            error!(
+                "mock dns {}: {}: dns udp parse message failed, error: {}",
+                target_addr, peer_addr, err
+            );
+            return Err(err.into());
+        }
+    };
+
+    let response = resolve(dns_resolver, peer_addr, target_addr, request).await;
+    match response.to_vec() {
+        Ok(r) => {
+            log::trace!("mock dns {}: {}: dns udp process complete", target_addr, peer_addr);
+            Ok(r)
+        }
+        Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
+    }
+}
+
+const DEFAULT_TTL: u32 = 300u32;
+
+async fn resolve(
+    dns_resolver: &DnsResolver,
+    peer_addr: &SocketAddr,
+    target_addr: &Address,
+    request: Message,
+) -> Message {
+    let mut response = Message::new();
+
+    response
+        .set_id(request.id())
+        .set_recursion_desired(true)
+        .set_recursion_available(true)
+        .set_message_type(MessageType::Response);
+
+    if !request.recursion_desired() {
+        // RD is required by default. Otherwise it may not get valid respond from remote servers
+
+        response.set_recursion_desired(false);
+        response.set_response_code(ResponseCode::NotImp);
+    } else if request.op_code() != OpCode::Query || request.message_type() != MessageType::Query {
+        // Other ops are not supported
+
+        response.set_response_code(ResponseCode::NotImp);
+    } else if request.query_count() > 0 {
+        for query in request.queries().iter() {
+            log::trace!(
+                "mock dns {}: {}: DNS lookup {:?} {}",
+                target_addr,
+                peer_addr,
+                query.query_type(),
+                query.name()
+            );
+
+            response.add_query(query.clone());
+
+            match dns_resolver.resolve(query.name().to_string().as_str(), 0).await {
+                Ok(response_record_it) => {
+                    for addr in response_record_it {
+                        let record = match addr {
+                            SocketAddr::V4(addr) => {
+                                if query.query_type() != RecordType::A {
+                                    continue;
+                                }
+                                let mut record = Record::with(query.name().clone(), RecordType::A, DEFAULT_TTL);
+                                record.set_rdata(RData::A(addr.ip().clone()));
+                                record
+                            }
+                            SocketAddr::V6(addr) => {
+                                if query.query_type() != RecordType::AAAA {
+                                    continue;
+                                }
+                                let mut record = Record::with(query.name().clone(), RecordType::AAAA, DEFAULT_TTL);
+                                record.set_rdata(RData::AAAA(addr.ip().clone()));
+                                record
+                            }
+                        };
+
+                        log::trace!("mock dns {}: {}:     add response {}", target_addr, peer_addr, &record);
+                        response.add_answer(record);
+                    }
+                }
+                Err(err) => {
+                    log::error!("mock dns {}: {}: dns resolve error {}", target_addr, peer_addr, err);
+                    response.set_response_code(ResponseCode::ServFail);
+                }
+            }
+        }
+    }
+
+    response
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use async_trait::async_trait;
+    use mockall::*;
+    use shadowsocks::dns_resolver::DnsResolve;
+    use std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        str::FromStr,
+    };
+    use tokio::io::{BufReader, BufWriter};
+    use trust_dns_resolver::proto::{op::Query, rr::Name};
+
+    mock! {
+        DnsResolve {}
+
+        #[async_trait]
+        impl DnsResolve for DnsResolve {
+            async fn resolve(&self, addr: &str, port: u16) -> io::Result<Vec<SocketAddr>>;
+        }
+    }
+
+    #[tokio::test]
+    async fn tcp_query_basic() {
+        let mut mock_resolve = MockDnsResolve::new();
+        mock_resolve.expect_resolve().times(1).returning(|_addr, port| {
+            Ok(["1.1.1.1", "1.1.1.2", "::1"]
+                .iter()
+                .map(|s| s.parse::<IpAddr>().unwrap())
+                .map(|ip| SocketAddr::new(ip, port))
+                .collect())
+        });
+        let resolver = DnsResolver::Custom(Box::new(mock_resolve));
+
+        let response = tcp_process_query(
+            &resolver,
+            Message::new()
+                .set_id(123)
+                .set_recursion_desired(true)
+                .set_recursion_available(true)
+                .set_message_type(MessageType::Query)
+                .add_query(Query::query(Name::from_str("www.baidu.com").unwrap(), RecordType::A)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(2, response.answer_count());
+
+        assert_eq!(&RData::A(Ipv4Addr::new(1, 1, 1, 1)), response.answers()[0].rdata());
+    }
+
+    async fn tcp_process_query(resolver: &DnsResolver, request: &Message) -> io::Result<Message> {
+        let mut request_buf = request.to_vec()?;
+        let length = request_buf.len();
+        request_buf.resize(length + 2, 0);
+        request_buf.copy_within(..length, 2);
+        BigEndian::write_u16(&mut request_buf[..2], length as u16);
+
+        let peer_addr = SocketAddr::from_str("1.1.1.1:0").unwrap();
+        let target_address = Address::from_str("1.1.1.1.0").unwrap();
+
+        let mut output_buf = Vec::<u8>::new();
+        let mut input = BufReader::new(&request_buf[..]);
+        let mut output = BufWriter::new(&mut output_buf);
+        run_dns_tcp_stream(resolver, &peer_addr, &target_address, &mut input, &mut output)
+            .await
+            .unwrap();
+        output.flush().await?;
+
+        let output_length = BigEndian::read_u16(&output_buf[..2]) as usize;
+        assert_eq!(output_length + 2, output_buf.len());
+
+        match Message::from_vec(&output_buf[2..]) {
+            Ok(response) => Ok(response),
+            Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
+        }
+    }
+
+    #[tokio::test]
+    async fn udp_query_basic() {
+        let mut mock_resolve = MockDnsResolve::new();
+        mock_resolve.expect_resolve().times(1).returning(|_addr, port| {
+            Ok(["1.1.1.1", "1.1.1.2", "::1"]
+                .iter()
+                .map(|s| s.parse::<IpAddr>().unwrap())
+                .map(|ip| SocketAddr::new(ip, port))
+                .collect())
+        });
+        let resolver = DnsResolver::Custom(Box::new(mock_resolve));
+
+        let response = udp_process_query(
+            &resolver,
+            Message::new()
+                .set_id(123)
+                .set_recursion_desired(true)
+                .set_recursion_available(true)
+                .set_message_type(MessageType::Query)
+                .add_query(Query::query(Name::from_str("www.baidu.com").unwrap(), RecordType::A)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(2, response.answer_count());
+
+        assert_eq!(&RData::A(Ipv4Addr::new(1, 1, 1, 1)), response.answers()[0].rdata());
+    }
+
+    async fn udp_process_query(resolver: &DnsResolver, request: &Message) -> io::Result<Message> {
+        let request_buf = request.to_vec()?;
+
+        let peer_addr = SocketAddr::from_str("1.1.1.1:0").unwrap();
+        let target_address = Address::from_str("1.1.1.1.0").unwrap();
+
+        let output_buf = process_dns_udp_request(resolver, &peer_addr, &target_address, &request_buf).await?;
+
+        match Message::from_vec(&output_buf[..]) {
+            Ok(response) => Ok(response),
+            Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
+        }
+    }
+}

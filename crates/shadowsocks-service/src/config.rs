@@ -62,7 +62,7 @@ use cfg_if::cfg_if;
 use ipnet::IpNet;
 use log::warn;
 use serde::{Deserialize, Serialize};
-#[cfg(any(feature = "local-tunnel", feature = "local-dns"))]
+#[cfg(any(feature = "local-tunnel", feature = "local-dns", feature = "server-mock"))]
 use shadowsocks::relay::socks5::Address;
 use shadowsocks::{
     config::{ManagerAddr, Mode, ReplayAttackPolicy, ServerAddr, ServerConfig, ServerWeight},
@@ -1009,6 +1009,9 @@ pub struct Config {
     #[cfg(feature = "server-limit")]
     pub limit_connection_close_delay: Option<Duration>,
 
+    #[cfg(feature = "server-mock")]
+    pub mock_dns: Vec<Address>,
+
     /// `RLIMIT_NOFILE` option for *nix systems
     #[cfg(all(unix, not(target_os = "android")))]
     pub nofile: Option<u64>,
@@ -1147,6 +1150,9 @@ impl Config {
             limit_connection_per_ip: None,
             #[cfg(feature = "server-limit")]
             limit_connection_close_delay: None,
+
+            #[cfg(feature = "server-mock")]
+            mock_dns: Vec::new(),
 
             #[cfg(all(unix, not(target_os = "android")))]
             nofile: None,

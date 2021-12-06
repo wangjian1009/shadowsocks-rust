@@ -6,7 +6,7 @@ use std::{
     convert::From,
     fmt::{self, Debug, Formatter},
     io::{self, ErrorKind},
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs},
     slice,
     str::FromStr,
     vec,
@@ -325,6 +325,25 @@ impl Address {
         match *self {
             Address::SocketAddress(ref addr) => addr.ip().to_string(),
             Address::DomainNameAddress(ref domain, ..) => domain.to_owned(),
+        }
+    }
+
+    pub fn parse_with_dft_port(s: &str, dft_port: u16) -> Result<Address, AddressError> {
+        let mut sp = s.split(':');
+        match (sp.next(), sp.next()) {
+            (Some(dn), Some(port)) => match port.parse::<u16>() {
+                Ok(port) => Self::parse_str_host(dn, port),
+                Err(..) => Err(AddressError),
+            },
+            (Some(dn), None) => Self::parse_str_host(dn, dft_port),
+            _ => Err(AddressError),
+        }
+    }
+
+    fn parse_str_host(s: &str, port: u16) -> Result<Address, AddressError> {
+        match s.parse::<IpAddr>() {
+            Ok(ip) => Ok(Address::SocketAddress(SocketAddr::new(ip, port))),
+            Err(..) => Ok(Address::DomainNameAddress(s.to_owned(), port)),
         }
     }
 }

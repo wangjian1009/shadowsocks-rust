@@ -45,6 +45,15 @@ cfg_if! {
     }
 }
 
+cfg_if! {
+    if #[cfg(feature = "server-mock")] {
+        use super::context::ServerMockProtocol;
+        use super::dns::run_dns_tcp_stream;
+    }
+    else {
+    }
+}
+
 pub struct TcpServer {
     context: Arc<ServiceContext>,
     accept_opts: AcceptOpts,
@@ -258,6 +267,25 @@ impl TcpServerClient {
             self.peer_addr,
             target_addr
         );
+
+        #[cfg(feature = "server-mock")]
+        match self.context.mock_server_protocol(&target_addr) {
+            Some(protocol) => match protocol {
+                ServerMockProtocol::DNS => {
+                    let (mut r, mut w) = self.stream.into_split();
+                    run_dns_tcp_stream(
+                        self.context.dns_resolver(),
+                        &self.peer_addr,
+                        &target_addr,
+                        &mut r,
+                        &mut w,
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            },
+            None => {}
+        }
 
         if self.context.check_outbound_blocked(&target_addr).await {
             error!(

@@ -63,6 +63,7 @@ default = [
     "server",
     "server-maintain",
     "server-limit",
+    "server-mock",
     "manager",
     "utility",
     "service",
@@ -80,7 +81,8 @@ local = ["shadowsocks-service/local"]
 # Enable remote server
 server = ["shadowsocks-service/server"]
 server-maintain = ["shadowsocks-service/server-maintain"]
-server-limit =  ["shadowsocks-service/server-limit"]
+server-limit = ["shadowsocks-service/server-limit"]
+server-mock = ["shadowsocks-service/server-mock"]
 # Enable manager server
 manager = ["shadowsocks-service/manager"]
 # Enable utility

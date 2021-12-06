@@ -71,6 +71,10 @@ pub mod net;
 pub mod server;
 mod sys;
 
+#[cfg(test)]
+#[macro_use]
+extern crate mockall;
+
 /// Default UDP association's expire duration
 #[allow(dead_code)]
 const DEFAULT_UDP_EXPIRY_DURATION: Duration = Duration::from_secs(5 * 60);
