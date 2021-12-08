@@ -82,3 +82,6 @@ nix = "0.23"
 
 [dev-dependencies]
 env_logger = "0.9"
+tokio-util = { version = "*", features = ["io"] }
+tokio-test = "*"
+mockall = "*"

@@ -21,4 +21,5 @@ pub mod net;
 pub mod plugin;
 pub mod relay;
 mod security;
+pub mod sniffer;
 pub mod timeout;

@@ -100,7 +100,6 @@ replay-attack-detect = ["shadowsocks/replay-attack-detect"]
 [dependencies]
 log = "0.4"
 log4rs = "1.0"
-mockall = "*"
 
 cfg-if = "1"
 qrcode = { version = "0.12", default-features = false }
@@ -168,6 +167,7 @@ byteorder = "1.3"
 env_logger = "0.9"
 tokio-test = "*"
 tokio-util = { version = "*", features = ["io"]}
+mockall = "*"
 
 [package.metadata.docs.rs]
 features = ["full", "local-http-rustls", "local-dns", "dns-over-tls", "dns-over-https"]
