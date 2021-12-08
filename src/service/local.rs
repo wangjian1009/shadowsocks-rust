@@ -243,7 +243,17 @@ pub fn main(matches: &ArgMatches<'_>) {
 
         let mut config = match config_path_opt {
             Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Local) {
+                #[cfg(not(feature = "encrypt-password"))]
                 Ok(cfg) => cfg,
+                #[cfg(feature = "encrypt-password")]
+                Ok(mut cfg) => {
+                    // let package_name = parse_package_name(cpath);
+                    for svr in cfg.server.iter_mut() {
+                        let password = crate::decrypt_password(svr.password()).unwrap();
+                        svr.set_password(password.as_str());
+                    }
+                    cfg
+                }
                 Err(err) => {
                     eprintln!("loading config {:?}, {}", cpath, err);
                     process::exit(crate::EXIT_CODE_LOAD_CONFIG_FAILURE);
@@ -662,7 +672,17 @@ fn launch_reload_server_task(config_path: PathBuf, balancer: PingBalancer) {
 
         while sigusr1.recv().await.is_some() {
             let config = match Config::load_from_file(&config_path, ConfigType::Local) {
+                #[cfg(not(feature = "encrypt-password"))]
                 Ok(c) => c,
+                #[cfg(feature = "encrypt-password")]
+                Ok(mut cfg) => {
+                    // let package_name = parse_package_name(cpath);
+                    for svr in cfg.server.iter_mut() {
+                        let password = crate::decrypt_password(svr.password()).unwrap();
+                        svr.set_password(password.as_str());
+                    }
+                    cfg
+                }
                 Err(err) => {
                     error!("auto-reload {} failed with error: {}", config_path.display(), err);
                     continue;

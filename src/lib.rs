@@ -11,6 +11,11 @@ pub mod password;
 pub mod service;
 pub mod validator;
 
+#[cfg(feature = "encrypt-password")]
+mod encrypt_password;
+#[cfg(feature = "encrypt-password")]
+pub use encrypt_password::decrypt_password;
+
 #[cfg(feature = "lib-entry")]
 mod libentry;
 

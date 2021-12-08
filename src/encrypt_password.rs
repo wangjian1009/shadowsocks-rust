@@ -1,33 +1,7 @@
-//! Common password utilities
-
 use aes::Aes256;
 use block_modes::{block_padding::Pkcs7, BlockMode, Cbc};
-use std::{env, io};
 
 type Aes256Cbc = Cbc<Aes256, Pkcs7>;
-
-use log::debug;
-
-/// Read server's password from environment variable or TTY
-pub fn read_server_password(server_name: &str) -> io::Result<String> {
-    // common SS_SERVER_PASSWORD
-    if let Ok(pwd) = env::var("SS_SERVER_PASSWORD") {
-        debug!(
-            "got server {} password from environment variable SS_SERVER_PASSWORD",
-            server_name
-        );
-        return Ok(pwd);
-    }
-
-    // read from TTY
-    let tty_prompt = format!("({}) Password: ", server_name);
-    if let Ok(pwd) = rpassword::read_password_from_tty(Some(&tty_prompt)) {
-        debug!("got server {} password from tty prompt", server_name);
-        return Ok(pwd);
-    }
-
-    Err(io::Error::new(io::ErrorKind::Other, "no server password found"))
-}
 
 // fn parse_package_name(path: &str) -> &str {
 //     let parts: Vec<&str> = path.split("/").collect();
