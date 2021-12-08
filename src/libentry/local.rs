@@ -1,7 +1,7 @@
 use std::{ffi::CStr, ops::Deref, os::raw::c_char, sync::Arc};
 use tokio::{self, runtime::Builder, sync::mpsc};
 
-use super::{decrypt_password, HostDns};
+use super::HostDns;
 
 use shadowsocks_service::{
     acl::AccessControl,
@@ -27,8 +27,9 @@ impl SSLocal {
 
         let mut config = Config::load_from_str(&str_config, ConfigType::Local).unwrap();
 
+        #[cfg(feature = "encrypt-password")]
         for svr in config.server.iter_mut() {
-            let password = decrypt_password(svr.password()).unwrap();
+            let password = crate::decrypt_password(svr.password()).unwrap();
             log::info!("password {} ==> {}", svr.password(), password);
             svr.set_password(password.as_str());
             log::info!("server {} password {}", svr.addr(), svr.password());
