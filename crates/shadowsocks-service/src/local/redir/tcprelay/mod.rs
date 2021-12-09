@@ -33,6 +33,7 @@ mod sys;
 async fn establish_client_tcp_redir<'a>(
     context: Arc<ServiceContext>,
     balancer: PingBalancer,
+    #[allow(unused_mut)]
     mut stream: TcpStream,
     peer_addr: SocketAddr,
     addr: &Address,
@@ -40,6 +41,9 @@ async fn establish_client_tcp_redir<'a>(
     let server = balancer.best_tcp_server();
     let svr_cfg = server.server_config();
 
+    #[cfg(feature = "rate-limit")]
+    let mut stream = crate::net::RateLimitedStream::from_stream(stream, context.rate_limiter());
+    
     let mut remote = AutoProxyClientStream::connect(context, &server, addr).await?;
 
     establish_tcp_tunnel(svr_cfg, &mut stream, &mut remote, peer_addr, addr).await

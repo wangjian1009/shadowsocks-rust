@@ -1,5 +1,14 @@
 //! TCP stream with rate limited
-use std::{io::{self, IoSlice}, net::SocketAddr, num::NonZeroU32, pin::Pin, sync::Arc, task::{self, Poll}, time::{Duration, Instant}};
+use std::{
+    fmt::{self, Debug, Formatter},
+    io::{self, IoSlice},
+    net::SocketAddr,
+    num::NonZeroU32,
+    pin::Pin,
+    sync::Arc,
+    task::{self, Poll},
+    time::{Duration, Instant},
+};
 
 use futures::Future;
 use futures_timer::Delay;
@@ -26,10 +35,13 @@ impl RateLimiter {
     pub fn new(quota: Quota) -> RateLimiter {
         let max_burst = quota.burst_size().get();
         let limiter = BaseRateLimiter::direct_with_clock(quota, &MonotonicClock::default());
-        RateLimiter {
-            limiter,
-            max_burst,
-        }
+        RateLimiter { limiter, max_burst }
+    }
+}
+
+impl Debug for RateLimiter {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "RateLimiter: max-burst={}", self.max_burst)
     }
 }
 
@@ -59,15 +71,13 @@ impl<S> RateLimitedStream<S> {
         RateLimitedStream {
             stream,
             limiter_ctx: match limiter {
-                Some(limiter) => {
-                    Some(RateLimitedContext {
-                        limiter,
-                        delay: Delay::new(Duration::new(0, 0)),
-                        jitter: Jitter::new(Duration::new(0, 0), Duration::new(0, 0)),
-                        state: State::ReadInner,
-                        readed: None,
-                    })
-                }
+                Some(limiter) => Some(RateLimitedContext {
+                    limiter,
+                    delay: Delay::new(Duration::new(0, 0)),
+                    jitter: Jitter::new(Duration::new(0, 0), Duration::new(0, 0)),
+                    state: State::ReadInner,
+                    readed: None,
+                }),
                 None => None,
             },
         }
@@ -110,11 +120,12 @@ where
                             if readed == 0 {
                                 return Poll::Ready(Ok(()));
                             } else {
-                                // 读取到数据直接返回，等待用于延迟下一次读取
+                                // log::error!("xxxxxxx: received {} data", buf.filled().len());
+                                // 读取到数据进入CheckNextRead进行检测
                                 let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
                                 limiter_ctx.state = State::CheckNextRead;
                                 limiter_ctx.readed = Some((buf.filled().len() as u32).into_nonzero().unwrap());
-                                return Poll::Ready(Ok(()));
+                                continue;
                             }
                         }
                         Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
@@ -125,19 +136,27 @@ where
                     let readed = limiter_ctx.readed.unwrap();
                     match limiter_ctx.limiter.limiter.check_n(readed) {
                         Err(err) => match err {
+                            // 检测不通过，需要处理错误情况
                             NegativeMultiDecision::BatchNonConforming(_, negative) => {
-                                // 需要等待一定时间
+                                // 需要等待一定时间，设置好定时器后尝试等待
                                 let duration: Duration = negative.wait_time_from(Instant::now());
                                 let duration = limiter_ctx.jitter + duration;
                                 limiter_ctx.delay.reset(duration);
                                 let future = Pin::new(&mut limiter_ctx.delay);
                                 match future.poll(cx) {
                                     Poll::Pending => {
-                                        // 定时器启动，进入等待状态
+                                        // 定时器启动，进入等待状态，此时如果有数据，返回数据，等待只影响下一次读取
                                         limiter_ctx.state = State::Wait;
-                                        return Poll::Pending;
+                                        if buf.filled().len() > 0 {
+                                            // log::error!("xxxxxxx: sleep begin, duration={:?}, return {}", duration, buf.filled().len());
+                                            return Poll::Ready(Ok(()));
+                                        } else {
+                                            // log::error!("xxxxxxx: sleep begin, duration={:?}, no data", duration);
+                                            return Poll::Pending;
+                                        }
                                     }
                                     Poll::Ready(_) => {
+                                        // log::error!("xxxxxxx: sleep skip");
                                         // 定时器反馈无需等待，则再次检测(下一个循环还是CheckNextRead状态)
                                     }
                                 }
@@ -151,6 +170,15 @@ where
                             // 检查通过，直接进入下一个循环读取数据
                             limiter_ctx.state = State::ReadInner;
                             limiter_ctx.readed = None;
+
+                            if buf.filled().len() > 0 {
+                                // 从State::ReadInner进入检测状态时，已经可能读取过数据，直接返回上层
+                                // log::error!("xxxxxxx: check passed, return {}", buf.filled().len());
+                                return Poll::Ready(Ok(()));
+                            }
+
+                            // 没有已经读取的数据，直接进行一次读取
+                            // log::error!("xxxxxxx: check passed, no data");
                         }
                     }
                 }

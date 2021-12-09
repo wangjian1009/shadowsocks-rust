@@ -159,6 +159,7 @@ impl Socks {
             return Err(ErrorKind::UnexpectedEof.into());
         }
 
+        log::trace!("xxxxxx: incoming connection");
         match version_buffer[0] {
             0x04 => {
                 let handler = Socks4TcpHandler::new(context, balancer, mode);

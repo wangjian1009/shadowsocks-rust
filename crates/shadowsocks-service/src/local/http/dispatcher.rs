@@ -97,6 +97,9 @@ impl HttpDispatcher {
 
             debug!("HTTP CONNECT {}", host);
 
+            #[cfg(feature = "rate-limit")]
+            let rate_limiter = self.context.rate_limiter();
+
             // Connect to Shadowsocks' remote
             //
             // FIXME: What STATUS should I return for connection error?
@@ -114,9 +117,13 @@ impl HttpDispatcher {
             let client_addr = self.client_addr;
             tokio::spawn(async move {
                 match upgrade::on(req).await {
+                    #[allow(unused_mut)]
                     Ok(mut upgraded) => {
                         trace!("CONNECT tunnel upgrade success, {} <-> {}", client_addr, host);
 
+                        #[cfg(feature = "rate-limit")]
+                        let mut upgraded = crate::net::RateLimitedStream::from_stream(upgraded, rate_limiter);
+                        
                         let _ = establish_tcp_tunnel(
                             server.server_config(),
                             &mut upgraded,

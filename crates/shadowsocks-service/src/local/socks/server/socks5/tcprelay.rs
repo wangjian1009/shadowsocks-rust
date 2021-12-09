@@ -56,7 +56,11 @@ impl Socks5TcpHandler {
         }
     }
 
-    pub async fn handle_socks5_client(self, mut stream: TcpStream, peer_addr: SocketAddr) -> io::Result<()> {
+    pub async fn handle_socks5_client(
+        self,
+        mut stream: TcpStream,
+        peer_addr: SocketAddr,
+    ) -> io::Result<()> {
         // 1. Handshake
 
         let handshake_req = match HandshakeRequest::read_from(&mut stream).await {
@@ -129,10 +133,14 @@ impl Socks5TcpHandler {
 
     async fn handle_tcp_connect(
         self,
+        #[allow(unused_mut)]
         mut stream: TcpStream,
         peer_addr: SocketAddr,
         target_addr: Address,
     ) -> io::Result<()> {
+        #[cfg(feature = "rate-limit")]
+        let mut stream = crate::net::RateLimitedStream::from_stream(stream, self.context.rate_limiter());
+
         if !self.mode.enable_tcp() {
             warn!("TCP CONNECT is disabled");
 
