@@ -99,10 +99,7 @@ impl Socks4TcpHandler {
         let svr_cfg = server.server_config();
         let target_addr = target_addr.into();
 
-        #[cfg(feature = "rate-limit")]
-        let rate_limiter = self.context.rate_limiter();
-
-        let mut remote = match AutoProxyClientStream::connect(self.context, &server, &target_addr).await {
+        let mut remote = match AutoProxyClientStream::connect(self.context.clone(), &server, &target_addr).await {
             Ok(remote) => {
                 // Tell the client that we are ready
                 let handshake_rsp = HandshakeResponse::new(ResultCode::RequestGranted);
@@ -137,8 +134,16 @@ impl Socks4TcpHandler {
         let mut stream = stream.into_inner();
 
         #[cfg(feature = "rate-limit")]
-        let mut stream = crate::net::RateLimitedStream::from_stream(stream, rate_limiter);
-        
-        establish_tcp_tunnel(svr_cfg, &mut stream, &mut remote, peer_addr, &target_addr).await
+        let mut stream = crate::net::RateLimitedStream::from_stream(stream, self.context.rate_limiter());
+
+        establish_tcp_tunnel(
+            self.context.as_ref(),
+            svr_cfg,
+            &mut stream,
+            &mut remote,
+            peer_addr,
+            &target_addr,
+        )
+        .await
     }
 }

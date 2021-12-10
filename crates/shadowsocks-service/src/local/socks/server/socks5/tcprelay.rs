@@ -56,11 +56,7 @@ impl Socks5TcpHandler {
         }
     }
 
-    pub async fn handle_socks5_client(
-        self,
-        mut stream: TcpStream,
-        peer_addr: SocketAddr,
-    ) -> io::Result<()> {
+    pub async fn handle_socks5_client(self, mut stream: TcpStream, peer_addr: SocketAddr) -> io::Result<()> {
         // 1. Handshake
 
         let handshake_req = match HandshakeRequest::read_from(&mut stream).await {
@@ -133,8 +129,7 @@ impl Socks5TcpHandler {
 
     async fn handle_tcp_connect(
         self,
-        #[allow(unused_mut)]
-        mut stream: TcpStream,
+        #[allow(unused_mut)] mut stream: TcpStream,
         peer_addr: SocketAddr,
         target_addr: Address,
     ) -> io::Result<()> {
@@ -175,11 +170,21 @@ impl Socks5TcpHandler {
                 let header = TcpResponseHeader::new(reply, Address::SocketAddress(dummy_address));
                 header.write_to(&mut stream).await?;
 
+                trace!("socks5 {:?}", header);
+
                 return Err(err);
             }
         };
 
-        establish_tcp_tunnel(svr_cfg, &mut stream, &mut remote, peer_addr, &target_addr).await
+        establish_tcp_tunnel(
+            self.context.as_ref(),
+            svr_cfg,
+            &mut stream,
+            &mut remote,
+            peer_addr,
+            &target_addr,
+        )
+        .await
     }
 
     async fn handle_udp_associate(self, mut stream: TcpStream, client_addr: Address) -> io::Result<()> {

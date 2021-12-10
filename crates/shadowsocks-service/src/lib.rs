@@ -71,6 +71,9 @@ pub mod net;
 pub mod server;
 mod sys;
 
+#[cfg(feature = "sniffer")]
+pub mod sniffer;
+
 #[cfg(test)]
 #[macro_use]
 extern crate mockall;

@@ -75,11 +75,15 @@ default = [
     "lib-entry",
     "host-dns",
     "encrypt-password",
+    "sniffer-bittorrent",
 ]
 
 # Enable local server
 local = ["shadowsocks-service/local"]
 encrypt-password = []
+
+# Enable bittorrent protocol reject
+sniffer-bittorrent = ["shadowsocks-service/sniffer-bittorrent"]
 
 # Enable remote server
 server = ["shadowsocks-service/server"]

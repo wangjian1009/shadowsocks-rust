@@ -16,11 +16,21 @@ use tokio::{
     time,
 };
 
-use crate::local::net::AutoProxyIo;
+use cfg_if::cfg_if;
+
+use crate::local::{context::ServiceContext, net::AutoProxyIo};
+
+cfg_if! {
+    if #[cfg(feature = "sniffer")] {
+        use crate::sniffer;
+        use crate::local::context::ProtocolAction;
+    }
+}
 
 pub(crate) async fn establish_tcp_tunnel<P, S>(
+    #[allow(unused)] context: &ServiceContext,
     svr_cfg: &ServerConfig,
-    plain: &mut P,
+    #[allow(unused_mut)] mut plain: P,
     shadow: &mut S,
     peer_addr: SocketAddr,
     target_addr: &Address,
@@ -42,6 +52,18 @@ where
         return establish_tcp_tunnel_bypassed(plain, shadow, peer_addr, target_addr).await;
     }
 
+    #[cfg(feature = "sniffer")]
+    let sniffer = sniffer::SnifferChainHead::new();
+
+    #[cfg(feature = "sniffer-bittorrent")]
+    let sniffer = sniffer.join(sniffer::SnifferBittorrent::new());
+
+    #[cfg(feature = "sniffer-tls")]
+    let sniffer = sniffer.join(sniffer::SnifferTls::new());
+
+    #[cfg(feature = "sniffer")]
+    let mut plain = sniffer::SnifferStream::from_stream(plain, sniffer);
+
     // https://github.com/shadowsocks/shadowsocks-rust/issues/232
     //
     // Protocols like FTP, clients will wait for servers to send Welcome Message without sending anything.
@@ -55,6 +77,22 @@ where
                 return Ok(());
             }
             Ok(Ok(n)) => {
+                cfg_if! {
+                    if #[cfg(feature = "sniffer")] {
+                        trace!(
+                            "tcp tunnel {} -> {} sniffer found protocol {:?}",
+                            peer_addr,
+                            target_addr,
+                            plain.protocol()
+                        );
+
+                        match context.protocol_action(plain.protocol()) {
+                            Some(ProtocolAction::Reject) => {
+                            }
+                            None =>{}
+                        }
+                    }
+                }
                 // Send the first packet.
                 shadow.write_all(&buffer[..n]).await?;
             }
@@ -72,7 +110,7 @@ where
         }
     }
 
-    match copy_encrypted_bidirectional(svr_cfg.method(), shadow, plain, &None).await {
+    match copy_encrypted_bidirectional(svr_cfg.method(), shadow, &mut plain, &None).await {
         Ok((wn, rn)) => {
             trace!(
                 "tcp tunnel {} <-> {} (proxied) closed, L2R {} bytes, R2L {} bytes",
@@ -96,7 +134,7 @@ where
 }
 
 async fn establish_tcp_tunnel_bypassed<P, S>(
-    plain: &mut P,
+    mut plain: P,
     shadow: &mut S,
     peer_addr: SocketAddr,
     target_addr: &Address,
@@ -105,7 +143,7 @@ where
     P: AsyncRead + AsyncWrite + Unpin,
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    match copy_bidirectional(plain, shadow).await {
+    match copy_bidirectional(&mut plain, shadow).await {
         Ok((rn, wn)) => {
             trace!(
                 "tcp tunnel {} <-> {} (bypassed) closed, L2R {} bytes, R2L {} bytes",

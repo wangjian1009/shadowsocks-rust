@@ -11,18 +11,22 @@ impl SnifferBittorrent {
 }
 
 impl Sniffer for SnifferBittorrent {
-    const PROTOCOL: SnifferProtocol = SnifferProtocol::Bittorrent;
-
-    fn check(&mut self, data: &[u8]) -> Result<(), SnifferCheckError> {
+    fn check(&mut self, data: &[u8]) -> Result<SnifferProtocol, SnifferCheckError> {
         if data.len() < BITTORRENT_PROTOCOL_INDICATE.len() {
+            log::error!("Bittorrent: check: len={}, data={:?}", data.len(), data);
             if data == &BITTORRENT_PROTOCOL_INDICATE[..data.len()] {
                 Err(SnifferCheckError::NoClue)
             } else {
                 Err(SnifferCheckError::Reject)
             }
         } else {
+            log::error!(
+                "Bittorrent: check: len={}, data={:?}",
+                data.len(),
+                data[..BITTORRENT_PROTOCOL_INDICATE.len()].to_owned()
+            );
             if &data[..BITTORRENT_PROTOCOL_INDICATE.len()] == BITTORRENT_PROTOCOL_INDICATE {
-                Ok(())
+                Ok(SnifferProtocol::Bittorrent)
             } else {
                 Err(SnifferCheckError::Reject)
             }
@@ -45,7 +49,13 @@ mod test {
         assert_eq!(Err(SnifferCheckError::Reject), sniffer.check(b"\x13Bid"));
         assert_eq!(Err(SnifferCheckError::NoClue), sniffer.check(b"\x13BitTorrent protoco"));
 
-        assert_eq!(Ok(()), sniffer.check(b"\x13BitTorrent protocol"));
-        assert_eq!(Ok(()), sniffer.check(b"\x13BitTorrent protocol1"));
+        assert_eq!(
+            Ok(SnifferProtocol::Bittorrent),
+            sniffer.check(b"\x13BitTorrent protocol")
+        );
+        assert_eq!(
+            Ok(SnifferProtocol::Bittorrent),
+            sniffer.check(b"\x13BitTorrent protocol1")
+        );
     }
 }

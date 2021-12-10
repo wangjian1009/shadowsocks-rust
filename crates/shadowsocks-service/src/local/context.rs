@@ -1,6 +1,6 @@
 //! Shadowsocks Local Server Context
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 #[cfg(feature = "local-dns")]
 use std::{net::IpAddr, time::Duration};
 
@@ -21,6 +21,19 @@ use crate::net::RateLimiter;
 
 use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
 
+use cfg_if::cfg_if;
+
+cfg_if! {
+    if #[cfg(feature = "sniffer")] {
+        use crate::sniffer::SnifferProtocol;
+
+        #[derive(Debug, Clone)]
+        pub enum ProtocolAction {
+            Reject,
+        }
+    }
+}
+
 /// Local Service Context
 pub struct ServiceContext {
     context: SharedContext,
@@ -39,6 +52,9 @@ pub struct ServiceContext {
 
     #[cfg(feature = "rate-limit")]
     rate_limiter: Option<Arc<RateLimiter>>,
+
+    #[cfg(feature = "sniffer")]
+    protocol_action: HashMap<SnifferProtocol, ProtocolAction>,
 }
 
 impl Default for ServiceContext {
@@ -63,6 +79,8 @@ impl ServiceContext {
             )),
             #[cfg(feature = "rate-limit")]
             rate_limiter: None,
+            #[cfg(feature = "sniffer")]
+            protocol_action: HashMap::new(),
         }
     }
 
@@ -198,5 +216,28 @@ impl ServiceContext {
     #[cfg(feature = "rate-limit")]
     pub fn rate_limiter(&self) -> Option<Arc<RateLimiter>> {
         self.rate_limiter.clone()
+    }
+
+    #[cfg(feature = "sniffer")]
+    pub fn set_protocol_action(&mut self, protocol: SnifferProtocol, action: Option<ProtocolAction>) {
+        match action {
+            Some(action) => {
+                self.protocol_action.insert(protocol, action);
+            }
+            None => {
+                self.protocol_action.remove(&protocol);
+            }
+        }
+    }
+
+    #[cfg(feature = "sniffer")]
+    pub fn protocol_action(&self, protocol: &Option<SnifferProtocol>) -> Option<ProtocolAction> {
+        match protocol {
+            Some(ref protocol) => match self.protocol_action.get(protocol) {
+                Some(action) => Some(action.clone()),
+                None => None,
+            },
+            None => None,
+        }
     }
 }

@@ -28,9 +28,9 @@ impl<T: Sniffer> SnifferChain for SnifferChainNode<T, ()> {
         match self.sniffer.as_mut() {
             None => Err(SnifferCheckError::Other("sniffer already checked!".to_string())),
             Some(sniffer) => match sniffer.check(data) {
-                Ok(()) => {
+                Ok(r) => {
                     self.sniffer = None;
-                    Ok(T::PROTOCOL)
+                    Ok(r)
                 }
                 Err(SnifferCheckError::NoClue) => Err(SnifferCheckError::NoClue),
                 Err(SnifferCheckError::Reject) => {
@@ -73,10 +73,10 @@ where
 
         if let Some(sniffer) = self.sniffer.as_mut() {
             match sniffer.check(data) {
-                Ok(()) => {
+                Ok(r) => {
                     self.sniffer = None;
                     self.chain = None;
-                    return Ok(T::PROTOCOL);
+                    return Ok(r);
                 }
                 Err(SnifferCheckError::NoClue) => {}
                 Err(SnifferCheckError::Reject) => {
@@ -107,30 +107,42 @@ where
     }
 }
 
+pub struct SnifferChainHead {}
+
+impl SnifferChainHead {
+    #[inline]
+    pub fn new() -> Self {
+        SnifferChainHead {}
+    }
+
+    #[inline]
+    pub fn join<T2: Sniffer>(self, sniffer: T2) -> SnifferChainNode<T2, ()> {
+        SnifferChainNode::new(sniffer)
+    }
+}
+
+impl SnifferChain for SnifferChainHead {
+    #[inline]
+    fn check(&mut self, _data: &[u8]) -> Result<SnifferProtocol, SnifferCheckError> {
+        Err(SnifferCheckError::Reject)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::super::*;
     use mockall::*;
 
     mock! {
-        pub SnifferBittorrent {}
-        impl Sniffer for SnifferBittorrent {
-            const PROTOCOL: SnifferProtocol = SnifferProtocol::Bittorrent;
-            fn check(&mut self, data: &[u8]) -> Result<(), SnifferCheckError>;
-        }
-    }
-
-    mock! {
-        pub SnifferHttp {}
-        impl Sniffer for SnifferHttp {
-            const PROTOCOL: SnifferProtocol = SnifferProtocol::Http;
-            fn check(&mut self, data: &[u8]) -> Result<(), SnifferCheckError>;
+        pub Sniffer {}
+        impl Sniffer for Sniffer {
+            fn check(&mut self, data: &[u8]) -> Result<SnifferProtocol, SnifferCheckError>;
         }
     }
 
     #[test]
     fn single_reject() {
-        let mut sniffer1 = MockSnifferBittorrent::new();
+        let mut sniffer1 = MockSniffer::new();
         sniffer1
             .expect_check()
             .times(1)
@@ -151,8 +163,11 @@ mod test {
 
     #[test]
     fn single_accept() {
-        let mut sniffer1 = MockSnifferBittorrent::new();
-        sniffer1.expect_check().times(1).returning(|_x| Ok(()));
+        let mut sniffer1 = MockSniffer::new();
+        sniffer1
+            .expect_check()
+            .times(1)
+            .returning(|_x| Ok(SnifferProtocol::Bittorrent));
         let mut chain = SnifferChainNode::new(sniffer1);
 
         assert_eq!(chain.check(&[]), Ok(SnifferProtocol::Bittorrent));
@@ -164,7 +179,7 @@ mod test {
 
     #[test]
     fn single_error() {
-        let mut sniffer1 = MockSnifferBittorrent::new();
+        let mut sniffer1 = MockSniffer::new();
         sniffer1
             .expect_check()
             .times(1)
@@ -183,9 +198,12 @@ mod test {
 
     #[test]
     fn multi_1pass() {
-        let mut sniffer_bt = MockSnifferBittorrent::new();
-        sniffer_bt.expect_check().times(1).returning(|_x| Ok(()));
-        let sniffer_http = MockSnifferHttp::new();
+        let mut sniffer_bt = MockSniffer::new();
+        sniffer_bt
+            .expect_check()
+            .times(1)
+            .returning(|_x| Ok(SnifferProtocol::Bittorrent));
+        let sniffer_http = MockSniffer::new();
         let mut chain = SnifferChainNode::new(sniffer_bt).join(sniffer_http);
 
         assert_eq!(chain.check(&[]), Ok(SnifferProtocol::Bittorrent));
@@ -197,12 +215,12 @@ mod test {
 
     #[test]
     fn multi_1error() {
-        let mut sniffer_bt = MockSnifferBittorrent::new();
+        let mut sniffer_bt = MockSniffer::new();
         sniffer_bt
             .expect_check()
             .times(1)
             .returning(|_x| Err(SnifferCheckError::Other("test error".to_string())));
-        let sniffer_http = MockSnifferHttp::new();
+        let sniffer_http = MockSniffer::new();
         let mut chain = SnifferChainNode::new(sniffer_bt).join(sniffer_http);
 
         assert_eq!(
@@ -217,13 +235,16 @@ mod test {
 
     #[test]
     fn multi_1noclue_2pass() {
-        let mut sniffer_bt = MockSnifferBittorrent::new();
+        let mut sniffer_bt = MockSniffer::new();
         sniffer_bt
             .expect_check()
             .times(1)
             .returning(|_x| Err(SnifferCheckError::NoClue));
-        let mut sniffer_http = MockSnifferHttp::new();
-        sniffer_http.expect_check().times(1).returning(|_x| Ok(()));
+        let mut sniffer_http = MockSniffer::new();
+        sniffer_http
+            .expect_check()
+            .times(1)
+            .returning(|_x| Ok(SnifferProtocol::Http));
         let mut chain = SnifferChainNode::new(sniffer_bt).join(sniffer_http);
 
         assert_eq!(chain.check(&[]), Ok(SnifferProtocol::Http));
@@ -235,7 +256,7 @@ mod test {
 
     #[test]
     fn multi_reject() {
-        let mut sniffer_bt = MockSnifferBittorrent::new();
+        let mut sniffer_bt = MockSniffer::new();
         sniffer_bt
             .expect_check()
             .times(1)
@@ -244,7 +265,7 @@ mod test {
             .expect_check()
             .times(1)
             .returning(|_x| Err(SnifferCheckError::Reject));
-        let mut sniffer_http = MockSnifferHttp::new();
+        let mut sniffer_http = MockSniffer::new();
         sniffer_http
             .expect_check()
             .times(2)

@@ -42,8 +42,8 @@ impl<S, C: SnifferChain> SnifferStream<S, C> {
     }
 
     #[inline]
-    pub fn protocol(&self) -> Option<SnifferProtocol> {
-        self.protocol
+    pub fn protocol(&self) -> &Option<SnifferProtocol> {
+        &self.protocol
     }
 
     #[inline]
@@ -243,7 +243,7 @@ mod test {
         assert_eq!(1, read_count);
         assert_eq!("".as_bytes(), &output_buf[..]);
         assert_eq!(State::Checked, s.state());
-        assert_eq!(None, s.protocol());
+        assert_eq!(&None, s.protocol());
     }
 
     #[tokio::test]
@@ -283,7 +283,7 @@ mod test {
         assert_eq!(1, readed_size);
         assert_eq!("a".as_bytes(), &output_buf[..]);
         assert_eq!(State::Checked, s.state());
-        assert_eq!(Some(SnifferProtocol::Bittorrent), s.protocol());
+        assert_eq!(&Some(SnifferProtocol::Bittorrent), s.protocol());
     }
 
     #[tokio::test]
@@ -302,7 +302,7 @@ mod test {
         assert_eq!(2, read_count);
         assert_eq!("a".as_bytes(), &output_buf[..]);
         assert_eq!(State::Checked, s.state());
-        assert_eq!(None, s.protocol());
+        assert_eq!(&None, s.protocol());
     }
 
     #[tokio::test]
@@ -325,7 +325,7 @@ mod test {
         assert_eq!(2, read_count);
         assert_eq!("ab".as_bytes(), &output_buf[..]);
         assert_eq!(State::Checked, s.state());
-        assert_eq!(None, s.protocol());
+        assert_eq!(&None, s.protocol());
     }
 
     #[tokio::test]
@@ -355,7 +355,7 @@ mod test {
         read_buf(&mut s, &mut output_buf).await.unwrap();
         assert_eq!("ab".as_bytes(), &output_buf[..]);
         assert_eq!(State::Checked, s.state());
-        assert_eq!(Some(SnifferProtocol::Bittorrent), s.protocol());
+        assert_eq!(&Some(SnifferProtocol::Bittorrent), s.protocol());
 
         assert_eq!(1, read_buf(&mut s, &mut output_buf).await.unwrap());
         assert_eq!("abc".as_bytes(), &output_buf[..]);
@@ -389,7 +389,7 @@ mod test {
         assert_eq!(3, read_count);
         assert_eq!("abc".as_bytes(), &output_buf[..]);
         assert_eq!(State::Checked, s.state());
-        assert_eq!(None, s.protocol());
+        assert_eq!(&None, s.protocol());
     }
 
     async fn read_buf_all<S: AsyncRead + Unpin>(s: &mut S) -> io::Result<(usize, Vec<u8>)> {

@@ -56,8 +56,7 @@ pub async fn run_tcp_tunnel(
 
 async fn handle_tcp_client(
     context: Arc<ServiceContext>,
-    #[allow(unused_mut)]
-    mut stream: TcpStream,
+    #[allow(unused_mut)] mut stream: TcpStream,
     balancer: PingBalancer,
     peer_addr: SocketAddr,
     forward_addr: Address,
@@ -75,7 +74,15 @@ async fn handle_tcp_client(
     #[cfg(feature = "rate-limit")]
     let mut stream = crate::net::RateLimitedStream::from_stream(stream, context.rate_limiter());
 
-    let mut remote = AutoProxyClientStream::connect_proxied(context, &server, &forward_addr).await?;
+    let mut remote = AutoProxyClientStream::connect_proxied(context.clone(), &server, &forward_addr).await?;
 
-    establish_tcp_tunnel(svr_cfg, &mut stream, &mut remote, peer_addr, &forward_addr).await
+    establish_tcp_tunnel(
+        context.as_ref(),
+        svr_cfg,
+        &mut stream,
+        &mut remote,
+        peer_addr,
+        &forward_addr,
+    )
+    .await
 }

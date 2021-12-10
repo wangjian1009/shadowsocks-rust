@@ -27,6 +27,9 @@ default = [
     "server-limit",
     "server-mock",
     "rate-limit",
+    "sniffer-bittorrent",
+    "sniffer-http",
+    "sniffer-tls",
 ]
 
 full = [
@@ -42,6 +45,9 @@ full = [
     "server-limit",
     "server-mock",
     "rate-limit",
+    "sniffer-bittorrent",
+    "sniffer-http",
+    "sniffer-tls",
 ]
 
 # Enable local server
@@ -57,6 +63,12 @@ manager = ["server"]
 
 # Enable Rate limit
 rate-limit = ["governor", "nonzero_ext", "futures-timer", "quanta", "lazy_static"]
+
+# Enable Sniffer
+sniffer = []
+sniffer-bittorrent = ["sniffer"]
+sniffer-http = ["sniffer"]
+sniffer-tls = ["sniffer"]
 
 # Enables trust-dns for replacing tokio's builtin DNS resolver
 trust-dns = ["trust-dns-resolver", "shadowsocks/trust-dns"]
