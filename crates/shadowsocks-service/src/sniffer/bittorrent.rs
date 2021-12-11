@@ -13,18 +13,12 @@ impl SnifferBittorrent {
 impl Sniffer for SnifferBittorrent {
     fn check(&mut self, data: &[u8]) -> Result<SnifferProtocol, SnifferCheckError> {
         if data.len() < BITTORRENT_PROTOCOL_INDICATE.len() {
-            log::error!("Bittorrent: check: len={}, data={:?}", data.len(), data);
             if data == &BITTORRENT_PROTOCOL_INDICATE[..data.len()] {
                 Err(SnifferCheckError::NoClue)
             } else {
                 Err(SnifferCheckError::Reject)
             }
         } else {
-            log::error!(
-                "Bittorrent: check: len={}, data={:?}",
-                data.len(),
-                data[..BITTORRENT_PROTOCOL_INDICATE.len()].to_owned()
-            );
             if &data[..BITTORRENT_PROTOCOL_INDICATE.len()] == BITTORRENT_PROTOCOL_INDICATE {
                 Ok(SnifferProtocol::Bittorrent)
             } else {

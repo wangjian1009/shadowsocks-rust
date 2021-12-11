@@ -30,7 +30,16 @@ use tokio::{
 use crate::{
     local::{context::ServiceContext, loadbalancing::PingBalancer},
     net::MonProxySocket,
+    sniffer::SnifferChain,
 };
+
+use cfg_if::cfg_if;
+cfg_if! {
+    if #[cfg(feature = "sniffer")] {
+        use crate::sniffer;
+        use crate::local::context::ProtocolAction;
+    }
+}
 
 /// Writer for sending packets back to client
 ///
@@ -124,6 +133,48 @@ where
     /// Sends `data` from `peer_addr` to `target_addr`
     pub async fn send_to(&self, peer_addr: SocketAddr, target_addr: Address, data: &[u8]) -> io::Result<()> {
         // Check or (re)create an association
+
+        cfg_if! {
+            if #[cfg(all(feature = "sniffer-bittorrent"))] {
+
+                #[allow(unused_mut)]
+                let mut sniffer = sniffer::SnifferChainHead::new();
+
+                #[cfg(feature = "sniffer-bittorrent")]
+                #[allow(unused_mut)]
+                let mut sniffer = sniffer.join(sniffer::SnifferUtp::new());
+
+                let protocol = match sniffer.check(data) {
+                    Ok(protocol) => Some(protocol),
+                    Err(sniffer::SnifferCheckError::NoClue) => None,
+                    Err(sniffer::SnifferCheckError::Reject) => None,
+                    Err(sniffer::SnifferCheckError::Other(err)) => {
+                        log::error!(
+                            "sniffer package from {} to {} for error {}",
+                            peer_addr, target_addr, err
+                        );
+                        return Err(io::Error::new(io::ErrorKind::Other, err));
+                    }
+                };
+
+                log::trace!(
+                    "sniffer package from {} to {} protocol {:?}",
+                    peer_addr, target_addr, protocol);
+
+                let action = self.context.protocol_action(&protocol);
+                match action {
+                    Some(action) => match action {
+                        ProtocolAction::Reject => {
+                            log::info!(
+                                "drap package from {} to {} for protocol {:?}",
+                                peer_addr, target_addr, protocol);
+                            return Ok(());
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
 
         let mut assoc_map = self.assoc_map.lock().await;
 

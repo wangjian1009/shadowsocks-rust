@@ -4,6 +4,8 @@ use cfg_if::cfg_if;
 pub enum SnifferProtocol {
     #[cfg(feature = "sniffer-bittorrent")]
     Bittorrent,
+    #[cfg(feature = "sniffer-bittorrent")]
+    Utp,
     #[cfg(feature = "sniffer-http")]
     Http,
     #[cfg(feature = "sniffer-tls")]
@@ -35,6 +37,9 @@ cfg_if! {
     if #[cfg(feature = "sniffer-bittorrent")] {
         mod bittorrent;
         pub use bittorrent::SnifferBittorrent;
+
+        mod utp;
+        pub use utp::SnifferUtp;
     }
 }
 
