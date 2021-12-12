@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use super::{Sniffer, SnifferCheckError, SnifferProtocol};
 use byteorder::{BigEndian, ByteOrder};
 // use std::time::Instant;

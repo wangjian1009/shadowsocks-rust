@@ -49,11 +49,6 @@ where
         );
     } else {
         debug!("established tcp tunnel {} <-> {} bypassed", peer_addr, target_addr);
-        log::error!(
-            "xxxxxx: established tcp tunnel {} <-> {} bypassed",
-            peer_addr,
-            target_addr
-        );
         return establish_tcp_tunnel_bypassed(plain, shadow, peer_addr, target_addr).await;
     }
 
@@ -87,7 +82,7 @@ where
                         match context.protocol_action(plain.protocol()) {
                             Some(ProtocolAction::Reject) => {
                                 log::error!(
-                                    "reject tcp tunnel {} -> {} for protocol {:?}",
+                                    "tcp tunnel {} -> {} reject for protocol {:?}",
                                     peer_addr,
                                     target_addr,
                                     plain.protocol().as_ref().unwrap()

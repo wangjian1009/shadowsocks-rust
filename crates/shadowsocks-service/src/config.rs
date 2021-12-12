@@ -1233,7 +1233,7 @@ impl Config {
         }
 
         // Mode
-        let mut global_mode = Mode::TcpOnly;
+        let mut global_mode = Mode::TcpAndUdp;
         if let Some(m) = config.mode {
             match m.parse::<Mode>() {
                 Ok(xm) => global_mode = xm,
