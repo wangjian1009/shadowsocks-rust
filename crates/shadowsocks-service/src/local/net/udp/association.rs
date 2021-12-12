@@ -157,17 +157,13 @@ where
                     }
                 };
 
-                log::trace!(
-                    "sniffer package from {} to {} protocol {:?}",
-                    peer_addr, target_addr, protocol);
-
                 let action = self.context.protocol_action(&protocol);
                 match action {
                     Some(action) => match action {
                         ProtocolAction::Reject => {
-                            log::info!(
-                                "drap package from {} to {} for protocol {:?}",
-                                peer_addr, target_addr, protocol);
+                            trace!(
+                                "reject udp from {} to {} for protocol {:?}",
+                                peer_addr, target_addr, protocol.unwrap());
                             return Ok(());
                         }
                     }

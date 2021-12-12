@@ -48,6 +48,7 @@
 //!
 //! Of course, you can also use `cargo install` to install binaries.
 
+#![feature(duration_constants)]
 use std::time::Duration;
 
 #[cfg(feature = "local")]

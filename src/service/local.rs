@@ -181,6 +181,13 @@ pub fn define_command_line_options<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
         );
     }
 
+    #[cfg(feature = "sniffer-bittorrent")]
+    {
+        app = clap_app!(@app (app)
+            (@arg REJECT_BITTORRENT: --("reject-bt") "reject bittorrent traffic")
+        );
+    }
+
     #[cfg(unix)]
     {
         app = clap_app!(@app (app)
@@ -490,6 +497,11 @@ pub fn main(matches: &ArgMatches<'_>) {
                 .to_quota_byte_per_second()
                 .expect("speed limit rante error!");
             config.speed_limit = Some(speed_limit);
+        }
+
+        #[cfg(feature = "sniffer-bittorrent")]
+        if matches.is_present("REJECT_BITTORRENT") {
+            config.reject_bittorrent = true;
         }
 
         match clap::value_t!(matches.value_of("TCP_KEEP_ALIVE"), u64) {

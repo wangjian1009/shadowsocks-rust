@@ -49,6 +49,11 @@ where
         );
     } else {
         debug!("established tcp tunnel {} <-> {} bypassed", peer_addr, target_addr);
+        log::error!(
+            "xxxxxx: established tcp tunnel {} <-> {} bypassed",
+            peer_addr,
+            target_addr
+        );
         return establish_tcp_tunnel_bypassed(plain, shadow, peer_addr, target_addr).await;
     }
 
@@ -79,18 +84,27 @@ where
             Ok(Ok(n)) => {
                 cfg_if! {
                     if #[cfg(feature = "sniffer")] {
-                        trace!(
-                            "tcp tunnel {} -> {} sniffer found protocol {:?}",
-                            peer_addr,
-                            target_addr,
-                            plain.protocol()
-                        );
-
                         match context.protocol_action(plain.protocol()) {
                             Some(ProtocolAction::Reject) => {
+                                log::error!(
+                                    "reject tcp tunnel {} -> {} for protocol {:?}",
+                                    peer_addr,
+                                    target_addr,
+                                    plain.protocol().as_ref().unwrap()
+                                );
+                                return Ok(());
                             }
                             None =>{}
                         }
+
+                        // log::error!(
+                        //     "tcp check pass: xxxxxx: {} -> {} : {:?}: len={}, {:?}",
+                        //     peer_addr,
+                        //     target_addr,
+                        //     plain.protocol(),
+                        //     n,
+                        //     &buffer[..std::cmp::min(n, 20)]
+                        // );
                     }
                 }
                 // Send the first packet.

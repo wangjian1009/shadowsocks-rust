@@ -50,6 +50,14 @@ pub mod tun;
 pub mod tunnel;
 pub mod utils;
 
+use cfg_if::cfg_if;
+cfg_if! {
+    if #[cfg(feature = "sniffer")] {
+        use crate::sniffer::SnifferProtocol;
+        use crate::local::context::ProtocolAction;
+    }
+}
+
 /// Default TCP Keep Alive timeout
 ///
 /// This is borrowed from Go's `net` library's default setting
@@ -150,6 +158,15 @@ pub async fn create(config: Config) -> io::Result<Server> {
             let quota = bound_width.to_quota_byte_per_second().unwrap();
             let rate_limiter = RateLimiter::new(quota);
             context.set_rate_limiter(Some(Arc::new(rate_limiter)));
+        }
+    }
+
+    #[cfg(feature = "sniffer-bittorrent")]
+    {
+        if config.reject_bittorrent {
+            log::info!("reject bittorrent");
+            context.set_protocol_action(SnifferProtocol::Bittorrent, Some(ProtocolAction::Reject));
+            context.set_protocol_action(SnifferProtocol::Utp, Some(ProtocolAction::Reject));
         }
     }
 

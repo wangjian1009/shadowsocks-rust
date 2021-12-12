@@ -1012,6 +1012,9 @@ pub struct Config {
     #[cfg(feature = "server-mock")]
     pub mock_dns: Vec<Address>,
 
+    #[cfg(feature = "sniffer-bittorrent")]
+    pub reject_bittorrent: bool,
+
     /// `RLIMIT_NOFILE` option for *nix systems
     #[cfg(all(unix, not(target_os = "android")))]
     pub nofile: Option<u64>,
@@ -1153,6 +1156,9 @@ impl Config {
 
             #[cfg(feature = "server-mock")]
             mock_dns: Vec::new(),
+
+            #[cfg(feature = "sniffer-bittorrent")]
+            reject_bittorrent: false,
 
             #[cfg(all(unix, not(target_os = "android")))]
             nofile: None,
