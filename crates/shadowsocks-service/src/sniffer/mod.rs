@@ -49,3 +49,19 @@ cfg_if! {
         pub use tls::SnifferTls;
     }
 }
+
+fn check_block(data: &[u8], check: &[u8]) -> Result<(), SnifferCheckError> {
+    if data.len() < check.len() {
+        if data == &check[..data.len()] {
+            Err(SnifferCheckError::NoClue)
+        } else {
+            Err(SnifferCheckError::Reject)
+        }
+    } else {
+        if &data[..check.len()] == check {
+            Ok(())
+        } else {
+            Err(SnifferCheckError::Reject)
+        }
+    }
+}

@@ -82,10 +82,11 @@ where
                         match context.protocol_action(plain.protocol()) {
                             Some(ProtocolAction::Reject) => {
                                 log::error!(
-                                    "tcp tunnel {} -> {} reject for protocol {:?}",
+                                    "tcp tunnel {} -> {} reject for protocol {:?} len={}",
                                     peer_addr,
                                     target_addr,
-                                    plain.protocol().as_ref().unwrap()
+                                    plain.protocol().as_ref().unwrap(),
+                                    n,
                                 );
                                 return Ok(());
                             }

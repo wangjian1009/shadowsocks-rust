@@ -393,6 +393,12 @@ pub async fn create(config: Config) -> io::Result<Server> {
         }
     }
 
+    // vfut.push(async {
+    //     tokio::time::sleep(Duration::from_secs(10)).await;
+    //     log::error!("xxxxxxxxx: test done!");
+    //     unsafe { *(0 as *mut u32) = 42; }
+    //     Ok(())
+    // }.boxed());
     // let (res, ..) = future::select_all(vfut).await;
     // let (res, _) = vfut.into_future().await;
     // res.unwrap()

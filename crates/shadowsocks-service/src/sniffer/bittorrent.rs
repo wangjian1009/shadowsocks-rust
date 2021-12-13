@@ -1,4 +1,4 @@
-use super::{Sniffer, SnifferCheckError, SnifferProtocol};
+use super::{check_block, Sniffer, SnifferCheckError, SnifferProtocol};
 
 const BITTORRENT_PROTOCOL_INDICATE: &[u8] = b"\x13BitTorrent protocol";
 
@@ -12,19 +12,8 @@ impl SnifferBittorrent {
 
 impl Sniffer for SnifferBittorrent {
     fn check(&mut self, data: &[u8]) -> Result<SnifferProtocol, SnifferCheckError> {
-        if data.len() < BITTORRENT_PROTOCOL_INDICATE.len() {
-            if data == &BITTORRENT_PROTOCOL_INDICATE[..data.len()] {
-                Err(SnifferCheckError::NoClue)
-            } else {
-                Err(SnifferCheckError::Reject)
-            }
-        } else {
-            if &data[..BITTORRENT_PROTOCOL_INDICATE.len()] == BITTORRENT_PROTOCOL_INDICATE {
-                Ok(SnifferProtocol::Bittorrent)
-            } else {
-                Err(SnifferCheckError::Reject)
-            }
-        }
+        check_block(data, BITTORRENT_PROTOCOL_INDICATE)?;
+        Ok(SnifferProtocol::Bittorrent)
     }
 }
 

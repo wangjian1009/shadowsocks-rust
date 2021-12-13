@@ -4,7 +4,7 @@ use std::{net::IpAddr, path::PathBuf, process, time::Duration};
 
 use clap::{clap_app, App, Arg, ArgMatches, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
-use log::{info, trace};
+use log::info;
 use tokio::{self, runtime::Builder};
 
 #[cfg(feature = "local-redir")]
@@ -245,8 +245,6 @@ pub fn main(matches: &ArgMatches<'_>) {
                 logging::init_with_config("sslocal", &service_config.log);
             }
         }
-
-        trace!("{:?}", service_config);
 
         let mut config = match config_path_opt {
             Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Local) {
