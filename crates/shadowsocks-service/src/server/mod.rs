@@ -108,7 +108,7 @@ pub async fn run(config: Config) -> io::Result<()> {
         server.set_accept_opts(accept_opts.clone());
 
         #[cfg(feature = "rate-limit")]
-        server.set_connection_bound_width(config.speed_limit.clone());
+        server.set_connection_bound_width(config.rate_limit.clone());
 
         #[cfg(feature = "server-limit")]
         server.set_limit_connection_per_ip(config.limit_connection_per_ip.clone());

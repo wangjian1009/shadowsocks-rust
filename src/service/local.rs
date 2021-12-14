@@ -494,12 +494,12 @@ pub fn main(matches: &ArgMatches<'_>) {
             speed_limit
                 .to_quota_byte_per_second()
                 .expect("speed limit rante error!");
-            config.speed_limit = Some(speed_limit);
+            config.rate_limit = Some(speed_limit);
         }
 
         #[cfg(feature = "sniffer-bittorrent")]
         if matches.is_present("REJECT_BITTORRENT") {
-            config.reject_bittorrent = true;
+            config.reject_bittorrent = Some(true);
         }
 
         match clap::value_t!(matches.value_of("TCP_KEEP_ALIVE"), u64) {

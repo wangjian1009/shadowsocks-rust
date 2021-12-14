@@ -59,7 +59,6 @@ default = [
     "logging",
     "trust-dns",
     "local",
-    "host-dns",
     "server",
     "server-maintain",
     "server-limit",

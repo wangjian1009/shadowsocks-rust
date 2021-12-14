@@ -284,7 +284,7 @@ pub fn main(matches: &ArgMatches<'_>) {
             connection_speed_limit
                 .to_quota_byte_per_second()
                 .expect("speed limit rante error!");
-            config.speed_limit = Some(connection_speed_limit);
+            config.rate_limit = Some(connection_speed_limit);
         }
 
         #[cfg(feature = "server-limit")]

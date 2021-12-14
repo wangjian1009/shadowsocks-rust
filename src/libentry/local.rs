@@ -1,12 +1,26 @@
-use std::{ffi::CStr, ops::Deref, os::raw::c_char, sync::Arc};
+use log;
+use std::{ffi::CStr, os::raw::c_char};
 use tokio::{self, runtime::Builder, sync::mpsc};
 
-use super::HostDns;
+use cfg_if::cfg_if;
+
+cfg_if! {
+    if #[cfg(feature = "host-dns")] {
+        use super::HostDns;
+        use std::sync::Arc;
+        use shadowsocks_service::config::DnsConfig;
+    }
+}
 
 use shadowsocks_service::{
     acl::AccessControl,
-    config::{Config, ConfigType, DnsConfig},
+    config::{Config, ConfigType},
     run_local,
+};
+
+use futures::{
+    stream::{FuturesUnordered, StreamExt},
+    FutureExt,
 };
 
 #[derive(Debug)]
@@ -26,6 +40,7 @@ impl SSLocal {
         log::info!("config {}", str_config);
 
         let mut config = Config::load_from_str(&str_config, ConfigType::Local).unwrap();
+        log::info!("passed config {}", config);
 
         #[cfg(feature = "encrypt-password")]
         for svr in config.server.iter_mut() {
@@ -71,41 +86,17 @@ impl SSLocal {
         SSLocal { config, ctrl_tx: None }
     }
 
-    #[cfg(feature = "host-dns")]
-    fn create_host_dns(&mut self) -> Option<Arc<HostDns>> {
-        match &self.config.dns {
-            DnsConfig::LocalDns(ref local_addr) => Some(Arc::new(HostDns::new(local_addr.clone()))),
-            _ => None,
-        }
-    }
-
     fn run(&mut self) {
         let mut builder = Builder::new_current_thread();
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
 
         runtime.block_on(async move {
-            let host_dns = self.create_host_dns();
-            let ctrl = self.start_ctrl(host_dns.clone());
+            let vfut = FuturesUnordered::new();
 
             let server = run_local(self.config.clone());
-
-            let dns = tokio::spawn(async move {
-                #[cfg(feature = "host-dns")]
-                if let Some(ref host_dns) = host_dns {
-                    match host_dns.deref().run().await {
-                        Ok(()) => log::info!("host dns stop success"),
-                        Err(err) => log::error!("host dns stop with error {}", err),
-                    }
-                };
-            });
-
-            tokio::pin!(ctrl);
-
-            tokio::pin!(server, dns);
-
-            tokio::select! {
-                val = server => {
-                    match val {
+            vfut.push(
+                async move {
+                    match server.await {
                         // Server future resolved without an error. This should never happen.
                         Ok(..) => {
                             log::info!("server exited unexpectly");
@@ -116,15 +107,41 @@ impl SSLocal {
                             log::error!("server aborted with {}", err);
                             // process::exit(common::EXIT_CODE_SERVER_ABORTED);
                         }
+                    };
+                    ()
+                }
+                .boxed(),
+            );
+
+            #[cfg(feature = "host-dns")]
+            let mut host_dns = None;
+
+            #[cfg(feature = "host-dns")]
+            if let DnsConfig::LocalDns(addr) = &self.config.dns {
+                host_dns = Some(Arc::new(HostDns::new(addr.clone())));
+
+                let host_dns = host_dns.clone();
+                vfut.push(
+                    async move {
+                        match host_dns.as_ref().unwrap().run().await {
+                            Ok(()) => log::info!("host dns stop success"),
+                            Err(err) => log::error!("host dns stop with error {}", err),
+                        }
                     }
-                }
-                _ = ctrl => {
-                    log::error!("server aborted ctrl stop");
-                }
-                _ = dns => {
-                    log::error!("server aborted host dns stop");
-                }
+                    .boxed(),
+                );
             }
+
+            let ctrl = self.run_ctrl(
+                #[cfg(feature = "host-dns")]
+                host_dns,
+            );
+
+            vfut.push(ctrl.boxed());
+
+            let (_res, _) = vfut.into_future().await;
+
+            log::info!("server stoped");
         });
     }
 
@@ -152,36 +169,31 @@ impl SSLocal {
         }
     }
 
-    fn start_ctrl(&mut self, host_dns: Option<Arc<HostDns>>) -> tokio::task::JoinHandle<()> {
+    async fn run_ctrl(&mut self, #[cfg(feature = "host-dns")] host_dns: Option<Arc<HostDns>>) {
         let (tx, mut rx) = mpsc::channel(1);
 
         self.ctrl_tx = Some(tx);
 
-        tokio::spawn(async move {
-            let host_dns: Option<&HostDns> = match &host_dns {
-                None => None,
-                Some(ref host_dns) => Some(host_dns.deref()),
-            };
-
-            while let Some(cmd) = rx.recv().await {
-                match cmd {
-                    Command::Stop => {
-                        break;
-                    }
-                    #[cfg(feature = "host-dns")]
-                    Command::UpdateHostDns(servers) => match &host_dns {
-                        None => {
-                            log::info!("sslocal update host dns: no host dns")
-                        }
-                        Some(host_dns) => {
-                            host_dns
-                                .update_servers(servers.iter().map(|s| s.as_str()).collect())
-                                .await
-                        }
-                    },
+        while let Some(cmd) = rx.recv().await {
+            match cmd {
+                Command::Stop => {
+                    break;
                 }
+                #[cfg(feature = "host-dns")]
+                Command::UpdateHostDns(servers) => match host_dns.as_ref() {
+                    None => {
+                        log::info!("sslocal update host dns: no host dns")
+                    }
+                    Some(host_dns) => {
+                        host_dns
+                            .update_servers(servers.iter().map(|s| s.as_str()).collect())
+                            .await
+                    }
+                },
             }
-        })
+        }
+
+        log::info!("server aborted ctrl stop");
     }
 }
 

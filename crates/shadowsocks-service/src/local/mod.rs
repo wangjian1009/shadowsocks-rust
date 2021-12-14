@@ -152,19 +152,17 @@ pub async fn create(config: Config) -> io::Result<Server> {
     context.set_security_config(&config.security);
 
     #[cfg(feature = "rate-limit")]
-    {
-        if let Some(bound_width) = config.speed_limit {
-            log::info!("bound-width={}", bound_width);
-            let quota = bound_width.to_quota_byte_per_second().unwrap();
-            let rate_limiter = RateLimiter::new(quota);
-            context.set_rate_limiter(Some(Arc::new(rate_limiter)));
-        }
+    if let Some(bound_width) = config.rate_limit {
+        log::info!("bound-width={}", bound_width);
+        let quota = bound_width.to_quota_byte_per_second().unwrap();
+        let rate_limiter = RateLimiter::new(quota);
+        context.set_rate_limiter(Some(Arc::new(rate_limiter)));
     }
 
     #[cfg(feature = "sniffer-bittorrent")]
-    {
-        if config.reject_bittorrent {
-            log::info!("reject bittorrent");
+    if let Some(reject_bittorrent) = config.reject_bittorrent {
+        log::info!("reject bittorrent = {}", reject_bittorrent);
+        if reject_bittorrent {
             context.set_protocol_action(SnifferProtocol::Bittorrent, Some(ProtocolAction::Reject));
             context.set_protocol_action(SnifferProtocol::Utp, Some(ProtocolAction::Reject));
         }

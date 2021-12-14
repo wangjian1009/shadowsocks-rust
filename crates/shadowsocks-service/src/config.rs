@@ -165,7 +165,12 @@ struct SSConfig {
     keep_alive: Option<u64>,
     #[cfg(feature = "rate-limit")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    connection_speed_limit: Option<BoundWidth>,
+    #[serde(rename = "rate-limit")]
+    rate_limit: Option<BoundWidth>,
+    #[cfg(feature = "sniffer-bittorrent")]
+    #[serde(rename = "reject-bittorrent")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reject_bittorrent: Option<bool>,
     #[cfg(all(unix, not(target_os = "android")))]
     #[serde(skip_serializing_if = "Option::is_none")]
     nofile: Option<u64>,
@@ -999,7 +1004,7 @@ pub struct Config {
 
     /// Speed limit
     #[cfg(feature = "rate-limit")]
-    pub speed_limit: Option<BoundWidth>,
+    pub rate_limit: Option<BoundWidth>,
 
     /// connection limit per ip
     #[cfg(feature = "server-limit")]
@@ -1013,7 +1018,7 @@ pub struct Config {
     pub mock_dns: Vec<Address>,
 
     #[cfg(feature = "sniffer-bittorrent")]
-    pub reject_bittorrent: bool,
+    pub reject_bittorrent: Option<bool>,
 
     /// `RLIMIT_NOFILE` option for *nix systems
     #[cfg(all(unix, not(target_os = "android")))]
@@ -1147,7 +1152,7 @@ impl Config {
             keep_alive: None,
 
             #[cfg(feature = "rate-limit")]
-            speed_limit: None,
+            rate_limit: None,
 
             #[cfg(feature = "server-limit")]
             limit_connection_per_ip: None,
@@ -1158,7 +1163,7 @@ impl Config {
             mock_dns: Vec::new(),
 
             #[cfg(feature = "sniffer-bittorrent")]
-            reject_bittorrent: false,
+            reject_bittorrent: None,
 
             #[cfg(all(unix, not(target_os = "android")))]
             nofile: None,
@@ -1701,8 +1706,14 @@ impl Config {
 
         // Speed limit
         #[cfg(feature = "rate-limit")]
-        if let Some(d) = config.connection_speed_limit {
-            nconfig.speed_limit = Some(d)
+        if let Some(d) = config.rate_limit {
+            nconfig.rate_limit = Some(d)
+        }
+
+        // Sniffer Bittorrent
+        #[cfg(feature = "sniffer-bittorrent")]
+        if let Some(d) = config.reject_bittorrent {
+            nconfig.reject_bittorrent = Some(d)
         }
 
         // UDP
@@ -2267,6 +2278,16 @@ impl fmt::Display for Config {
 
         if let Some(keepalive) = self.keep_alive {
             jconf.keep_alive = Some(keepalive.as_secs());
+        }
+
+        #[cfg(feature = "rate-limit")]
+        if let Some(d) = self.rate_limit.as_ref() {
+            jconf.rate_limit = Some(d.clone());
+        }
+
+        #[cfg(feature = "sniffer-bittorrent")]
+        if let Some(v) = self.reject_bittorrent {
+            jconf.reject_bittorrent = Some(v);
         }
 
         match self.dns {

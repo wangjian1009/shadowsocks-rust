@@ -61,7 +61,6 @@ impl HostDns {
         }
     }
 
-    #[allow(unused_assignments)]
     pub async fn update_servers(&self, servers: Vec<&str>) {
         log::info!("host dns update host dns: {:?}", servers);
 
