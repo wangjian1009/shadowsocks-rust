@@ -60,7 +60,7 @@ impl Sniffer for SnifferUtp {
             let length = data[0] as usize;
             data = &data[1..];
 
-            if length < data.len() {
+            if data.len() < length {
                 return Err(SnifferCheckError::NoClue);
             }
             data = &data[length..];
