@@ -254,7 +254,13 @@ pub fn main(matches: &ArgMatches<'_>) {
                 Ok(mut cfg) => {
                     // let package_name = parse_package_name(cpath);
                     for svr in cfg.server.iter_mut() {
-                        let password = crate::decrypt_password(svr.password()).unwrap();
+                        let password = match crate::decrypt_password(svr.password()) {
+                            Ok(password) => password,
+                            Err(err) => {
+                                log::error!("decrypt_password fail, input={}, err={}", svr.password(), err);
+                                panic!("decrypt_password fail, input={}, err={}", svr.password(), err);
+                            }
+                        };
                         svr.set_password(password.as_str());
                     }
                     cfg
