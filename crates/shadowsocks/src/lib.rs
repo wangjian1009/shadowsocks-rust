@@ -1,14 +1,23 @@
 //! Shadowsocks Core Library
 
 #![crate_type = "lib"]
+#![feature(trait_alias)]
+#![feature(map_try_insert)]
+#![feature(assert_matches)]
+#![feature(linked_list_cursors)]
+
+#[cfg(test)]
+#[macro_use(defer)]
+extern crate scopeguard;
+
+#[cfg(test)]
+#[macro_use]
+extern crate mockall;
 
 pub use self::{
     config::{ManagerAddr, ServerAddr, ServerConfig},
     manager::{ManagerClient, ManagerListener},
-    relay::{
-        tcprelay::{proxy_listener::ProxyListener, proxy_stream::ProxyClientStream},
-        udprelay::proxy_socket::ProxySocket,
-    },
+    relay::{tcprelay::proxy_stream::ProxyClientStream, udprelay::proxy_socket::ProxySocket},
 };
 
 pub use shadowsocks_crypto as crypto;
@@ -22,3 +31,13 @@ pub mod plugin;
 pub mod relay;
 mod security;
 pub mod timeout;
+pub mod transport;
+
+#[cfg(feature = "trojan")]
+pub mod trojan;
+
+#[cfg(feature = "vless")]
+pub mod vless;
+
+#[cfg(test)]
+mod test;

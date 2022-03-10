@@ -5,7 +5,7 @@ use log::info;
 use tokio::{net::UdpSocket, sync::Barrier};
 
 use shadowsocks::{
-    config::{ServerConfig, ServerType},
+    config::{ServerConfig, ServerProtocol, ServerType, ShadowsocksConfig},
     context::{Context, SharedContext},
     crypto::v1::CipherKind,
     relay::{socks5::Address, udprelay::ProxySocket},
@@ -37,12 +37,13 @@ async fn handle_udp_server_client(
 async fn handle_udp_local_client(
     context: SharedContext,
     svr_cfg: &ServerConfig,
+    svr_ss_cfg: &ShadowsocksConfig,
     peer_addr: SocketAddr,
     remote_addr: Address,
     payload: &[u8],
     socket: &UdpSocket,
 ) -> io::Result<()> {
-    let server_socket = ProxySocket::connect(context, svr_cfg).await?;
+    let server_socket = ProxySocket::connect(context, svr_cfg, svr_ss_cfg).await?;
     server_socket.send(&remote_addr, payload).await?;
 
     let mut recv_buf = [0u8; 65536];
@@ -59,7 +60,10 @@ async fn udp_tunnel_echo(
     password: &str,
     method: CipherKind,
 ) -> io::Result<()> {
-    let svr_cfg_server = ServerConfig::new(server_addr, password, method);
+    let svr_cfg_server = ServerConfig::new(
+        server_addr,
+        ServerProtocol::SS(ShadowsocksConfig::new(password, method)),
+    );
     let svr_cfg_local = svr_cfg_server.clone();
 
     let ctx_server = Context::new_shared(ServerType::Server);
@@ -86,7 +90,17 @@ async fn udp_tunnel_echo(
         let svr_cfg_server = Arc::new(svr_cfg_server);
         let context = ctx_server;
 
-        let socket = ProxySocket::bind(context.clone(), &svr_cfg_server).await.unwrap();
+        let socket = ProxySocket::bind(
+            context.clone(),
+            &svr_cfg_server,
+            if let ServerProtocol::SS(c) = svr_cfg_server.protocol() {
+                c
+            } else {
+                unreachable!()
+            },
+        )
+        .await
+        .unwrap();
         barrier_server.wait().await;
 
         let mut recv_buf = vec![0u8; 65536];
@@ -99,6 +113,12 @@ async fn udp_tunnel_echo(
     tokio::spawn(async move {
         let svr_cfg_local = Arc::new(svr_cfg_local);
 
+        let svr_ss_cfg = if let ServerProtocol::SS(c) = svr_cfg_local.protocol() {
+            c
+        } else {
+            panic!()
+        };
+
         let socket = UdpSocket::bind(local_addr).await.unwrap();
         barrier_local.wait().await;
 
@@ -110,6 +130,7 @@ async fn udp_tunnel_echo(
             let _ = handle_udp_local_client(
                 context.clone(),
                 &svr_cfg_local,
+                svr_ss_cfg,
                 peer_addr,
                 target_addr.into(),
                 &buffer[..n],

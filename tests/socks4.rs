@@ -16,7 +16,7 @@ use shadowsocks_service::{
     run_local,
     run_server,
     shadowsocks::{
-        config::{ServerAddr, ServerConfig},
+        config::{ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::v1::CipherKind,
     },
 };
@@ -28,7 +28,7 @@ pub struct Socks4TestServer {
 }
 
 impl Socks4TestServer {
-    pub fn new<S, L>(svr_addr: S, local_addr: L, pwd: &str, method: CipherKind) -> Socks4TestServer
+    pub fn new<S, L>(svr_addr: S, local_addr: L, p: ServerProtocol) -> Socks4TestServer
     where
         S: ToSocketAddrs,
         L: ToSocketAddrs,
@@ -36,11 +36,12 @@ impl Socks4TestServer {
         let svr_addr = svr_addr.to_socket_addrs().unwrap().next().unwrap();
         let local_addr = local_addr.to_socket_addrs().unwrap().next().unwrap();
 
+        let p2 = p.clone();
         Socks4TestServer {
             local_addr,
             svr_config: {
                 let mut cfg = Config::new(ConfigType::Server);
-                cfg.server = vec![ServerConfig::new(svr_addr, pwd.to_owned(), method)];
+                cfg.server = vec![ServerConfig::new(svr_addr, p2)];
                 cfg
             },
             cli_config: {
@@ -49,7 +50,7 @@ impl Socks4TestServer {
                     ServerAddr::from(local_addr),
                     ProtocolType::Socks,
                 )];
-                cfg.server = vec![ServerConfig::new(svr_addr, pwd.to_owned(), method)];
+                cfg.server = vec![ServerConfig::new(svr_addr, p)];
                 cfg
             },
         }
@@ -80,7 +81,11 @@ async fn socks4_relay_connect() {
     const PASSWORD: &str = "test-password";
     const METHOD: CipherKind = CipherKind::AES_128_GCM;
 
-    let svr = Socks4TestServer::new(SERVER_ADDR, LOCAL_ADDR, PASSWORD, METHOD);
+    let svr = Socks4TestServer::new(
+        SERVER_ADDR,
+        LOCAL_ADDR,
+        ServerProtocol::SS(ShadowsocksConfig::new(PASSWORD, METHOD)),
+    );
     svr.run().await;
 
     static HTTP_REQUEST: &[u8] = b"GET / HTTP/1.0\r\nHost: www.example.com\r\nAccept: */*\r\n\r\n";

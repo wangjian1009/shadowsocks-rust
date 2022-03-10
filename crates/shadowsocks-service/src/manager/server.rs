@@ -6,7 +6,7 @@ use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 
 use log::{error, info, trace};
 use shadowsocks::{
-    config::{Mode, ServerConfig, ServerType},
+    config::{Mode, ServerConfig, ServerProtocol, ServerType, ShadowsocksConfig},
     context::{Context, SharedContext},
     crypto::v1::CipherKind,
     dns_resolver::DnsResolver,
@@ -414,7 +414,10 @@ impl Manager {
             None => self.svr_cfg.method.unwrap_or(CipherKind::CHACHA20_POLY1305),
         };
 
-        let mut svr_cfg = ServerConfig::new(addr, req.password.clone(), method);
+        let mut svr_cfg = ServerConfig::new(
+            addr,
+            ServerProtocol::SS(ShadowsocksConfig::new(req.password.clone(), method)),
+        );
 
         if let Some(ref plugin) = req.plugin {
             let p = PluginConfig {
@@ -466,10 +469,15 @@ impl Manager {
 
         for (_, server) in instances.iter() {
             let svr_cfg = &server.svr_cfg;
+            let ss_cfg = if let ServerProtocol::SS(cfg) = svr_cfg.protocol() {
+                cfg
+            } else {
+                unreachable!()
+            };
 
             let sc = protocol::ServerConfig {
                 server_port: svr_cfg.addr().port(),
-                password: svr_cfg.password().to_owned(),
+                password: ss_cfg.password().to_owned(),
                 method: None,
                 no_delay: None,
                 plugin: None,

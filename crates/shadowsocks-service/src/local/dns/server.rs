@@ -53,7 +53,7 @@ pub struct Dns {
 impl Dns {
     /// Create a new DNS Relay server
     pub fn new(local_addr: NameServerAddr, remote_addr: Address) -> Dns {
-        let context = ServiceContext::new();
+        let context = ServiceContext::default();
         Dns::with_context(Arc::new(context), local_addr, remote_addr)
     }
 

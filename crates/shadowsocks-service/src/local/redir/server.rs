@@ -22,16 +22,10 @@ pub struct Redir {
     udp_redir: RedirType,
 }
 
-impl Default for Redir {
-    fn default() -> Self {
-        Redir::new()
-    }
-}
-
 impl Redir {
     /// Create a new transparent proxy server with default configuration
     pub fn new() -> Redir {
-        let context = ServiceContext::new();
+        let context = ServiceContext::default();
         Redir::with_context(Arc::new(context))
     }
 

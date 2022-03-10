@@ -1,8 +1,14 @@
 //! UDP socket with flow statistic monitored
 
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{io, net::SocketAddr, ops::Deref, sync::Arc};
 
-use shadowsocks::{relay::socks5::Address, ProxySocket};
+use async_trait::async_trait;
+use shadowsocks::{
+    relay::socks5::Address,
+    transport::{PacketMutWrite, PacketRead, PacketWrite},
+    ProxySocket,
+    ServerAddr,
+};
 use tokio::net::ToSocketAddrs;
 
 use super::flow::FlowStat;
@@ -66,5 +72,77 @@ impl MonProxySocket {
     #[inline]
     pub fn get_ref(&self) -> &ProxySocket {
         &self.socket
+    }
+}
+
+pub struct MonProxyWriter {
+    bind_addr: Option<SocketAddr>,
+    inner: Arc<MonProxySocket>,
+}
+
+impl MonProxyWriter {
+    pub fn with_peer_addr(bind_addr: SocketAddr, inner: Arc<MonProxySocket>) -> Self {
+        Self {
+            bind_addr: Some(bind_addr),
+            inner,
+        }
+    }
+
+    pub fn new(inner: Arc<MonProxySocket>) -> Self {
+        Self { bind_addr: None, inner }
+    }
+}
+
+impl Deref for MonProxyWriter {
+    type Target = MonProxySocket;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+#[async_trait]
+impl PacketMutWrite for MonProxyWriter {
+    async fn write_to_mut(&mut self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
+        match self.bind_addr.as_ref() {
+            Some(bind_addr) => self.inner.send_to(bind_addr, &Address::from(addr.clone()), buf).await,
+            None => self.inner.send(&Address::from(addr.clone()), buf).await,
+        }
+    }
+}
+
+#[async_trait]
+impl PacketWrite for MonProxyWriter {
+    async fn write_to(&self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
+        match self.bind_addr.as_ref() {
+            Some(bind_addr) => self.inner.send_to(bind_addr, &Address::from(addr.clone()), buf).await,
+            None => self.inner.send(&Address::from(addr.clone()), buf).await,
+        }
+    }
+}
+
+pub struct MonProxyReader {
+    inner: Arc<MonProxySocket>,
+}
+
+impl MonProxyReader {
+    pub fn new(inner: Arc<MonProxySocket>) -> Self {
+        Self { inner }
+    }
+}
+
+impl Deref for MonProxyReader {
+    type Target = MonProxySocket;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+#[async_trait]
+impl PacketRead for MonProxyReader {
+    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
+        let (sz, addr) = self.inner.recv(buf).await?;
+        Ok((sz, addr.into()))
     }
 }

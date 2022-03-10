@@ -30,6 +30,10 @@ pub enum TcpStream {
 }
 
 impl TcpStream {
+    pub fn new(stream: TokioTcpStream) -> TcpStream {
+        TcpStream::Standard(stream)
+    }
+
     pub async fn connect(addr: SocketAddr, opts: &ConnectOpts) -> io::Result<TcpStream> {
         let socket = match addr {
             SocketAddr::V4(..) => TcpSocket::new_v4()?,

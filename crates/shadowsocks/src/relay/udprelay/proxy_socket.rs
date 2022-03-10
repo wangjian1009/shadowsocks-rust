@@ -11,7 +11,7 @@ use tokio::{
 };
 
 use crate::{
-    config::{ServerAddr, ServerConfig},
+    config::{ServerAddr, ServerConfig, ShadowsocksConfig},
     context::SharedContext,
     crypto::v1::CipherKind,
     net::{AcceptOpts, ConnectOpts, UdpSocket as ShadowUdpSocket},
@@ -34,14 +34,19 @@ pub struct ProxySocket {
 
 impl ProxySocket {
     /// Create a client to communicate with Shadowsocks' UDP server (outbound)
-    pub async fn connect(context: SharedContext, svr_cfg: &ServerConfig) -> io::Result<ProxySocket> {
-        ProxySocket::connect_with_opts(context, svr_cfg, &DEFAULT_CONNECT_OPTS).await
+    pub async fn connect(
+        context: SharedContext,
+        svr_cfg: &ServerConfig,
+        svr_ss_cfg: &ShadowsocksConfig,
+    ) -> io::Result<ProxySocket> {
+        ProxySocket::connect_with_opts(context, svr_cfg, svr_ss_cfg, &DEFAULT_CONNECT_OPTS).await
     }
 
     /// Create a client to communicate with Shadowsocks' UDP server (outbound)
     pub async fn connect_with_opts(
         context: SharedContext,
         svr_cfg: &ServerConfig,
+        svr_ss_cfg: &ShadowsocksConfig,
         opts: &ConnectOpts,
     ) -> io::Result<ProxySocket> {
         // Note: Plugins doesn't support UDP relay
@@ -50,11 +55,11 @@ impl ProxySocket {
 
         trace!("connected udp remote {} with {:?}", svr_cfg.addr(), opts);
 
-        Ok(ProxySocket::from_socket(context, svr_cfg, socket.into()))
+        Ok(ProxySocket::from_socket(context, svr_ss_cfg, socket.into()))
     }
 
     /// Create a `ProxySocket` from a `UdpSocket`
-    pub fn from_socket(context: SharedContext, svr_cfg: &ServerConfig, socket: UdpSocket) -> ProxySocket {
+    pub fn from_socket(context: SharedContext, svr_cfg: &ShadowsocksConfig, socket: UdpSocket) -> ProxySocket {
         let key = svr_cfg.key().to_vec().into_boxed_slice();
         let method = svr_cfg.method();
 
@@ -71,14 +76,19 @@ impl ProxySocket {
     }
 
     /// Create a `ProxySocket` binding to a specific address (inbound)
-    pub async fn bind(context: SharedContext, svr_cfg: &ServerConfig) -> io::Result<ProxySocket> {
-        ProxySocket::bind_with_opts(context, svr_cfg, AcceptOpts::default()).await
+    pub async fn bind(
+        context: SharedContext,
+        svr_cfg: &ServerConfig,
+        svr_ss_cfg: &ShadowsocksConfig,
+    ) -> io::Result<ProxySocket> {
+        ProxySocket::bind_with_opts(context, svr_cfg, svr_ss_cfg, AcceptOpts::default()).await
     }
 
     /// Create a `ProxySocket` binding to a specific address (inbound)
     pub async fn bind_with_opts(
         context: SharedContext,
         svr_cfg: &ServerConfig,
+        svr_ss_cfg: &ShadowsocksConfig,
         opts: AcceptOpts,
     ) -> io::Result<ProxySocket> {
         // Plugins doesn't support UDP
@@ -91,7 +101,7 @@ impl ProxySocket {
                 .1
             }
         };
-        Ok(ProxySocket::from_socket(context, svr_cfg, socket.into()))
+        Ok(ProxySocket::from_socket(context, svr_ss_cfg, socket.into()))
     }
 
     /// Send a UDP packet to addr through proxy

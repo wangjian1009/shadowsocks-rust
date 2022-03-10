@@ -8,22 +8,23 @@ use std::{
 
 use hyper::client::connect::{Connected, Connection};
 use pin_project::pin_project;
+use shadowsocks::transport::StreamConnection;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::local::net::AutoProxyClientStream;
+type BaseStream = Box<dyn StreamConnection>;
 
 #[allow(clippy::large_enum_variant)]
 #[pin_project(project = ProxyHttpStreamProj)]
 pub enum ProxyHttpStream {
-    Http(#[pin] AutoProxyClientStream),
+    Http(#[pin] BaseStream),
     #[cfg(feature = "local-http-native-tls")]
-    Https(#[pin] tokio_native_tls::TlsStream<AutoProxyClientStream>, bool),
+    Https(#[pin] tokio_native_tls::TlsStream<BaseStream>, bool),
     #[cfg(feature = "local-http-rustls")]
-    Https(#[pin] tokio_rustls::client::TlsStream<AutoProxyClientStream>, bool),
+    Https(#[pin] tokio_rustls::client::TlsStream<BaseStream>, bool),
 }
 
 impl ProxyHttpStream {
-    pub fn connect_http(stream: AutoProxyClientStream) -> ProxyHttpStream {
+    pub fn connect_http(stream: BaseStream) -> ProxyHttpStream {
         ProxyHttpStream::Http(stream)
     }
 
@@ -132,7 +133,7 @@ impl ProxyHttpStream {
     }
 
     #[cfg(not(any(feature = "local-http-native-tls", feature = "local-http-rustls")))]
-    pub async fn connect_https(_stream: AutoProxyClientStream, _domain: &str) -> io::Result<ProxyHttpStream> {
+    pub async fn connect_https(_stream: BaseStream, _domain: &str) -> io::Result<ProxyHttpStream> {
         let err = io::Error::new(
             ErrorKind::Other,
             "https is not supported, consider enable it by feature \"local-http-native-tls\" or \"local-http-rustls\"",

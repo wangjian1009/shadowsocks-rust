@@ -7,12 +7,15 @@ use io::ErrorKind;
 use log::{debug, error, info, trace, warn};
 use lru_time_cache::LruCache;
 use shadowsocks::{
+    config::ShadowsocksConfig,
     lookup_then,
     net::{AcceptOpts, UdpSocket as OutboundUdpSocket},
     relay::{
         socks5::Address,
         udprelay::{ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
     },
+    transport::PacketWrite,
+    ServerAddr,
     ServerConfig,
 };
 use spin::Mutex as SpinMutex;
@@ -22,7 +25,7 @@ use tokio::{
     time,
 };
 
-use crate::net::MonProxySocket;
+use crate::net::{MonProxySocket, MonProxyWriter};
 
 use super::context::ServiceContext;
 
@@ -101,20 +104,23 @@ impl UdpServer {
         }
     }
 
-    pub async fn run(mut self, svr_cfg: &ServerConfig) -> io::Result<()> {
-        let socket = ProxySocket::bind_with_opts(self.context.context(), svr_cfg, self.accept_opts.clone()).await?;
+    pub async fn run(mut self, svr_cfg: &ServerConfig, ss_cfg: &ShadowsocksConfig) -> io::Result<()> {
+        let socket =
+            ProxySocket::bind_with_opts(self.context.context(), svr_cfg, ss_cfg, self.accept_opts.clone()).await?;
 
         info!(
-            "shadowsocks udp server listening on {}",
+            "{} udp server listening on {}",
+            svr_cfg.protocol().name(),
             socket.local_addr().expect("listener.local_addr"),
         );
 
-        let socket = MonProxySocket::from_socket(socket, self.context.flow_stat());
-        let listener = Arc::new(socket);
+        let socket = Arc::new(MonProxySocket::from_socket(socket, self.context.flow_stat()));
+        let listener_r = socket.clone();
+        let listener_w = socket;
 
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         loop {
-            let (n, peer_addr, target_addr) = match listener.recv_from(&mut buffer).await {
+            let (n, peer_addr, target_addr) = match listener_r.recv_from(&mut buffer).await {
                 Ok(s) => s,
                 Err(err) => {
                     error!("udp server recv_from failed with error: {}", err);
@@ -127,12 +133,12 @@ impl UdpServer {
                 Some(protocol) => match protocol {
                     ServerMockProtocol::DNS => {
                         let context = self.context.clone();
-                        let inbound = listener.clone();
+                        let inbound_w = MonProxyWriter::with_peer_addr(peer_addr.clone(), listener_w.clone());
                         let process_dns = async move {
                             let output_buf =
                                 process_dns_udp_request(context.dns_resolver(), &peer_addr, &target_addr, &buffer[..n])
                                     .await?;
-                            inbound.send_to(peer_addr, &target_addr, &output_buf[..]).await
+                            inbound_w.write_to(&output_buf[..], &target_addr.into()).await
                         };
                         tokio::spawn(process_dns);
                         continue;
@@ -147,7 +153,15 @@ impl UdpServer {
             }
 
             let data = &buffer[..n];
-            if let Err(err) = self.send_packet(&listener, peer_addr, target_addr, data).await {
+            if let Err(err) = self
+                .send_packet(
+                    MonProxyWriter::with_peer_addr(peer_addr.clone(), listener_w.clone()),
+                    peer_addr,
+                    target_addr,
+                    data,
+                )
+                .await
+            {
                 error!(
                     "udp packet relay {} with {} bytes failed, error: {}",
                     peer_addr,
@@ -160,7 +174,7 @@ impl UdpServer {
 
     async fn send_packet(
         &mut self,
-        listener: &Arc<MonProxySocket>,
+        listener_w: impl PacketWrite + 'static,
         peer_addr: SocketAddr,
         target_addr: Address,
         data: &[u8],
@@ -171,12 +185,7 @@ impl UdpServer {
             return assoc.try_send((target_addr, Bytes::copy_from_slice(data)));
         }
 
-        let assoc = UdpAssociation::new(
-            self.context.clone(),
-            listener.clone(),
-            peer_addr,
-            self.keepalive_tx.clone(),
-        );
+        let assoc = UdpAssociation::new(self.context.clone(), listener_w, peer_addr, self.keepalive_tx.clone());
 
         trace!("created udp association for {}", peer_addr);
 
@@ -187,7 +196,7 @@ impl UdpServer {
     }
 }
 
-struct UdpAssociation {
+pub struct UdpAssociation {
     assoc: Arc<UdpAssociationContext>,
     sender: mpsc::Sender<(Address, Bytes)>,
 }
@@ -202,11 +211,11 @@ impl Drop for UdpAssociation {
 impl UdpAssociation {
     fn new(
         context: Arc<ServiceContext>,
-        inbound: Arc<MonProxySocket>,
+        inbound: impl PacketWrite + 'static,
         peer_addr: SocketAddr,
         keepalive_tx: mpsc::Sender<SocketAddr>,
     ) -> UdpAssociation {
-        let (assoc, sender) = UdpAssociationContext::new(context, inbound, peer_addr, keepalive_tx);
+        let (assoc, sender) = UdpAssociationContext::new(context, Box::new(inbound), peer_addr, Some(keepalive_tx));
         UdpAssociation { assoc, sender }
     }
 
@@ -256,13 +265,13 @@ impl UdpAssociationState {
     }
 }
 
-struct UdpAssociationContext {
+pub struct UdpAssociationContext {
     context: Arc<ServiceContext>,
-    inbound: Arc<MonProxySocket>,
+    inbound: Box<dyn PacketWrite>,
     peer_addr: SocketAddr,
     outbound_ipv4_socket: SpinMutex<UdpAssociationState>,
     outbound_ipv6_socket: SpinMutex<UdpAssociationState>,
-    keepalive_tx: mpsc::Sender<SocketAddr>,
+    keepalive_tx: Option<mpsc::Sender<SocketAddr>>,
 }
 
 impl Drop for UdpAssociationContext {
@@ -272,11 +281,11 @@ impl Drop for UdpAssociationContext {
 }
 
 impl UdpAssociationContext {
-    fn new(
+    pub fn new(
         context: Arc<ServiceContext>,
-        inbound: Arc<MonProxySocket>,
+        inbound: Box<impl PacketWrite + 'static>,
         peer_addr: SocketAddr,
-        keepalive_tx: mpsc::Sender<SocketAddr>,
+        keepalive_tx: Option<mpsc::Sender<SocketAddr>>,
     ) -> (Arc<UdpAssociationContext>, mpsc::Sender<(Address, Bytes)>) {
         // Pending packets 1024 should be good enough for a server.
         // If there are plenty of packets stuck in the channel, dropping excessive packets is a good way to protect the server from
@@ -453,11 +462,10 @@ impl UdpAssociationContext {
         loop {
             let (n, addr) = match outbound.recv_from(&mut buffer).await {
                 Ok(r) => {
-                    // Keep association alive in map
-                    let _ = self
-                        .keepalive_tx
-                        .send_timeout(self.peer_addr, Duration::from_secs(1))
-                        .await;
+                    if let Some(keepalive_tx) = &self.keepalive_tx {
+                        // Keep association alive in map
+                        let _ = keepalive_tx.send_timeout(self.peer_addr, Duration::from_secs(1)).await;
+                    }
                     r
                 }
                 Err(err) => {
@@ -474,10 +482,10 @@ impl UdpAssociationContext {
 
             let data = &buffer[..n];
 
-            let target_addr = Address::from(addr);
+            let target_addr = ServerAddr::from(addr);
 
             // Send back to client
-            if let Err(err) = self.inbound.send_to(self.peer_addr, &target_addr, data).await {
+            if let Err(err) = self.inbound.write_to(data, &target_addr).await {
                 warn!(
                     "udp failed to send back to client {}, from target {} ({}), error: {}",
                     self.peer_addr, target_addr, addr, err

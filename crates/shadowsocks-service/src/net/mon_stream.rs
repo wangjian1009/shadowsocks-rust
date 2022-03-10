@@ -14,7 +14,7 @@ use tokio::{
 };
 
 use super::flow::FlowStat;
-use shadowsocks::timeout::Sleep;
+use shadowsocks::{net::Destination, timeout::Sleep, transport::StreamConnection};
 
 /// Monitored `ProxyStream`
 #[pin_project]
@@ -23,6 +23,24 @@ pub struct MonProxyStream<S> {
     stream: S,
     flow_stat: Arc<FlowStat>,
     idle_timeout: Option<Arc<Mutex<Sleep>>>,
+}
+
+impl<S: StreamConnection> StreamConnection for MonProxyStream<S> {
+    #[inline]
+    fn local_addr(&self) -> io::Result<Destination> {
+        self.stream.local_addr()
+    }
+
+    #[inline]
+    fn check_connected(&self) -> bool {
+        self.stream.check_connected()
+    }
+
+    #[cfg(feature = "rate-limit")]
+    #[inline]
+    fn set_rate_limit(&mut self, limiter: Option<std::sync::Arc<shadowsocks::transport::RateLimiter>>) {
+        self.stream.set_rate_limit(limiter);
+    }
 }
 
 impl<S> MonProxyStream<S> {
@@ -124,5 +142,17 @@ where
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
         self.project().stream.poll_write_vectored(cx, bufs)
+    }
+}
+
+use cfg_if::cfg_if;
+cfg_if! {
+    if #[cfg(unix)] {
+        use std::os::unix::io::{AsRawFd, RawFd};
+        impl<S: AsRawFd> AsRawFd for MonProxyStream<S> {
+            fn as_raw_fd(&self) -> RawFd {
+                self.stream.as_raw_fd()
+            }
+        }
     }
 }

@@ -1,6 +1,6 @@
 //! Shadowsocks Local Server Context
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 #[cfg(feature = "local-dns")]
 use std::{net::IpAddr, time::Duration};
 
@@ -17,7 +17,10 @@ use shadowsocks::{
 use tokio::sync::Mutex;
 
 #[cfg(feature = "rate-limit")]
-use crate::net::RateLimiter;
+use shadowsocks::transport::RateLimiter;
+
+#[cfg(feature = "transport")]
+use shadowsocks::config::TransportConnectorConfig;
 
 use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
 
@@ -25,6 +28,7 @@ use cfg_if::cfg_if;
 
 cfg_if! {
     if #[cfg(feature = "sniffer")] {
+        use std::collections::HashMap;
         use crate::sniffer::SnifferProtocol;
 
         #[derive(Debug, Clone)]
@@ -55,19 +59,22 @@ pub struct ServiceContext {
 
     #[cfg(feature = "sniffer")]
     protocol_action: HashMap<SnifferProtocol, ProtocolAction>,
+
+    #[cfg(feature = "transport")]
+    transport: Option<TransportConnectorConfig>,
 }
 
 impl Default for ServiceContext {
     fn default() -> Self {
-        ServiceContext::new()
+        ServiceContext::new(Context::new_shared(ServerType::Local))
     }
 }
 
 impl ServiceContext {
     /// Create a new `ServiceContext`
-    pub fn new() -> ServiceContext {
+    pub fn new(context: Arc<Context>) -> ServiceContext {
         ServiceContext {
-            context: Context::new_shared(ServerType::Local),
+            context,
             connect_opts: ConnectOpts::default(),
             accept_opts: AcceptOpts::default(),
             acl: None,
@@ -81,6 +88,8 @@ impl ServiceContext {
             rate_limiter: None,
             #[cfg(feature = "sniffer")]
             protocol_action: HashMap::new(),
+            #[cfg(feature = "transport")]
+            transport: None,
         }
     }
 
@@ -239,5 +248,17 @@ impl ServiceContext {
             },
             None => None,
         }
+    }
+
+    /// set transport
+    #[cfg(feature = "transport")]
+    pub fn set_transport(&mut self, transport: Option<TransportConnectorConfig>) {
+        self.transport = transport;
+    }
+
+    /// transport
+    #[cfg(feature = "transport")]
+    pub fn transport(&self) -> Option<&TransportConnectorConfig> {
+        self.transport.as_ref()
     }
 }

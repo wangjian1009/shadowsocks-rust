@@ -48,6 +48,7 @@
 //!
 //! Of course, you can also use `cargo install` to install binaries.
 
+#![feature(trait_alias)]
 #![feature(duration_constants)]
 use std::time::Duration;
 
@@ -58,7 +59,8 @@ pub use self::local::{create as create_local, run as run_local};
 pub use self::manager::run as run_manager;
 #[cfg(feature = "server")]
 pub use self::server::run as run_server;
-pub use shadowsocks;
+
+pub use shadowsocks::{self, create_connector_then};
 
 pub mod acl;
 pub mod config;

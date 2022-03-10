@@ -171,7 +171,7 @@ impl DnsClientCache {
     {
         // Check if there already is a cached client
         if let Some(q) = self.cache.lock().await.get_mut(key) {
-            while let Some(mut c) = q.pop_front() {
+            while let Some(c) = q.pop_front() {
                 trace!("take cached DNS client for {:?}", key);
                 if !c.check_connected().await {
                     debug!("cached DNS client for {:?} is lost", key);

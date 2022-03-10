@@ -17,11 +17,11 @@ use byte_string::ByteStr;
 use futures::future;
 use log::{debug, error, info, trace, warn};
 use shadowsocks::{
-    config::Mode,
+    config::{Mode, ServerProtocol, ShadowsocksConfig},
+    create_connector_then,
     plugin::{Plugin, PluginMode},
     relay::{
         socks5::Address,
-        tcprelay::proxy_stream::ProxyClientStream,
         udprelay::{proxy_socket::ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
     },
     ServerConfig,
@@ -33,7 +33,10 @@ use tokio::{
     time,
 };
 
-use crate::local::context::ServiceContext;
+use crate::{
+    connect_server_then,
+    local::{context::ServiceContext, net::AutoProxyClientStream},
+};
 
 use super::{
     server_data::ServerIdent,
@@ -602,37 +605,34 @@ impl PingChecker {
 
         let addr = Address::DomainNameAddress("clients3.google.com".to_owned(), 80);
 
-        let mut stream = ProxyClientStream::connect_with_opts(
-            self.context.context(),
-            self.server.server_config(),
-            &addr,
-            self.context.connect_opts_ref(),
-        )
-        .await?;
-        stream.write_all(GET_BODY).await?;
+        connect_server_then!(self.context, &self.server, addr, |stream| {
+            let mut stream = stream?;
 
-        let mut reader = BufReader::new(stream);
+            stream.write_all(GET_BODY).await?;
 
-        let mut buf = Vec::new();
-        reader.read_until(b'\n', &mut buf).await?;
+            let mut reader = BufReader::new(stream);
 
-        static EXPECTED_HTTP_STATUS_LINE: &[u8] = b"HTTP/1.1 204 No Content\r\n";
-        if buf != EXPECTED_HTTP_STATUS_LINE {
-            use std::io::{Error, ErrorKind};
+            let mut buf = Vec::new();
+            reader.read_until(b'\n', &mut buf).await?;
 
-            debug!(
-                "unexpected response from http://clients3.google.com/generate_204, {:?}",
-                ByteStr::new(&buf)
-            );
+            static EXPECTED_HTTP_STATUS_LINE: &[u8] = b"HTTP/1.1 204 No Content\r\n";
+            if buf != EXPECTED_HTTP_STATUS_LINE {
+                use std::io::{Error, ErrorKind};
 
-            let err = Error::new(
-                ErrorKind::InvalidData,
-                "unexpected response from http://clients3.google.com/generate_204",
-            );
-            return Err(err);
-        }
+                debug!(
+                    "unexpected response from http://clients3.google.com/generate_204, {:?}",
+                    ByteStr::new(&buf)
+                );
 
-        Ok(())
+                let err = Error::new(
+                    ErrorKind::InvalidData,
+                    "unexpected response from http://clients3.google.com/generate_204",
+                );
+                return Err(err);
+            }
+
+            Ok(())
+        })
     }
 
     /// Detect TCP connectivity with Firefox's http://detectportal.firefox.com/success.txt
@@ -642,40 +642,37 @@ impl PingChecker {
 
         let addr = Address::DomainNameAddress("detectportal.firefox.com".to_owned(), 80);
 
-        let mut stream = ProxyClientStream::connect_with_opts(
-            self.context.context(),
-            self.server.server_config(),
-            &addr,
-            self.context.connect_opts_ref(),
-        )
-        .await?;
-        stream.write_all(GET_BODY).await?;
+        connect_server_then!(self.context, &self.server, addr, |stream| {
+            let mut stream = stream?;
 
-        let mut reader = BufReader::new(stream);
+            stream.write_all(GET_BODY).await?;
 
-        let mut buf = Vec::new();
-        reader.read_until(b'\n', &mut buf).await?;
+            let mut reader = BufReader::new(stream);
 
-        static EXPECTED_HTTP_STATUS_LINE: &[u8] = b"HTTP/1.1 200 OK\r\n";
-        if buf != EXPECTED_HTTP_STATUS_LINE {
-            use std::io::{Error, ErrorKind};
+            let mut buf = Vec::new();
+            reader.read_until(b'\n', &mut buf).await?;
 
-            debug!(
-                "unexpected response from http://detectportal.firefox.com/success.txt, {:?}",
-                ByteStr::new(&buf)
-            );
+            static EXPECTED_HTTP_STATUS_LINE: &[u8] = b"HTTP/1.1 200 OK\r\n";
+            if buf != EXPECTED_HTTP_STATUS_LINE {
+                use std::io::{Error, ErrorKind};
 
-            let err = Error::new(
-                ErrorKind::InvalidData,
-                "unexpected response from http://detectportal.firefox.com/success.txt",
-            );
-            return Err(err);
-        }
+                debug!(
+                    "unexpected response from http://detectportal.firefox.com/success.txt, {:?}",
+                    ByteStr::new(&buf)
+                );
 
-        Ok(())
+                let err = Error::new(
+                    ErrorKind::InvalidData,
+                    "unexpected response from http://detectportal.firefox.com/success.txt",
+                );
+                return Err(err);
+            }
+
+            Ok(())
+        })
     }
 
-    async fn check_request_udp(&self) -> io::Result<()> {
+    async fn check_request_udp(&self, ss_cfg: &ShadowsocksConfig) -> io::Result<()> {
         // TransactionID: 0x1234
         // Flags: 0x0100 RD
         // Questions: 0x0001
@@ -694,6 +691,7 @@ impl PingChecker {
         let client = ProxySocket::connect_with_opts(
             self.context.context(),
             self.server.server_config(),
+            &ss_cfg,
             self.context.connect_opts_ref(),
         )
         .await?;
@@ -720,7 +718,13 @@ impl PingChecker {
     async fn check_request(&self) -> io::Result<()> {
         match self.server_type {
             ServerType::Tcp => self.check_request_tcp_firefox().await,
-            ServerType::Udp => self.check_request_udp().await,
+            ServerType::Udp => match self.server.server_config().protocol() {
+                ServerProtocol::SS(cfg) => self.check_request_udp(cfg).await,
+                #[cfg(feature = "trojan")]
+                ServerProtocol::Trojan(_cfg) => Ok(()),
+                #[cfg(feature = "vless")]
+                ServerProtocol::Vless(_cfg) => Ok(()),
+            },
         }
     }
 

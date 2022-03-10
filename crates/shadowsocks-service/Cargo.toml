@@ -18,7 +18,10 @@ default = [
     "local",
     "server",
     "manager",
+    "stream-cipher",
+    "local-flow-stat",
     "trust-dns",
+    "local-dns",
     "local-http",
     "local-redir",
     "local-tunnel",
@@ -30,6 +33,10 @@ default = [
     "sniffer-bittorrent",
     "sniffer-http",
     "sniffer-tls",
+    "transport-ws",
+    "transport-tls",
+    "trojan",
+    "vless",
 ]
 
 full = [
@@ -38,6 +45,7 @@ full = [
     "manager",
     "trust-dns",
     "local-http",
+    "local-dns",
     "local-redir",
     "local-tunnel",
     "local-socks4",
@@ -48,6 +56,11 @@ full = [
     "sniffer-bittorrent",
     "sniffer-http",
     "sniffer-tls",
+    "transport-ws",
+    "transport-tls",
+    "transport-mkcp",
+    "trojan",
+    "vless",
 ]
 
 # Enable local server
@@ -62,13 +75,21 @@ server-mock = ["trust-dns-resolver"]
 manager = ["server"]
 
 # Enable Rate limit
-rate-limit = ["governor", "nonzero_ext", "futures-timer", "quanta", "lazy_static"]
+rate-limit = ["shadowsocks/rate-limit"]
 
 # Enable Sniffer
 sniffer = []
 sniffer-bittorrent = ["sniffer"]
 sniffer-http = ["sniffer"]
 sniffer-tls = ["sniffer"]
+
+transport = []
+transport-ws = ["transport", "shadowsocks/transport-ws"]
+transport-tls = ["transport", "shadowsocks/transport-tls"]
+transport-mkcp = ["transport", "shadowsocks/transport-mkcp"]
+
+trojan = ["shadowsocks/trojan"]
+vless = ["shadowsocks/vless"]
 
 # Enables trust-dns for replacing tokio's builtin DNS resolver
 trust-dns = ["trust-dns-resolver", "shadowsocks/trust-dns"]
@@ -165,7 +186,7 @@ futures-timer = { version = "3.0.2", optional = true }
 quanta = { version = "0.4.1", optional = true }
 lazy_static = { version = "1", optional = true }
 
-shadowsocks = { version = "1.12.3", path = "../shadowsocks" }
+shadowsocks = { version = "1.12.3", path = "../shadowsocks", default-features = false }
 
 # Just for the ioctl call macro
 [target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]

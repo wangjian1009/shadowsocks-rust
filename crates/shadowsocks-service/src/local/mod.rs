@@ -15,7 +15,8 @@ use futures::{
 };
 use log::trace;
 use shadowsocks::{
-    config::Mode,
+    config::{Mode, ServerType},
+    context::Context,
     net::{AcceptOpts, ConnectOpts},
 };
 
@@ -27,7 +28,7 @@ use crate::{
 };
 
 #[cfg(feature = "rate-limit")]
-use crate::net::RateLimiter;
+use shadowsocks::transport::RateLimiter;
 
 use self::{
     context::ServiceContext,
@@ -83,7 +84,7 @@ impl Server {
 }
 
 /// Starts a shadowsocks local server
-pub async fn create(config: Config) -> io::Result<Server> {
+pub async fn create(mut config: Config) -> io::Result<Server> {
     assert!(config.config_type == ConfigType::Local && !config.local.is_empty());
     assert!(!config.server.is_empty());
 
@@ -92,9 +93,17 @@ pub async fn create(config: Config) -> io::Result<Server> {
     // Warning for Stream Ciphers
     #[cfg(feature = "stream-cipher")]
     for server in config.server.iter() {
-        if server.method().is_stream() {
-            log::warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
-                    DO NOT USE. It will be removed in the future.", server.method(), server.addr());
+        match server.protocol() {
+            shadowsocks::config::ServerProtocol::SS(ss_cfg) => {
+                if ss_cfg.method().is_stream() {
+                    log::warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
+                    DO NOT USE. It will be removed in the future.", ss_cfg.method(), server.addr());
+                }
+            }
+            #[cfg(feature = "trojan")]
+            shadowsocks::config::ServerProtocol::Trojan(_cfg) => {}
+            #[cfg(feature = "vless")]
+            shadowsocks::config::ServerProtocol::Vless(_cfg) => {}
         }
     }
 
@@ -106,16 +115,17 @@ pub async fn create(config: Config) -> io::Result<Server> {
         }
     }
 
-    let mut context = ServiceContext::new();
+    let context = Context::new_shared(ServerType::Local);
+    let mut context = ServiceContext::new(context);
 
     let mut connect_opts = ConnectOpts {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         fwmark: config.outbound_fwmark,
 
         #[cfg(target_os = "android")]
-        vpn_protect_path: config.outbound_vpn_protect_path,
+        vpn_protect_path: config.outbound_vpn_protect_path.clone(),
 
-        bind_interface: config.outbound_bind_interface,
+        bind_interface: config.outbound_bind_interface.clone(),
         bind_local_addr: config.outbound_bind_addr,
 
         ..Default::default()
@@ -137,7 +147,8 @@ pub async fn create(config: Config) -> io::Result<Server> {
     accept_opts.tcp.fastopen = config.fast_open;
     accept_opts.tcp.keepalive = config.keep_alive.or(Some(LOCAL_DEFAULT_KEEPALIVE_TIMEOUT));
 
-    if let Some(resolver) = build_dns_resolver(config.dns, config.ipv6_first, context.connect_opts_ref()).await {
+    if let Some(resolver) = build_dns_resolver(config.dns.clone(), config.ipv6_first, context.connect_opts_ref()).await
+    {
         context.set_dns_resolver(Arc::new(resolver));
     }
 
@@ -145,14 +156,16 @@ pub async fn create(config: Config) -> io::Result<Server> {
         context.set_ipv6_first(config.ipv6_first);
     }
 
-    if let Some(acl) = config.acl {
+    let acl = config.acl;
+    config.acl = None;
+    if let Some(acl) = acl {
         context.set_acl(acl);
     }
 
     context.set_security_config(&config.security);
 
     #[cfg(feature = "rate-limit")]
-    if let Some(bound_width) = config.rate_limit {
+    if let Some(bound_width) = config.rate_limit.as_ref() {
         log::info!("bound-width={}", bound_width);
         let quota = bound_width.to_quota_byte_per_second().unwrap();
         let rate_limiter = RateLimiter::new(quota);
@@ -320,7 +333,7 @@ pub async fn create(config: Config) -> io::Result<Server> {
 
                 use self::tun::TunBuilder;
 
-                let mut builder = TunBuilder::new(context.clone(), balancer);
+                let mut builder = TunBuilder::new(context.clone(), connector.clone(), balancer);
                 if let Some(address) = local_config.tun_interface_address {
                     builder = builder.address(address);
                 }

@@ -46,9 +46,17 @@ pub async fn run(config: Config) -> io::Result<()> {
     // Warning for Stream Ciphers
     #[cfg(feature = "stream-cipher")]
     for server in config.server.iter() {
-        if server.method().is_stream() {
-            log::warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
-                    DO NOT USE. It will be removed in the future.", server.method(), server.addr());
+        match server.protocol() {
+            shadowsocks::config::ServerProtocol::SS(cfg) => {
+                if cfg.method().is_stream() {
+                    log::warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
+                    DO NOT USE. It will be removed in the future.", cfg.method(), server.addr());
+                }
+            }
+            #[cfg(feature = "trojan")]
+            shadowsocks::config::ServerProtocol::Trojan(_cfg) => {}
+            #[cfg(feature = "vless")]
+            shadowsocks::config::ServerProtocol::Vless(_cfg) => {}
         }
     }
 
@@ -112,6 +120,7 @@ pub async fn run(config: Config) -> io::Result<()> {
 
         #[cfg(feature = "server-limit")]
         server.set_limit_connection_per_ip(config.limit_connection_per_ip.clone());
+
         #[cfg(feature = "server-limit")]
         server.set_limit_connection_close_delay(config.limit_connection_close_delay.clone());
 

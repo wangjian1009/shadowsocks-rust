@@ -9,7 +9,7 @@ use std::{
 
 use byte_string::ByteStr;
 use log::trace;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, ReadHalf, WriteHalf};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{
     context::Context,
@@ -218,92 +218,5 @@ where
     #[inline]
     pub fn poll_shutdown(&mut self, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.stream).poll_shutdown(cx)
-    }
-}
-
-impl<S> CryptoStream<S>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    pub fn into_split(self) -> (CryptoStreamReadHalf<S>, CryptoStreamWriteHalf<S>) {
-        let (reader, writer) = tokio::io::split(self.stream);
-
-        (
-            CryptoStreamReadHalf {
-                reader,
-                dec: self.dec,
-                method: self.method,
-            },
-            CryptoStreamWriteHalf {
-                writer,
-                enc: self.enc,
-                method: self.method,
-            },
-        )
-    }
-}
-
-pub struct CryptoStreamReadHalf<S> {
-    reader: ReadHalf<S>,
-    dec: DecryptedReader,
-    method: CipherKind,
-}
-
-impl<S> CryptoStreamReadHalf<S> {
-    /// Get encryption method
-    pub fn method(&self) -> CipherKind {
-        self.method
-    }
-}
-
-impl<S> CryptoStreamReadHalf<S>
-where
-    S: AsyncRead + Unpin,
-{
-    /// Attempt to read decrypted data from `stream`
-    #[inline]
-    pub fn poll_read_decrypted(
-        &mut self,
-        cx: &mut task::Context<'_>,
-        context: &Context,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        self.dec.poll_read_decrypted(cx, context, &mut self.reader, buf)
-    }
-}
-
-pub struct CryptoStreamWriteHalf<S> {
-    writer: WriteHalf<S>,
-    enc: EncryptedWriter,
-    method: CipherKind,
-}
-
-impl<S> CryptoStreamWriteHalf<S> {
-    /// Get encryption method
-    pub fn method(&self) -> CipherKind {
-        self.method
-    }
-}
-
-impl<S> CryptoStreamWriteHalf<S>
-where
-    S: AsyncWrite + Unpin,
-{
-    /// Attempt to write encrypted data to `stream`
-    #[inline]
-    pub fn poll_write_encrypted(&mut self, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        self.enc.poll_write_encrypted(cx, &mut self.writer, buf)
-    }
-
-    /// Polls `flush` on the underlying stream
-    #[inline]
-    pub fn poll_flush(&mut self, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.writer).poll_flush(cx)
-    }
-
-    /// Polls `shutdown` on the underlying stream
-    #[inline]
-    pub fn poll_shutdown(&mut self, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.writer).poll_shutdown(cx)
     }
 }

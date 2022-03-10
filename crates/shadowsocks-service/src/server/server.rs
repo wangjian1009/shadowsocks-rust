@@ -11,10 +11,11 @@ use cfg_if::cfg_if;
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use log::{error, trace};
 use shadowsocks::{
-    config::{ManagerAddr, ServerConfig},
+    config::{ManagerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
     dns_resolver::DnsResolver,
     net::{AcceptOpts, ConnectOpts},
     plugin::{Plugin, PluginMode},
+    transport::direct::TcpConnector,
     ServerAddr,
 };
 use tokio::time;
@@ -30,7 +31,7 @@ use super::{
 };
 
 #[cfg(feature = "rate-limit")]
-use crate::net::BoundWidth;
+use shadowsocks::transport::BoundWidth;
 
 cfg_if! {
     if #[cfg(any(feature = "server-mock"))] {
@@ -178,6 +179,8 @@ impl Server {
     pub async fn run(mut self) -> io::Result<()> {
         let vfut = FuturesUnordered::new();
 
+        let connector = Arc::new(TcpConnector::new(Some(self.context.context())));
+
         if self.svr_cfg.mode().enable_tcp() {
             if let Some(plugin_cfg) = self.svr_cfg.plugin() {
                 let plugin = Plugin::start(plugin_cfg, self.svr_cfg.addr(), PluginMode::Server)?;
@@ -199,13 +202,21 @@ impl Server {
                 );
             }
 
-            let tcp_fut = self.run_tcp_server().boxed();
+            let tcp_fut = self.run_tcp_server(connector.clone()).boxed();
             vfut.push(tcp_fut);
         }
 
         if self.svr_cfg.mode().enable_udp() {
-            let udp_fut = self.run_udp_server().boxed();
-            vfut.push(udp_fut);
+            match &self.svr_cfg.protocol() {
+                ServerProtocol::SS(cfg) => {
+                    let udp_fut = self.run_udp_server(cfg).boxed();
+                    vfut.push(udp_fut);
+                }
+                #[cfg(feature = "trojan")]
+                ServerProtocol::Trojan(_cfg) => {}
+                #[cfg(feature = "vless")]
+                ServerProtocol::Vless(_cfg) => {}
+            }
         }
 
         if self.manager_addr.is_some() {
@@ -222,19 +233,19 @@ impl Server {
         Err(err)
     }
 
-    async fn run_tcp_server(&self) -> io::Result<()> {
-        let server = TcpServer::new(self.context.clone(), self.accept_opts.clone());
+    async fn run_tcp_server(&self, connector: Arc<TcpConnector>) -> io::Result<()> {
+        let server = TcpServer::new(self.context.clone(), connector, self.accept_opts.clone());
         server.run(&self.svr_cfg).await
     }
 
-    async fn run_udp_server(&self) -> io::Result<()> {
+    async fn run_udp_server(&self, cfg: &ShadowsocksConfig) -> io::Result<()> {
         let server = UdpServer::new(
             self.context.clone(),
             self.udp_expiry_duration,
             self.udp_capacity,
             self.accept_opts.clone(),
         );
-        server.run(&self.svr_cfg).await
+        server.run(&self.svr_cfg, cfg).await
     }
 
     async fn run_manager_report(&self) -> io::Result<()> {

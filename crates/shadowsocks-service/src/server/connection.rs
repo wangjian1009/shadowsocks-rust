@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    io,
     ops::Deref,
     sync::{
         atomic::{AtomicU32, Ordering},
@@ -70,7 +69,7 @@ impl ConnectionStat {
                 &self,
                 source_addr: SocketAddr,
                 count_per_ip_limit: Option<u32>,
-            ) -> io::Result<(Arc<ConnectionInfo>, bool)> {
+            ) -> std::io::Result<(Arc<ConnectionInfo>, bool)> {
                 match count_per_ip_limit {
                     None => Ok((self.add_in_connection_internal(source_addr).await, false)),
                     Some(count_per_ip_limit) => {
@@ -103,9 +102,9 @@ impl ConnectionStat {
             }
 
             #[inline]
-            async fn check_in_connection(&self, source_addr: &SocketAddr, count_per_ip_limit: u32) -> io::Result<()> {
+            async fn check_in_connection(&self, source_addr: &SocketAddr, count_per_ip_limit: u32) -> std::io::Result<()> {
                 let gen_error = || {
-                    io::Error::new(io::ErrorKind::Other, format!("connection limit per ip {} reached", count_per_ip_limit))
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("connection limit per ip {} reached", count_per_ip_limit))
                 };
 
                 let mut in_conns_count_by_source_ip = self.in_conns_count_by_source_ip.lock().await;
@@ -135,7 +134,7 @@ impl ConnectionStat {
         else {
             #[inline]
             pub async fn cin_by_ip(&self) -> u32 {
-                self.cin_by_ip_internal()
+                self.cin_by_ip_internal().await
             }
 
             #[inline]
@@ -145,7 +144,7 @@ impl ConnectionStat {
 
             #[inline]
             pub async fn remove_in_connection(&self, id: &u32) {
-                self.remove_in_connection(id)
+                self.remove_in_connection_internal(id).await;
             }
         }
     }

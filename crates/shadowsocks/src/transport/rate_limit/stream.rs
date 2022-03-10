@@ -2,7 +2,6 @@
 use std::{
     fmt::{self, Debug, Formatter},
     io::{self, IoSlice},
-    net::SocketAddr,
     num::NonZeroU32,
     pin::Pin,
     sync::Arc,
@@ -10,9 +9,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::net::Destination;
+
+use super::super::StreamConnection;
 use futures::Future;
 use futures_timer::Delay;
-use shadowsocks::net::TcpStream;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use governor::{
@@ -82,15 +83,35 @@ impl<S> RateLimitedStream<S> {
             },
         }
     }
+}
 
+impl<S: StreamConnection> StreamConnection for RateLimitedStream<S> {
     #[inline]
-    pub fn get_ref(&self) -> &S {
-        &self.stream
+    fn local_addr(&self) -> io::Result<Destination> {
+        self.stream.local_addr()
     }
 
     #[inline]
-    pub fn get_mut(&mut self) -> &mut S {
-        &mut self.stream
+    fn check_connected(&self) -> bool {
+        self.stream.check_connected()
+    }
+
+    #[inline]
+    fn set_rate_limit(&mut self, limiter: Option<Arc<RateLimiter>>) {
+        match limiter {
+            Some(limiter) => {
+                self.limiter_ctx = Some(RateLimitedContext {
+                    limiter,
+                    delay: Delay::new(Duration::new(0, 0)),
+                    jitter: Jitter::new(Duration::new(0, 0), Duration::new(0, 0)),
+                    state: State::ReadInner,
+                    readed: None,
+                });
+            }
+            None => {
+                self.limiter_ctx = None;
+            }
+        }
     }
 }
 
@@ -232,22 +253,14 @@ where
     }
 }
 
-pub type RateLimitedTcpStream = RateLimitedStream<TcpStream>;
-
-impl RateLimitedTcpStream {
-    pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.get_ref().local_addr()
-    }
-
-    pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-        self.get_ref().peer_addr()
-    }
-
-    pub fn nodelay(&self) -> io::Result<bool> {
-        self.get_ref().nodelay()
-    }
-
-    pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
-        self.get_ref().set_nodelay(nodelay)
+use cfg_if::cfg_if;
+cfg_if! {
+    if #[cfg(unix)] {
+        use std::os::unix::io::{AsRawFd, RawFd};
+        impl<S: AsRawFd> AsRawFd for RateLimitedStream<S> {
+            fn as_raw_fd(&self) -> RawFd {
+                self.stream.as_raw_fd()
+            }
+        }
     }
 }

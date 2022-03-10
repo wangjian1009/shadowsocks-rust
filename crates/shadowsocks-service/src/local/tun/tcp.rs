@@ -9,7 +9,7 @@ use etherparse::TcpHeader;
 use ipnet::IpNet;
 use log::{debug, error, trace};
 use lru_time_cache::LruCache;
-use shadowsocks::{net::TcpListener, relay::socks5::Address};
+use shadowsocks::{net::TcpListener, relay::socks5::Address, transport::Connector};
 use tokio::{net::TcpStream, sync::Mutex, task::JoinHandle, time};
 
 use crate::local::{
@@ -47,7 +47,12 @@ impl Drop for TcpTun {
 }
 
 impl TcpTun {
-    pub async fn new(context: Arc<ServiceContext>, tun_network: IpNet, balancer: PingBalancer) -> io::Result<TcpTun> {
+    pub async fn new<C: Connector>(
+        context: Arc<ServiceContext>,
+        connector: Arc<C>,
+        tun_network: IpNet,
+        balancer: PingBalancer,
+    ) -> io::Result<TcpTun> {
         let mut hosts = tun_network.hosts();
         let tcp_daddr = match hosts.next() {
             Some(d) => d,
@@ -72,7 +77,7 @@ impl TcpTun {
 
         let abortable = {
             let translator = translator.clone();
-            tokio::spawn(TcpTun::tunnel(context, listener, balancer, translator))
+            tokio::spawn(TcpTun::tunnel(context, connector, listener, balancer, translator))
         };
 
         Ok(TcpTun {
@@ -173,8 +178,9 @@ impl TcpTun {
         Ok(Some((trans_saddr, trans_daddr)))
     }
 
-    async fn tunnel(
+    async fn tunnel<C: Connector>(
         context: Arc<ServiceContext>,
+        connector: Arc<C>,
         listener: TcpListener,
         balancer: PingBalancer,
         translator: Arc<Mutex<TcpAddressTranslator>>,
@@ -204,9 +210,10 @@ impl TcpTun {
             debug!("establishing tcp tunnel {} -> {}", saddr, daddr);
 
             let context = context.clone();
+            let connector = connector.clone();
             let balancer = balancer.clone();
             tokio::spawn(async move {
-                if let Err(err) = handle_redir_client(context, balancer, stream, peer_addr, daddr).await {
+                if let Err(err) = handle_redir_client(context, connector, balancer, stream, peer_addr, daddr).await {
                     debug!("TCP redirect client, error: {:?}", err);
                 }
             });
@@ -217,8 +224,9 @@ impl TcpTun {
 /// Established Client Transparent Proxy
 ///
 /// This method must be called after handshaking with client (for example, socks5 handshaking)
-async fn establish_client_tcp_redir<'a>(
+async fn establish_client_tcp_redir<'a, C: Connector>(
     context: Arc<ServiceContext>,
+    connector: Arc<C>,
     balancer: PingBalancer,
     mut stream: TcpStream,
     peer_addr: SocketAddr,
@@ -227,13 +235,14 @@ async fn establish_client_tcp_redir<'a>(
     let server = balancer.best_tcp_server();
     let svr_cfg = server.server_config();
 
-    let mut remote = AutoProxyClientStream::connect(context, &server, addr).await?;
+    let mut remote = AutoProxyClientStream::connect(context.clone(), connector, &server, addr).await?;
 
-    establish_tcp_tunnel(svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
+    establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
 }
 
-async fn handle_redir_client(
+async fn handle_redir_client<C: Connector>(
     context: Arc<ServiceContext>,
+    connector: Arc<C>,
     balancer: PingBalancer,
     s: TcpStream,
     peer_addr: SocketAddr,
@@ -248,7 +257,7 @@ async fn handle_redir_client(
         }
     }
     let target_addr = Address::from(daddr);
-    establish_client_tcp_redir(context, balancer, s, peer_addr, &target_addr).await
+    establish_client_tcp_redir(context, connector, balancer, s, peer_addr, &target_addr).await
 }
 
 #[derive(Debug, Eq, PartialEq)]

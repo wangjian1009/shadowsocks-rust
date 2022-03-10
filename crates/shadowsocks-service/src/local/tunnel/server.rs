@@ -21,7 +21,7 @@ pub struct Tunnel {
 impl Tunnel {
     /// Create a new Tunnel server forwarding to `forward_addr`
     pub fn new(forward_addr: Address) -> Tunnel {
-        let context = ServiceContext::new();
+        let context = ServiceContext::default();
         Tunnel::with_context(Arc::new(context), forward_addr)
     }
 

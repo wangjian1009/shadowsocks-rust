@@ -28,7 +28,7 @@ mod obfs_proxy;
 mod ss_plugin;
 
 /// Config for plugin
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PluginConfig {
     pub plugin: String,
     pub plugin_opts: Option<String>,

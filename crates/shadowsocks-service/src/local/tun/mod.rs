@@ -15,7 +15,7 @@ use etherparse::{IpHeader, PacketHeaders, ReadError, TransportHeader};
 use futures::future;
 use ipnet::{IpNet, Ipv4Net};
 use log::{error, info, trace, warn};
-use shadowsocks::config::Mode;
+use shadowsocks::{config::Mode, transport::Connector};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tun::{AsyncDevice, Configuration as TunConfiguration, Device, Error as TunError, Layer};
 
@@ -31,8 +31,9 @@ mod sys;
 mod tcp;
 mod udp;
 
-pub struct TunBuilder {
+pub struct TunBuilder<C: Connector> {
     context: Arc<ServiceContext>,
+    connector: Arc<C>,
     balancer: PingBalancer,
     tun_config: TunConfiguration,
     udp_expiry_duration: Option<Duration>,
@@ -40,10 +41,11 @@ pub struct TunBuilder {
     mode: Mode,
 }
 
-impl TunBuilder {
-    pub fn new(context: Arc<ServiceContext>, balancer: PingBalancer) -> TunBuilder {
+impl<C: Connector> TunBuilder<C> {
+    pub fn new(context: Arc<ServiceContext>, connector: Arc<C>, balancer: PingBalancer) -> TunBuilder<C> {
         TunBuilder {
             context,
+            connector,
             balancer,
             tun_config: TunConfiguration::default(),
             udp_expiry_duration: None,
@@ -52,33 +54,33 @@ impl TunBuilder {
         }
     }
 
-    pub fn address(mut self, addr: IpNet) -> TunBuilder {
+    pub fn address(mut self, addr: IpNet) -> TunBuilder<C> {
         self.tun_config.address(addr.addr()).netmask(addr.netmask());
         self
     }
 
-    pub fn name(mut self, name: &str) -> TunBuilder {
+    pub fn name(mut self, name: &str) -> TunBuilder<C> {
         self.tun_config.name(name);
         self
     }
 
     #[cfg(unix)]
-    pub fn file_descriptor(mut self, fd: RawFd) -> TunBuilder {
+    pub fn file_descriptor(mut self, fd: RawFd) -> TunBuilder<C> {
         self.tun_config.raw_fd(fd);
         self
     }
 
-    pub fn udp_expiry_duration(mut self, udp_expiry_duration: Duration) -> TunBuilder {
+    pub fn udp_expiry_duration(mut self, udp_expiry_duration: Duration) -> TunBuilder<C> {
         self.udp_expiry_duration = Some(udp_expiry_duration);
         self
     }
 
-    pub fn udp_capacity(mut self, udp_capacity: usize) -> TunBuilder {
+    pub fn udp_capacity(mut self, udp_capacity: usize) -> Self {
         self.udp_capacity = Some(udp_capacity);
         self
     }
 
-    pub fn mode(mut self, mode: Mode) -> TunBuilder {
+    pub fn mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
         self
     }
@@ -138,7 +140,15 @@ impl TunBuilder {
         Ok(Tun {
             device,
             tcp: if self.mode.enable_tcp() {
-                Some(TcpTun::new(self.context.clone(), tun_network.into(), self.balancer.clone()).await?)
+                Some(
+                    TcpTun::new(
+                        self.context.clone(),
+                        self.connector.clone(),
+                        tun_network.into(),
+                        self.balancer.clone(),
+                    )
+                    .await?,
+                )
             } else {
                 None
             },

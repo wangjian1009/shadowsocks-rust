@@ -12,9 +12,17 @@ use futures::{future::BoxFuture, FutureExt};
 use hyper::Uri;
 use log::error;
 use pin_project::pin_project;
+use shadowsocks::{create_connector_then, transport::StreamConnection};
 use tower::Service;
 
-use crate::local::{context::ServiceContext, loadbalancing::ServerIdent, net::AutoProxyClientStream};
+use crate::{
+    connect_server_then,
+    local::{
+        context::ServiceContext,
+        loadbalancing::ServerIdent,
+        net::{connect_bypassed, AutoProxyClientStream},
+    },
+};
 
 use super::{http_stream::ProxyHttpStream, utils::host_addr};
 
@@ -31,9 +39,9 @@ impl Connector {
 }
 
 impl Service<Uri> for Connector {
-    type Response = ProxyHttpStream;
     type Error = io::Error;
     type Future = Connecting;
+    type Response = ProxyHttpStream;
 
     fn poll_ready(&mut self, _cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -54,9 +62,11 @@ impl Service<Uri> for Connector {
                     }
                     Some(addr) => {
                         let s = match server {
-                            Some(ser) => AutoProxyClientStream::connect_proxied(context, ser.as_ref(), addr).await?,
-                            None => AutoProxyClientStream::connect_bypassed(context, addr).await?,
-                        };
+                            Some(ser) => connect_server_then!(context, ser.as_ref(), addr, |s| {
+                                Ok(Box::new(s?) as Box<dyn StreamConnection>)
+                            }),
+                            None => Ok(Box::new(connect_bypassed(context, addr).await?) as Box<dyn StreamConnection>),
+                        }?;
 
                         if is_https {
                             let host = dst.host().unwrap().trim_start_matches('[').trim_start_matches(']');
@@ -67,7 +77,7 @@ impl Service<Uri> for Connector {
                     }
                 }
             }
-                .boxed(),
+            .boxed(),
         }
     }
 }

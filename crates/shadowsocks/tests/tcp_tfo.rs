@@ -13,7 +13,7 @@ use byte_string::ByteStr;
 use futures::future;
 use log::debug;
 use shadowsocks::{
-    config::ServerType,
+    config::{ServerProtocol, ServerType, ShadowsocksConfig},
     context::Context,
     crypto::v1::CipherKind,
     net::{AcceptOpts, ConnectOpts},
@@ -21,8 +21,12 @@ use shadowsocks::{
         socks5::Address,
         tcprelay::utils::{copy_from_encrypted, copy_to_encrypted},
     },
+    transport::{
+        direct::{TcpAcceptor, TcpConnector},
+        Acceptor,
+        Connection,
+    },
     ProxyClientStream,
-    ProxyListener,
     ServerConfig,
 };
 use tokio::{
@@ -34,7 +38,10 @@ use tokio::{
 async fn tcp_tunnel_tfo() {
     let _ = env_logger::try_init();
 
-    let svr_cfg = ServerConfig::new(("127.0.0.1", 41000), "?", CipherKind::NONE);
+    let svr_cfg = ServerConfig::new(
+        ("127.0.0.1", 41000),
+        ServerProtocol::SS(ShadowsocksConfig::new("?", CipherKind::NONE)),
+    );
     let svr_cfg_client = svr_cfg.clone();
 
     tokio::spawn(async move {
@@ -43,11 +50,18 @@ async fn tcp_tunnel_tfo() {
         let mut accept_opts = AcceptOpts::default();
         accept_opts.tcp.fastopen = true;
 
-        let listener = ProxyListener::bind_with_opts(context, &svr_cfg, accept_opts)
+        let listener = TcpAcceptor::bind_server_with_opts(context.as_ref(), svr_cfg.external_addr(), accept_opts)
             .await
             .unwrap();
 
-        while let Ok((mut stream, peer_addr)) = listener.accept().await {
+        while let Ok((stream, peer_addr)) = listener.accept().await {
+            let mut stream = match stream {
+                Connection::Stream(stream) => stream,
+                Connection::Packet { .. } => unreachable!(),
+            };
+
+            let peer_addr = peer_addr.unwrap();
+
             debug!("accepted {}", peer_addr);
 
             tokio::spawn(async move {
@@ -57,7 +71,7 @@ async fn tcp_tunnel_tfo() {
                     Address::DomainNameAddress(name, port) => TcpStream::connect((name.as_str(), port)).await.unwrap(),
                 };
 
-                let (mut lr, mut lw) = stream.into_split();
+                let (mut lr, mut lw) = tokio::io::split(stream);
                 let (mut rr, mut rw) = remote.into_split();
 
                 let l2r = copy_from_encrypted(CipherKind::NONE, &mut lr, &mut rw, None);
@@ -74,14 +88,21 @@ async fn tcp_tunnel_tfo() {
     tokio::task::yield_now().await;
 
     let context = Context::new_shared(ServerType::Local);
+    let connector = TcpConnector::new(Some(context.clone()));
 
     let mut connect_opts = ConnectOpts::default();
     connect_opts.tcp.fastopen = true;
 
     let mut client = ProxyClientStream::connect_with_opts(
         context,
+        &connector,
         &svr_cfg_client,
-        ("www.example.com".to_owned(), 80),
+        if let ServerProtocol::SS(c) = svr_cfg_client.protocol() {
+            c
+        } else {
+            unreachable!();
+        },
+        ("www.example.com".to_owned(), 80).into(),
         &connect_opts,
     )
     .await

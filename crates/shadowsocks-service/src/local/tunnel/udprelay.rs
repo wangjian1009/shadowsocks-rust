@@ -7,6 +7,7 @@ use io::ErrorKind;
 use log::{debug, error, info, trace, warn};
 use lru_time_cache::LruCache;
 use shadowsocks::{
+    config::ServerProtocol,
     lookup_then,
     net::UdpSocket as ShadowUdpSocket,
     relay::{
@@ -329,6 +330,13 @@ impl UdpAssociationContext {
                         let socket = ProxySocket::connect_with_opts(
                             self.context.context(),
                             svr_cfg,
+                            match svr_cfg.protocol() {
+                                ServerProtocol::SS(cfg) => cfg,
+                                #[cfg(feature = "trojan")]
+                                ServerProtocol::Trojan(..) => unreachable!(),
+                                #[cfg(feature = "vless")]
+                                ServerProtocol::Vless(..) => unreachable!(),
+                            },
                             self.context.connect_opts_ref(),
                         )
                         .await?;

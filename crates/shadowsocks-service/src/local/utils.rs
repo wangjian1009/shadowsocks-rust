@@ -8,7 +8,7 @@ use std::{
 
 use log::{debug, trace};
 use shadowsocks::{
-    config::ServerConfig,
+    config::{ServerConfig, ServerProtocol},
     relay::{socks5::Address, tcprelay::utils::copy_encrypted_bidirectional},
 };
 use tokio::{
@@ -41,10 +41,11 @@ where
 {
     if shadow.is_proxied() {
         debug!(
-            "established tcp tunnel {} <-> {} through sever {} (outbound: {})",
+            "established tcp tunnel {} <-> {} through sever {}{} (outbound: {})",
             peer_addr,
             target_addr,
             svr_cfg.external_addr(),
+            svr_cfg.connector_transport_tag(),
             svr_cfg.addr(),
         );
     } else {
@@ -120,7 +121,13 @@ where
         }
     }
 
-    match copy_encrypted_bidirectional(svr_cfg.method(), shadow, &mut plain, &None).await {
+    match match svr_cfg.protocol() {
+        ServerProtocol::SS(ss_cfg) => copy_encrypted_bidirectional(ss_cfg.method(), shadow, &mut plain, &None).await,
+        #[cfg(feature = "trojan")]
+        ServerProtocol::Trojan(_cfg) => copy_bidirectional(shadow, &mut plain).await,
+        #[cfg(feature = "vless")]
+        ServerProtocol::Vless(_cfg) => copy_bidirectional(shadow, &mut plain).await,
+    } {
         Ok((wn, rn)) => {
             trace!(
                 "tcp tunnel {} <-> {} (proxied) closed, L2R {} bytes, R2L {} bytes",

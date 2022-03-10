@@ -25,7 +25,7 @@ required-features = ["local"]
 [[bin]]
 name = "ssserver"
 path = "bin/ssserver.rs"
-required-features = ["server", "server-maintain"]
+required-features = ["server"]
 
 [[bin]]
 name = "ssurl"
@@ -58,6 +58,7 @@ panic = "abort"
 default = [
     "logging",
     "trust-dns",
+    "stream-cipher",
     "local",
     "server",
     "server-maintain",
@@ -69,12 +70,18 @@ default = [
     "local-http",
     "local-tunnel",
     "local-socks4",
+    "local-redir",
     "multi-threaded",
     "rate-limit",
     "lib-entry",
     "host-dns",
     "encrypt-password",
     "sniffer-bittorrent",
+    "transport-ws",
+    "transport-tls",
+    "transport-mkcp",
+    "trojan",
+    "vless",
 ]
 
 # Enable local server
@@ -83,6 +90,14 @@ encrypt-password = []
 
 # Enable bittorrent protocol reject
 sniffer-bittorrent = ["shadowsocks-service/sniffer-bittorrent"]
+
+transport = []
+transport-ws = ["shadowsocks-service/transport-ws", "transport"]
+transport-tls = ["shadowsocks-service/transport-tls", "transport"]
+transport-mkcp = ["shadowsocks-service/transport-mkcp", "transport"]
+
+trojan = ["shadowsocks-service/trojan"]
+vless = ["shadowsocks-service/vless"]
 
 # Enable remote server
 server = ["shadowsocks-service/server"]
@@ -194,7 +209,7 @@ jemallocator = { version = "0.3", optional = true }
 snmalloc-rs = { version = "0.2", optional = true }
 rpmalloc = { version = "0.2", optional = true }
 
-shadowsocks-service = { version = "1.12.4", path = "./crates/shadowsocks-service" }
+shadowsocks-service = { version = "1.12.4", path = "./crates/shadowsocks-service", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.4"

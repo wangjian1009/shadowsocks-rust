@@ -16,6 +16,7 @@ use shadowsocks_service::{
     acl::AccessControl,
     config::{Config, ConfigType},
     run_local,
+    shadowsocks::config::ServerProtocol,
 };
 
 use futures::{
@@ -44,10 +45,19 @@ impl SSLocal {
 
         #[cfg(feature = "encrypt-password")]
         for svr in config.server.iter_mut() {
-            let password = crate::decrypt_password(svr.password()).unwrap();
-            log::info!("password {} ==> {}", svr.password(), password);
-            svr.set_password(password.as_str());
-            log::info!("server {} password {}", svr.addr(), svr.password());
+            match svr.protocol_mut() {
+                ServerProtocol::SS(ss_cfg) => {
+                    let password = crate::decrypt_password(ss_cfg.password()).unwrap();
+                    ss_cfg.set_password(password.as_str());
+                }
+                #[cfg(feature = "trojan")]
+                ServerProtocol::Trojan(cfg) => {
+                    let password = crate::decrypt_password(cfg.password()).unwrap();
+                    cfg.set_password(password.as_str());
+                }
+                #[cfg(feature = "vless")]
+                ServerProtocol::Vless(..) => {}
+            }
         }
 
         if config.local.is_empty() {

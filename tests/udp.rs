@@ -11,7 +11,12 @@ use shadowsocks_service::{
     local::socks::client::socks5::Socks5UdpClient,
     run_local,
     run_server,
-    shadowsocks::{config::Mode, crypto::v1::CipherKind, relay::socks5::Address, ServerConfig},
+    shadowsocks::{
+        config::{Mode, ServerProtocol, ShadowsocksConfig},
+        crypto::v1::CipherKind,
+        relay::socks5::Address,
+        ServerConfig,
+    },
 };
 
 const SERVER_ADDR: &str = "127.0.0.1:8093";
@@ -26,8 +31,7 @@ fn get_svr_config() -> Config {
     let mut cfg = Config::new(ConfigType::Server);
     cfg.server = vec![ServerConfig::new(
         SERVER_ADDR.parse::<SocketAddr>().unwrap(),
-        PASSWORD.to_owned(),
-        METHOD,
+        ServerProtocol::SS(ShadowsocksConfig::new(PASSWORD.to_owned(), METHOD)),
     )];
     cfg.server[0].set_mode(Mode::TcpAndUdp);
     cfg
@@ -42,8 +46,7 @@ fn get_cli_config() -> Config {
     cfg.local[0].mode = Mode::TcpAndUdp;
     cfg.server = vec![ServerConfig::new(
         SERVER_ADDR.parse::<SocketAddr>().unwrap(),
-        PASSWORD.to_owned(),
-        METHOD,
+        ServerProtocol::SS(ShadowsocksConfig::new(PASSWORD.to_owned(), METHOD)),
     )];
     cfg
 }

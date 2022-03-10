@@ -8,14 +8,22 @@ use std::{
 };
 
 use log::{debug, error, info, trace};
-use shadowsocks::{lookup_then, net::TcpListener as ShadowTcpListener, relay::socks5::Address, ServerAddr};
+use shadowsocks::{
+    create_connector_then,
+    lookup_then,
+    net::TcpListener as ShadowTcpListener,
+    relay::socks5::Address,
+    ServerAddr,
+};
 use tokio::{
     net::{TcpListener, TcpStream},
     time,
 };
 
 use crate::{
+    auto_proxy_then,
     config::RedirType,
+    connect_server_then,
     local::{
         context::ServiceContext,
         loadbalancing::PingBalancer,
@@ -40,12 +48,14 @@ async fn establish_client_tcp_redir<'a>(
     let server = balancer.best_tcp_server();
     let svr_cfg = server.server_config();
 
-    let mut remote = AutoProxyClientStream::connect(context.clone(), &server, addr).await?;
+    auto_proxy_then!(context, server.as_ref(), addr, |remote| {
+        let mut remote = remote?;
 
-    #[cfg(feature = "rate-limit")]
-    let mut stream = crate::net::RateLimitedStream::from_stream(stream, context.rate_limiter());
+        #[cfg(feature = "rate-limit")]
+        let mut stream = shadowsocks::transport::RateLimitedStream::from_stream(stream, context.rate_limiter());
 
-    establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
+        establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
+    })
 }
 
 async fn handle_redir_client(

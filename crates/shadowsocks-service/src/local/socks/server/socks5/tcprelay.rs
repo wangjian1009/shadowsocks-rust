@@ -9,6 +9,7 @@ use std::{
 use log::{debug, error, trace, warn};
 use shadowsocks::{
     config::Mode,
+    create_connector_then,
     relay::socks5::{
         self,
         Address,
@@ -20,11 +21,14 @@ use shadowsocks::{
         TcpRequestHeader,
         TcpResponseHeader,
     },
+    transport::StreamConnection,
     ServerAddr,
 };
 use tokio::net::TcpStream;
 
 use crate::{
+    auto_proxy_then,
+    connect_server_then,
     local::{
         context::ServiceContext,
         loadbalancing::PingBalancer,
@@ -134,7 +138,7 @@ impl Socks5TcpHandler {
         target_addr: Address,
     ) -> io::Result<()> {
         #[cfg(feature = "rate-limit")]
-        let mut stream = crate::net::RateLimitedStream::from_stream(stream, self.context.rate_limiter());
+        let mut stream = shadowsocks::transport::RateLimitedStream::from_stream(stream, self.context.rate_limiter());
 
         if !self.mode.enable_tcp() {
             warn!("TCP CONNECT is disabled");
@@ -148,43 +152,55 @@ impl Socks5TcpHandler {
         let server = self.balancer.best_tcp_server();
         let svr_cfg = server.server_config();
 
-        let mut remote = match AutoProxyClientStream::connect(self.context.clone(), &server, &target_addr).await {
-            Ok(remote) => {
-                // Tell the client that we are ready
-                let header =
-                    TcpResponseHeader::new(socks5::Reply::Succeeded, Address::SocketAddress(remote.local_addr()?));
-                header.write_to(&mut stream).await?;
+        auto_proxy_then!(self.context, server.as_ref(), target_addr, |remote| {
+            let mut remote = match remote {
+                Ok(remote) => {
+                    // Tell the client that we are ready
+                    let header = TcpResponseHeader::new(
+                        socks5::Reply::Succeeded,
+                        Address::SocketAddress(remote.local_addr()?.to_socket_addr().unwrap()),
+                    );
+                    header.write_to(&mut stream).await?;
 
-                trace!("sent header: {:?}", header);
+                    trace!("sent header: {:?}", header);
 
-                remote
-            }
-            Err(err) => {
-                let reply = match err.kind() {
-                    ErrorKind::ConnectionRefused => Reply::ConnectionRefused,
-                    ErrorKind::ConnectionAborted => Reply::HostUnreachable,
-                    _ => Reply::NetworkUnreachable,
-                };
+                    remote
+                }
+                Err(err) => {
+                    log::debug!(
+                        "failed to connect to {} via {}{}, {}",
+                        target_addr,
+                        svr_cfg.external_addr(),
+                        svr_cfg.connector_transport_tag(),
+                        err
+                    );
 
-                let dummy_address = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
-                let header = TcpResponseHeader::new(reply, Address::SocketAddress(dummy_address));
-                header.write_to(&mut stream).await?;
+                    let reply = match err.kind() {
+                        ErrorKind::ConnectionRefused => Reply::ConnectionRefused,
+                        ErrorKind::ConnectionAborted => Reply::HostUnreachable,
+                        _ => Reply::NetworkUnreachable,
+                    };
 
-                trace!("socks5 {:?}", header);
+                    let dummy_address = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+                    let header = TcpResponseHeader::new(reply, Address::SocketAddress(dummy_address));
+                    header.write_to(&mut stream).await?;
 
-                return Err(err);
-            }
-        };
+                    trace!("socks5 {:?}", header);
 
-        establish_tcp_tunnel(
-            self.context.as_ref(),
-            svr_cfg,
-            &mut stream,
-            &mut remote,
-            peer_addr,
-            &target_addr,
-        )
-        .await
+                    return Err(err);
+                }
+            };
+
+            establish_tcp_tunnel(
+                self.context.as_ref(),
+                svr_cfg,
+                &mut stream,
+                &mut remote,
+                peer_addr,
+                &target_addr,
+            )
+            .await
+        })
     }
 
     async fn handle_udp_associate(self, mut stream: TcpStream, client_addr: Address) -> io::Result<()> {

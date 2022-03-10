@@ -17,13 +17,17 @@ use hyper::{
 };
 use log::{debug, error, trace};
 
-use shadowsocks::relay::socks5::Address;
+use shadowsocks::{create_connector_then, relay::socks5::Address};
 
-use crate::local::{
-    context::ServiceContext,
-    loadbalancing::PingBalancer,
-    net::AutoProxyClientStream,
-    utils::establish_tcp_tunnel,
+use crate::{
+    auto_proxy_then,
+    connect_server_then,
+    local::{
+        context::ServiceContext,
+        loadbalancing::PingBalancer,
+        net::AutoProxyClientStream,
+        utils::establish_tcp_tunnel,
+    },
 };
 
 use super::{
@@ -102,51 +106,57 @@ impl HttpDispatcher {
             //
             // FIXME: What STATUS should I return for connection error?
             let server = self.balancer.best_tcp_server();
-            let mut stream = AutoProxyClientStream::connect(self.context.clone(), server.as_ref(), &host).await?;
 
-            debug!("CONNECT relay connected {} <-> {}", self.client_addr, host);
+            auto_proxy_then!(self.context, server.as_ref(), host, |remote| {
+                let mut stream = remote?;
 
-            // Upgrade to a TCP tunnel
-            //
-            // Note: only after client received an empty body with STATUS_OK can the
-            // connection be upgraded, so we can't return a response inside
-            // `on_upgrade` future.
-            let req = self.req;
-            let client_addr = self.client_addr;
+                debug!("CONNECT relay connected {} <-> {}", self.client_addr, host);
 
-            let context = self.context;
-            tokio::spawn(async move {
-                match upgrade::on(req).await {
-                    #[allow(unused_mut)]
-                    Ok(mut upgraded) => {
-                        trace!("CONNECT tunnel upgrade success, {} <-> {}", client_addr, host);
+                // Upgrade to a TCP tunnel
+                //
+                // Note: only after client received an empty body with STATUS_OK can the
+                // connection be upgraded, so we can't return a response inside
+                // `on_upgrade` future.
+                let req = self.req;
+                let client_addr = self.client_addr;
 
-                        #[cfg(feature = "rate-limit")]
-                        let mut upgraded = crate::net::RateLimitedStream::from_stream(upgraded, context.rate_limiter());
+                let context = self.context;
+                tokio::spawn(async move {
+                    match upgrade::on(req).await {
+                        #[allow(unused_mut)]
+                        Ok(mut upgraded) => {
+                            trace!("CONNECT tunnel upgrade success, {} <-> {}", client_addr, host);
 
-                        let _ = establish_tcp_tunnel(
-                            context.as_ref(),
-                            server.server_config(),
-                            &mut upgraded,
-                            &mut stream,
-                            client_addr,
-                            &host,
-                        )
-                        .await;
+                            #[cfg(feature = "rate-limit")]
+                            let mut upgraded = shadowsocks::transport::RateLimitedStream::from_stream(
+                                upgraded,
+                                context.rate_limiter(),
+                            );
+
+                            let _ = establish_tcp_tunnel(
+                                context.as_ref(),
+                                server.server_config(),
+                                &mut upgraded,
+                                &mut stream,
+                                client_addr,
+                                &host,
+                            )
+                            .await;
+                        }
+                        Err(e) => {
+                            error!(
+                                "failed to upgrade TCP tunnel {} <-> {}, error: {}",
+                                client_addr, host, e
+                            );
+                        }
                     }
-                    Err(e) => {
-                        error!(
-                            "failed to upgrade TCP tunnel {} <-> {}, error: {}",
-                            client_addr, host, e
-                        );
-                    }
-                }
-            });
+                });
 
-            // Connection established
-            let resp = Response::builder().body(Body::empty()).unwrap();
+                // Connection established
+                let resp = Response::builder().body(Body::empty()).unwrap();
 
-            Ok(resp)
+                Ok(resp)
+            })
         } else {
             let method = self.req.method().clone();
             let version = self.req.version();

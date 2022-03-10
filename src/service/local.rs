@@ -17,14 +17,23 @@ use shadowsocks_service::{
     create_local,
     local::loadbalancing::PingBalancer,
     shadowsocks::{
-        config::{Mode, ServerAddr, ServerConfig},
+        config::{Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::v1::{available_ciphers, CipherKind},
         plugin::PluginConfig,
     },
 };
 
+#[cfg(feature = "transport")]
+use shadowsocks_service::shadowsocks::config::TransportConnectorConfig;
+
 #[cfg(feature = "rate-limit")]
-use shadowsocks_service::net::BoundWidth;
+use shadowsocks_service::shadowsocks::transport::BoundWidth;
+
+#[cfg(feature = "trojan")]
+use shadowsocks_service::shadowsocks::config::TrojanConfig;
+
+#[cfg(feature = "vless")]
+use shadowsocks_service::shadowsocks::config::VlessConfig;
 
 #[cfg(feature = "logging")]
 use crate::logging;
@@ -47,6 +56,7 @@ pub fn define_command_line_options<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
 
         (@arg SERVER_ADDR: -s --("server-addr") +takes_value {validator::validate_server_addr} requires[ENCRYPT_METHOD] "Server address")
         (@arg PASSWORD: -k --password +takes_value requires[SERVER_ADDR] "Server's password")
+
         (@arg ENCRYPT_METHOD: -m --("encrypt-method") +takes_value requires[SERVER_ADDR] possible_values(available_ciphers()) "Server's encryption method")
         (@arg TIMEOUT: --timeout +takes_value {validator::validate_u64} requires[SERVER_ADDR] "Server's timeout seconds for TCP relay")
 
@@ -83,6 +93,21 @@ pub fn define_command_line_options<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
             .short("6")
             .help("Resolve hostname to IPv6 address first"),
     );
+
+    #[cfg(feature = "vless")]
+    {
+        app = clap_app!(@app (app)
+            (@arg PROTOCOL_VLESS: --vless requires[SERVER_ADDR] "Use vless protocol")
+            (@arg VLESS_USER: --("vless-user") +takes_value requires[PROTOCOL_VLESS] {validator::validate_uuid} "Vless's users")
+        );
+    }
+
+    #[cfg(feature = "trojan")]
+    {
+        app = clap_app!(@app (app)
+            (@arg PROTOCOL_TROJAN: --trojan requires[SERVER_ADDR] "Use trojan protocol")
+        );
+    }
 
     #[cfg(feature = "logging")]
     {
@@ -174,6 +199,13 @@ pub fn define_command_line_options<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
         }
     }
 
+    #[cfg(feature = "transport")]
+    {
+        app = clap_app!(@app (app)
+            (@arg TRANSPORT: --("transport") +takes_value {validator::validate_transport_connector} "transport settings")
+        );
+    }
+
     #[cfg(feature = "rate-limit")]
     {
         app = clap_app!(@app (app)
@@ -254,14 +286,19 @@ pub fn main(matches: &ArgMatches<'_>) {
                 Ok(mut cfg) => {
                     // let package_name = parse_package_name(cpath);
                     for svr in cfg.server.iter_mut() {
-                        let password = match crate::decrypt_password(svr.password()) {
-                            Ok(password) => password,
-                            Err(err) => {
-                                log::error!("decrypt_password fail, input={}, err={}", svr.password(), err);
-                                panic!("decrypt_password fail, input={}, err={}", svr.password(), err);
+                        match svr.protocol_mut() {
+                            ServerProtocol::SS(ss_cfg) => {
+                                let password = crate::decrypt_password(ss_cfg.password()).unwrap();
+                                ss_cfg.set_password(password.as_str());
                             }
-                        };
-                        svr.set_password(password.as_str());
+                            #[cfg(feature = "trojan")]
+                            ServerProtocol::Trojan(cfg) => {
+                                let password = crate::decrypt_password(cfg.password()).unwrap();
+                                cfg.set_password(password.as_str());
+                            }
+                            #[cfg(feature = "vless")]
+                            ServerProtocol::Vless(..) => {}
+                        }
                     }
                     cfg
                 }
@@ -274,19 +311,81 @@ pub fn main(matches: &ArgMatches<'_>) {
         };
 
         if let Some(svr_addr) = matches.value_of("SERVER_ADDR") {
-            let password = match clap::value_t!(matches.value_of("PASSWORD"), String) {
-                Ok(pwd) => read_variable_field_value(&pwd).into(),
-                Err(err) => {
-                    // NOTE: svr_addr should have been checked by crate::validator
-                    match crate::password::read_server_password(svr_addr) {
-                        Ok(pwd) => pwd,
-                        Err(..) => err.exit(),
+            let mut protocol = None;
+
+            #[cfg(feature = "vless")]
+            if protocol.is_none() && matches.is_present("PROTOCOL_VLESS") {
+                let mut vless_cfg = VlessConfig::new();
+
+                match clap::value_t!(matches.value_of("VLESS_USER"), String) {
+                    Ok(uuid) => {
+                        vless_cfg.add_user(0, uuid.as_str(), None).unwrap();
+                    }
+                    Err(err) => {
+                        eprintln!("missing `vless-user`, {}", err);
+                        return;
+                    }
+                };
+
+                protocol = Some(ServerProtocol::Vless(vless_cfg));
+            }
+
+            #[cfg(feature = "trojan")]
+            if protocol.is_none() && matches.is_present("PROTOCOL_TROJAN") {
+                let password = match clap::value_t!(matches.value_of("PASSWORD"), String) {
+                    Ok(pwd) => read_variable_field_value(&pwd).into(),
+                    Err(err) => {
+                        // NOTE: svr_addr should have been checked by crate::validator
+                        match crate::password::read_server_password(svr_addr) {
+                            Ok(pwd) => pwd,
+                            Err(..) => err.exit(),
+                        }
+                    }
+                };
+
+                protocol = Some(ServerProtocol::Trojan(TrojanConfig::new(password)));
+            }
+
+            if protocol.is_none() {
+                let password = match clap::value_t!(matches.value_of("PASSWORD"), String) {
+                    Ok(pwd) => read_variable_field_value(&pwd).into(),
+                    Err(err) => {
+                        // NOTE: svr_addr should have been checked by crate::validator
+                        match crate::password::read_server_password(svr_addr) {
+                            Ok(pwd) => pwd,
+                            Err(..) => err.exit(),
+                        }
+                    }
+                };
+
+                protocol = Some(ServerProtocol::SS(ShadowsocksConfig::new(
+                    password,
+                    clap::value_t_or_exit!(matches.value_of("ENCRYPT_METHOD"), CipherKind),
+                )));
+            }
+
+            let mut protocol = protocol.unwrap();
+
+            match &mut protocol {
+                ServerProtocol::SS(protocol) => {
+                    if let Some(p) = matches.value_of("PLUGIN") {
+                        let plugin = PluginConfig {
+                            plugin: p.to_owned(),
+                            plugin_opts: matches.value_of("PLUGIN_OPT").map(ToOwned::to_owned),
+                            plugin_args: Vec::new(),
+                        };
+
+                        protocol.set_plugin(plugin);
                     }
                 }
-            };
+                #[cfg(feature = "trojan")]
+                ServerProtocol::Trojan(..) => {}
+                #[cfg(feature = "vless")]
+                ServerProtocol::Vless(..) => {}
+            }
 
-            let method = clap::value_t_or_exit!(matches.value_of("ENCRYPT_METHOD"), CipherKind);
             let svr_addr = svr_addr.parse::<ServerAddr>().expect("server-addr");
+            let mut sc = ServerConfig::new(svr_addr, protocol);
 
             let timeout = match clap::value_t!(matches.value_of("TIMEOUT"), u64) {
                 Ok(t) => Some(Duration::from_secs(t)),
@@ -294,19 +393,8 @@ pub fn main(matches: &ArgMatches<'_>) {
                 Err(err) => err.exit(),
             };
 
-            let mut sc = ServerConfig::new(svr_addr, password, method);
             if let Some(timeout) = timeout {
                 sc.set_timeout(timeout);
-            }
-
-            if let Some(p) = matches.value_of("PLUGIN") {
-                let plugin = PluginConfig {
-                    plugin: p.to_owned(),
-                    plugin_opts: matches.value_of("PLUGIN_OPT").map(ToOwned::to_owned),
-                    plugin_args: Vec::new(),
-                };
-
-                sc.set_plugin(plugin);
             }
 
             config.server.push(sc);
@@ -490,6 +578,18 @@ pub fn main(matches: &ArgMatches<'_>) {
 
         if matches.is_present("TCP_FAST_OPEN") {
             config.fast_open = true;
+        }
+
+        #[cfg(feature = "transport")]
+        if let Some(transport) = matches.value_of("TRANSPORT") {
+            let connector_transport = transport
+                .parse::<TransportConnectorConfig>()
+                .expect("transport format error");
+
+            config
+                .server
+                .iter_mut()
+                .for_each(|c| c.set_connector_transport(Some(connector_transport.clone())))
         }
 
         #[cfg(feature = "rate-limit")]
@@ -694,8 +794,19 @@ fn launch_reload_server_task(config_path: PathBuf, balancer: PingBalancer) {
                 Ok(mut cfg) => {
                     // let package_name = parse_package_name(cpath);
                     for svr in cfg.server.iter_mut() {
-                        let password = crate::decrypt_password(svr.password()).unwrap();
-                        svr.set_password(password.as_str());
+                        match svr.protocol_mut() {
+                            ServerProtocol::SS(ss_cfg) => {
+                                let password = crate::decrypt_password(ss_cfg.password()).unwrap();
+                                ss_cfg.set_password(password.as_str());
+                            }
+                            #[cfg(feature = "trojan")]
+                            ServerProtocol::Trojan(cfg) => {
+                                let password = crate::decrypt_password(cfg.password()).unwrap();
+                                cfg.set_password(password.as_str());
+                            }
+                            #[cfg(feature = "vless")]
+                            ServerProtocol::Vless(..) => {}
+                        }
                     }
                     cfg
                 }
@@ -708,7 +819,9 @@ fn launch_reload_server_task(config_path: PathBuf, balancer: PingBalancer) {
             let servers = config.server;
             info!("auto-reload {} with {} servers", config_path.display(), servers.len());
 
-            if let Err(err) = balancer.reset_servers(servers).await {
+            let r = balancer.reset_servers(servers).await;
+
+            if let Err(err) = r {
                 error!("auto-reload {} but found error: {}", config_path.display(), err);
             }
         }

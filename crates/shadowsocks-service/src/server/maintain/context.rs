@@ -10,8 +10,6 @@ impl MaintainServerContext {
     pub async fn handle_request(&self, req: Request<Body>) -> GenericResult<Response<Body>> {
         let mut response = None;
 
-        log::info!("xxxxx: request {:?}", req);
-
         match (req.method(), req.uri().path()) {
             (&Method::GET, "/servers") => response = Some(self.handle_servers(req).await?),
             (&Method::GET, "/conns") => response = Some(self.handle_conns(req).await?),

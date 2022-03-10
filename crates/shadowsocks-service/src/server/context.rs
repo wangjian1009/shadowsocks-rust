@@ -1,6 +1,6 @@
 //! Shadowsocks Local Server Context
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use shadowsocks::{
     config::ServerType,
@@ -12,13 +12,23 @@ use shadowsocks::{
 
 use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
 
-#[cfg(feature = "rate-limit")]
-use crate::net::BoundWidth;
+use cfg_if::cfg_if;
+cfg_if! {
+    if #[cfg(feature = "rate-limit")] {
+        use std::time::Duration;
+        use shadowsocks::transport::BoundWidth;
+    }
+}
 
-#[cfg(feature = "server-mock")]
-#[derive(Clone, Copy)]
-pub enum ServerMockProtocol {
-    DNS,
+cfg_if! {
+    if #[cfg(feature = "server-mock")] {
+        use std::collections::HashMap;
+
+        #[derive(Clone, Copy)]
+        pub enum ServerMockProtocol {
+            DNS,
+        }
+    }
 }
 
 use super::connection::ConnectionStat;

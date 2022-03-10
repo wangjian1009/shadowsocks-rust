@@ -2,24 +2,22 @@
 
 #[cfg(unix)]
 use std::path::Path;
-use std::{
-    cmp::Ordering,
-    io::{self, ErrorKind},
-    net::SocketAddr,
-    sync::Arc,
-    time::Duration,
-};
+use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{BufMut, BytesMut};
 use log::trace;
 use rand::{thread_rng, Rng};
 use shadowsocks::{
-    config::ServerConfig,
+    config::{ServerConfig, ServerProtocol},
     context::SharedContext,
+    create_connector_then,
     net::{ConnectOpts, TcpStream as ShadowTcpStream, UdpSocket as ShadowUdpSocket},
-    relay::{tcprelay::ProxyClientStream, udprelay::ProxySocket, Address},
+    relay::{udprelay::ProxySocket, Address},
+    transport::StreamConnection,
+    ProxyClientStream,
 };
+
 #[cfg(unix)]
 use tokio::net::UnixStream;
 use tokio::{
@@ -31,6 +29,12 @@ use trust_dns_resolver::proto::{
     error::{ProtoError, ProtoErrorKind},
     op::Message,
 };
+
+#[cfg(feature = "trojan")]
+use shadowsocks::trojan;
+
+#[cfg(feature = "vless")]
+use shadowsocks::vless;
 
 use crate::net::{FlowStat, MonProxySocket, MonProxyStream};
 
@@ -49,7 +53,7 @@ pub enum DnsClient {
         stream: UnixStream,
     },
     TcpRemote {
-        stream: ProxyClientStream<MonProxyStream<ShadowTcpStream>>,
+        stream: Box<dyn StreamConnection>,
     },
     UdpRemote {
         socket: MonProxySocket,
@@ -85,10 +89,53 @@ impl DnsClient {
         connect_opts: &ConnectOpts,
         flow_stat: Arc<FlowStat>,
     ) -> io::Result<DnsClient> {
-        let stream = ProxyClientStream::connect_with_opts_map(context, svr_cfg, ns, connect_opts, |s| {
-            MonProxyStream::from_stream(s, flow_stat, None)
-        })
-        .await?;
+        let stream = create_connector_then!(Some(context.clone()), svr_cfg.connector_transport(), |connector| {
+            match svr_cfg.protocol() {
+                shadowsocks::config::ServerProtocol::SS(ss_cfg) => {
+                    let stream = ProxyClientStream::connect_with_opts_map(
+                        context,
+                        &connector,
+                        svr_cfg,
+                        ss_cfg,
+                        ns.clone(),
+                        connect_opts,
+                        |s| MonProxyStream::from_stream(s, flow_stat, None),
+                    )
+                    .await?;
+
+                    io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
+                }
+                #[cfg(feature = "trojan")]
+                shadowsocks::config::ServerProtocol::Trojan(trojan_cfg) => {
+                    let stream = trojan::ClientStream::connect_stream(
+                        &connector,
+                        svr_cfg,
+                        trojan_cfg,
+                        ns.clone(),
+                        connect_opts,
+                        |s| MonProxyStream::from_stream(s, flow_stat, None),
+                    )
+                    .await?;
+
+                    io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
+                }
+                #[cfg(feature = "vless")]
+                shadowsocks::config::ServerProtocol::Vless(vless_cfg) => {
+                    let stream = vless::ClientStream::connect_stream(
+                        &connector,
+                        svr_cfg,
+                        vless_cfg,
+                        ns.clone(),
+                        connect_opts,
+                        |s| MonProxyStream::from_stream(s, flow_stat, None),
+                    )
+                    .await?;
+
+                    io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
+                }
+            }
+        })?;
+
         Ok(DnsClient::TcpRemote { stream })
     }
 
@@ -100,7 +147,19 @@ impl DnsClient {
         connect_opts: &ConnectOpts,
         flow_stat: Arc<FlowStat>,
     ) -> io::Result<DnsClient> {
-        let socket = ProxySocket::connect_with_opts(context, svr_cfg, connect_opts).await?;
+        let socket = ProxySocket::connect_with_opts(
+            context,
+            svr_cfg,
+            match svr_cfg.protocol() {
+                ServerProtocol::SS(cfg) => cfg,
+                #[cfg(feature = "trojan")]
+                ServerProtocol::Trojan(_cfg) => unreachable!(),
+                #[cfg(feature = "vless")]
+                ServerProtocol::Vless(_cfg) => unreachable!(),
+            },
+            connect_opts,
+        )
+        .await?;
         let socket = MonProxySocket::from_socket(socket, flow_stat);
         Ok(DnsClient::UdpRemote { socket, ns })
     }
@@ -156,76 +215,13 @@ impl DnsClient {
     ///
     /// This will only work for TCP and UNIX Stream connections.
     /// UDP clients will always return `true`.
-    pub async fn check_connected(&mut self) -> bool {
-        #[cfg(unix)]
-        fn check_peekable<F: std::os::unix::io::AsRawFd>(fd: &mut F) -> bool {
-            let fd = fd.as_raw_fd();
-
-            unsafe {
-                let mut peek_buf = [0u8; 1];
-
-                let ret = libc::recv(
-                    fd,
-                    peek_buf.as_mut_ptr() as *mut libc::c_void,
-                    peek_buf.len(),
-                    libc::MSG_PEEK | libc::MSG_DONTWAIT,
-                );
-
-                match ret.cmp(&0) {
-                    // EOF, connection lost
-                    Ordering::Equal => false,
-                    // Data in buffer
-                    Ordering::Greater => true,
-                    Ordering::Less => {
-                        let err = io::Error::last_os_error();
-                        // EAGAIN, EWOULDBLOCK
-                        // Still connected.
-                        err.kind() == ErrorKind::WouldBlock
-                    }
-                }
-            }
-        }
-
-        #[cfg(windows)]
-        fn check_peekable<F: std::os::windows::io::AsRawSocket>(s: &mut F) -> bool {
-            use winapi::{
-                ctypes::{c_char, c_int},
-                um::winsock2::{recv, MSG_PEEK, SOCKET},
-            };
-
-            let sock = s.as_raw_socket() as SOCKET;
-
-            unsafe {
-                let mut peek_buf = [0u8; 1];
-
-                let ret = recv(
-                    sock,
-                    peek_buf.as_mut_ptr() as *mut c_char,
-                    peek_buf.len() as c_int,
-                    MSG_PEEK,
-                );
-
-                match ret.cmp(&0) {
-                    // EOF, connection lost
-                    Ordering::Equal => false,
-                    // Data in buffer
-                    Ordering::Greater => true,
-                    Ordering::Less => {
-                        let err = io::Error::last_os_error();
-                        // I have to trust the `s` have already set to non-blocking mode
-                        // Because windows doesn't have MSG_DONTWAIT
-                        err.kind() == ErrorKind::WouldBlock
-                    }
-                }
-            }
-        }
-
+    pub async fn check_connected(&self) -> bool {
         match *self {
-            DnsClient::TcpLocal { ref mut stream } => check_peekable(stream),
+            DnsClient::TcpLocal { ref stream } => stream.check_connected(),
             DnsClient::UdpLocal { .. } => true,
             #[cfg(unix)]
-            DnsClient::UnixStream { ref mut stream } => check_peekable(stream),
-            DnsClient::TcpRemote { ref mut stream } => check_peekable(stream.get_mut().get_mut()),
+            DnsClient::UnixStream { ref stream } => stream.check_connected(),
+            DnsClient::TcpRemote { ref stream } => stream.check_connected(),
             DnsClient::UdpRemote { .. } => true,
         }
     }

@@ -89,9 +89,27 @@ impl UdpSocket {
         Ok(UdpSocket(socket))
     }
 
+    pub async fn listen_server_with_opts(
+        context: &Context,
+        addr: &ServerAddr,
+        accept_opts: AcceptOpts,
+    ) -> io::Result<UdpSocket> {
+        match addr {
+            ServerAddr::SocketAddr(addr) => Self::listen_with_opts(addr, accept_opts).await,
+            ServerAddr::DomainName(domain, port) => Ok(lookup_then!(context, domain, *port, |addr| {
+                Self::listen_with_opts(&addr, accept_opts.clone()).await
+            })?
+            .1),
+        }
+    }
+
     /// Binds to a specific address with opts
     pub async fn connect_any_with_opts<AF: Into<AddrFamily>>(af: AF, opts: &ConnectOpts) -> io::Result<UdpSocket> {
         create_outbound_udp_socket(af.into(), opts).await.map(UdpSocket)
+    }
+
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.0.local_addr()
     }
 }
 

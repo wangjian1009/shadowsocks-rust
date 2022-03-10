@@ -26,16 +26,10 @@ pub struct Socks {
     udp_bind_addr: Option<ServerAddr>,
 }
 
-impl Default for Socks {
-    fn default() -> Self {
-        Socks::new()
-    }
-}
-
 impl Socks {
     /// Create a new SOCKS server with default configuration
     pub fn new() -> Socks {
-        let context = ServiceContext::new();
+        let context = ServiceContext::default();
         Socks::with_context(Arc::new(context))
     }
 

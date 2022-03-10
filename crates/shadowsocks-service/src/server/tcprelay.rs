@@ -1,6 +1,5 @@
 //! Shadowsocks TCP server
 
-use rand;
 use std::{
     future::Future,
     io::{self, ErrorKind},
@@ -11,19 +10,26 @@ use std::{
 
 use log::{debug, error, info, trace, warn};
 use shadowsocks::{
+    config::ServerProtocol,
     crypto::v1::CipherKind,
-    net::{AcceptOpts, TcpStream as BaseOutboundTcpStream},
+    net::{AcceptOpts, Destination},
     relay::{
         socks5::{Address, Error as Socks5Error},
         tcprelay::{utils::copy_encrypted_bidirectional, ProxyServerStream},
     },
     timeout::Sleep,
-    ProxyListener,
+    transport::{
+        direct::{TcpAcceptor, TcpConnector},
+        Acceptor,
+        Connection,
+        Connector,
+        StreamConnection,
+    },
+    ServerAddr,
     ServerConfig,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream as TokioTcpStream,
     sync::Mutex,
     time,
 };
@@ -32,19 +38,24 @@ use crate::net::{utils::ignore_until_end, MonProxyStream};
 
 use super::{connection::ConnectionInfo, context::ServiceContext};
 
-use cfg_if::cfg_if;
-cfg_if! {
-    if #[cfg(feature = "rate-limit")] {
-        use crate::net::RateLimiter;
-        type InboundTcpStream = crate::net::RateLimitedStream<TokioTcpStream>;
-        type OutboundTcpStream = crate::net::RateLimitedStream<BaseOutboundTcpStream>;
-    }
-    else {
-        type InboundTcpStream = TokioTcpStream;
-        type OutboundTcpStream = BaseOutboundTcpStream;
-    }
-}
+#[cfg(feature = "rate-limit")]
+use shadowsocks::transport::RateLimiter;
 
+#[cfg(feature = "transport")]
+use shadowsocks::config::TransportAcceptorConfig;
+
+#[cfg(feature = "transport-ws")]
+use shadowsocks::transport::websocket::WebSocketAcceptor;
+
+#[cfg(feature = "transport-tls")]
+use shadowsocks::transport::tls::TlsAcceptor;
+
+#[cfg(feature = "transport-mkcp")]
+use shadowsocks::net::UdpSocket;
+#[cfg(feature = "transport-mkcp")]
+use shadowsocks::transport::mkcp::MkcpAcceptor;
+
+use cfg_if::cfg_if;
 cfg_if! {
     if #[cfg(feature = "server-mock")] {
         use super::context::ServerMockProtocol;
@@ -54,24 +65,122 @@ cfg_if! {
     }
 }
 
+cfg_if! {
+    if #[cfg(feature = "vless")] {
+        use shadowsocks::{vless::InboundHandler};
+    }
+}
+
 pub struct TcpServer {
     context: Arc<ServiceContext>,
+    connector: Arc<TcpConnector>,
     accept_opts: AcceptOpts,
 }
 
 impl TcpServer {
-    pub fn new(context: Arc<ServiceContext>, accept_opts: AcceptOpts) -> TcpServer {
-        TcpServer { context, accept_opts }
+    pub fn new(context: Arc<ServiceContext>, connector: Arc<TcpConnector>, accept_opts: AcceptOpts) -> TcpServer {
+        TcpServer {
+            context,
+            connector,
+            accept_opts,
+        }
     }
 
     pub async fn run(self, svr_cfg: &ServerConfig) -> io::Result<()> {
-        let listener = ProxyListener::bind_with_opts(self.context.context(), svr_cfg, self.accept_opts).await?;
+        #[cfg(feature = "transport")]
+        match svr_cfg.acceptor_transport().as_ref() {
+            Some(ref transport) => match transport {
+                #[cfg(feature = "transport-ws")]
+                &TransportAcceptorConfig::Ws(ws_config) => {
+                    let listener = TcpAcceptor::bind_server_with_opts(
+                        self.context.context().as_ref(),
+                        svr_cfg.external_addr(),
+                        self.accept_opts.clone(),
+                    )
+                    .await?;
+                    let listener = WebSocketAcceptor::new(ws_config, listener);
+                    self.run_with_acceptor(listener, svr_cfg).await
+                }
+                #[cfg(feature = "transport-tls")]
+                &TransportAcceptorConfig::Tls(tls_config) => {
+                    let listener = TcpAcceptor::bind_server_with_opts(
+                        self.context.context().as_ref(),
+                        svr_cfg.external_addr(),
+                        self.accept_opts.clone(),
+                    )
+                    .await?;
+                    let listener = TlsAcceptor::new(tls_config, listener).await?;
+                    self.run_with_acceptor(listener, svr_cfg).await
+                }
+                #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+                &TransportAcceptorConfig::Wss(ws_config, tls_config) => {
+                    let listener = TcpAcceptor::bind_server_with_opts(
+                        self.context.context().as_ref(),
+                        svr_cfg.external_addr(),
+                        self.accept_opts.clone(),
+                    )
+                    .await?;
+                    let listener = TlsAcceptor::new(tls_config, listener).await?;
+                    let listener = WebSocketAcceptor::new(ws_config, listener);
+                    self.run_with_acceptor(listener, svr_cfg).await
+                }
+                #[cfg(feature = "transport-mkcp")]
+                &TransportAcceptorConfig::Mkcp(mkcp_config) => {
+                    let socket = UdpSocket::listen_server_with_opts(
+                        self.context.context().as_ref(),
+                        svr_cfg.external_addr(),
+                        self.accept_opts.clone(),
+                    )
+                    .await?;
+                    let r = Arc::new(socket);
+                    let w = r.clone();
+                    let local_addr = r.local_addr()?;
+                    let listener = MkcpAcceptor::new(Arc::new(mkcp_config.clone()), local_addr, r, w, None);
+                    self.run_with_acceptor(listener, svr_cfg).await
+                }
+            },
+            None => {
+                let listener = TcpAcceptor::bind_server_with_opts(
+                    self.context.context().as_ref(),
+                    svr_cfg.external_addr(),
+                    self.accept_opts.clone(),
+                )
+                .await?;
+                self.run_with_acceptor(listener, svr_cfg).await
+            }
+        }
 
+        #[cfg(not(feature = "transport"))]
+        {
+            let listener = TcpAcceptor::bind_server_with_opts(
+                self.context.context().as_ref(),
+                svr_cfg.external_addr(),
+                self.accept_opts.clone(),
+            )
+            .await?;
+
+            self.run_with_acceptor(listener, svr_cfg).await
+        }
+    }
+
+    async fn run_with_acceptor<A: Acceptor>(self, listener: A, svr_cfg: &ServerConfig) -> io::Result<()> {
         info!(
-            "shadowsocks tcp server listening on {}, inbound address {}",
+            "{} tcp server listening on {}{}, inbound address {}",
+            svr_cfg.protocol().name(),
             listener.local_addr().expect("listener.local_addr"),
-            svr_cfg.addr()
+            svr_cfg.acceptor_transport_tag(),
+            svr_cfg.addr(),
         );
+
+        cfg_if! {
+            if #[cfg(feature = "vless")] {
+                let mut vless_inbound = None;
+
+                if let ServerProtocol::Vless(cfg) = svr_cfg.protocol() {
+                    vless_inbound = Some(Arc::new(InboundHandler::new(cfg)?));
+                }
+            }
+        }
 
         loop {
             let flow_stat = self.context.flow_stat();
@@ -84,21 +193,32 @@ impl TcpServer {
             #[cfg(feature = "rate-limit")]
             let mut rate_limiter = None;
 
-            let (local_stream, peer_addr) = match listener
-                .accept_map(|s| {
-                    if let Some(cfg_idle_timeout) = svr_cfg.idle_timeout() {
-                        idle_timeout = Some(Arc::new(Mutex::new(Sleep::new(cfg_idle_timeout))));
-                    }
+            let (local_stream, peer_addr) = match listener.accept().await.map(|(s, addr)| {
+                #[allow(unused_mut)]
+                let mut s = match s {
+                    Connection::Stream(s) => s,
+                    Connection::Packet { .. } => unreachable!(),
+                };
 
-                    #[cfg(feature = "rate-limit")]
-                    if let Some(connection_bound_width) = connection_bound_width {
-                        let quota = connection_bound_width.to_quota_byte_per_second().unwrap();
-                        rate_limiter = Some(Arc::new(RateLimiter::new(quota)));
-                    }
+                let addr = match addr.unwrap() {
+                    ServerAddr::SocketAddr(addr) => addr,
+                    ServerAddr::DomainName(..) => unreachable!(),
+                };
 
-                    #[cfg(feature = "rate-limit")]
-                    let s = InboundTcpStream::from_stream(s, rate_limiter.clone());
+                if let Some(cfg_idle_timeout) = svr_cfg.idle_timeout() {
+                    idle_timeout = Some(Arc::new(Mutex::new(Sleep::new(cfg_idle_timeout))));
+                }
 
+                #[cfg(feature = "rate-limit")]
+                if let Some(connection_bound_width) = connection_bound_width {
+                    let quota = connection_bound_width.to_quota_byte_per_second().unwrap();
+                    rate_limiter = Some(Arc::new(RateLimiter::new(quota)));
+                }
+
+                #[cfg(feature = "rate-limit")]
+                s.set_rate_limit(rate_limiter.clone());
+
+                (
                     MonProxyStream::from_stream(
                         s,
                         flow_stat,
@@ -106,10 +226,10 @@ impl TcpServer {
                             Some(ref idle_timeout) => Some(idle_timeout.clone()),
                             None => None,
                         },
-                    )
-                })
-                .await
-            {
+                    ),
+                    addr,
+                )
+            }) {
                 Ok(s) => s,
                 Err(err) => {
                     error!("tcp server accept failed with error: {}", err);
@@ -154,10 +274,9 @@ impl TcpServer {
 
             let client = TcpServerClient {
                 context: self.context.clone(),
-                method: svr_cfg.method(),
+                connector: self.connector.clone(),
                 conn,
                 peer_addr,
-                stream: local_stream,
                 timeout: svr_cfg.timeout(),
                 request_recv_timeout: svr_cfg.request_recv_timeout().clone(),
                 idle_timeout,
@@ -166,19 +285,60 @@ impl TcpServer {
             };
 
             let connection_stat = connection_stat.clone();
-            tokio::spawn(async move {
-                let conn_id = client.conn.id;
+            let conn_id = client.conn.id;
 
-                if let Err(err) = client.serve().await {
-                    debug!("tcp server stream aborted with error: {}", err);
+            match svr_cfg.protocol() {
+                ServerProtocol::SS(ss_cfg) => {
+                    let local_stream = ProxyServerStream::from_stream(
+                        self.context.context(),
+                        local_stream,
+                        ss_cfg.method(),
+                        ss_cfg.key(),
+                    );
+                    let method = ss_cfg.method();
+                    tokio::spawn(async move {
+                        if let Err(err) = client.serve(method, local_stream).await {
+                            debug!("tcp server stream aborted with error: {}", err);
+                        }
+
+                        #[cfg(feature = "server-limit")]
+                        connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
+
+                        #[cfg(not(feature = "server-limit"))]
+                        connection_stat.remove_in_connection(&conn_id).await;
+                    });
                 }
+                #[cfg(feature = "trojan")]
+                ServerProtocol::Trojan(cfg) => {
+                    let hash = cfg.hash().clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = client.serve_trojan(&hash, local_stream).await {
+                            debug!("tcp server stream aborted with error: {}", err);
+                        }
 
-                #[cfg(feature = "server-limit")]
-                connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
+                        #[cfg(feature = "server-limit")]
+                        connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
 
-                #[cfg(not(feature = "server-limit"))]
-                connection_stat.remove_in_connection(&conn_id).await;
-            });
+                        #[cfg(not(feature = "server-limit"))]
+                        connection_stat.remove_in_connection(&conn_id).await;
+                    });
+                }
+                #[cfg(feature = "vless")]
+                ServerProtocol::Vless(..) => {
+                    let inbound = vless_inbound.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = client.serve_vless(inbound.unwrap(), local_stream).await {
+                            debug!("tcp server stream aborted with error: {}", err);
+                        }
+
+                        #[cfg(feature = "server-limit")]
+                        connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
+
+                        #[cfg(not(feature = "server-limit"))]
+                        connection_stat.remove_in_connection(&conn_id).await;
+                    });
+                }
+            }
         }
     }
 }
@@ -199,10 +359,9 @@ where
 
 struct TcpServerClient {
     context: Arc<ServiceContext>,
-    method: CipherKind,
+    connector: Arc<TcpConnector>,
     conn: Arc<ConnectionInfo>,
     peer_addr: SocketAddr,
-    stream: ProxyServerStream<MonProxyStream<InboundTcpStream>>,
     timeout: Option<Duration>,
     request_recv_timeout: Option<Duration>,
     idle_timeout: Option<Arc<Mutex<Sleep>>>,
@@ -211,7 +370,10 @@ struct TcpServerClient {
 }
 
 impl TcpServerClient {
-    async fn serve(mut self) -> io::Result<()> {
+    async fn serve<IS>(self, method: CipherKind, mut stream: ProxyServerStream<MonProxyStream<IS>>) -> io::Result<()>
+    where
+        IS: StreamConnection,
+    {
         let connection_stat = self.context.connection_stat();
 
         let mut request_timeout = None;
@@ -220,8 +382,8 @@ impl TcpServerClient {
         }
 
         let target_addr = match match request_timeout {
-            None => Address::read_from(&mut self.stream).await,
-            Some(d) => match time::timeout(d, Address::read_from(&mut self.stream)).await {
+            None => Address::read_from(&mut stream).await,
+            Some(d) => match time::timeout(d, Address::read_from(&mut stream)).await {
                 Ok(r) => r,
                 Err(..) => Err(Socks5Error::IoError(ErrorKind::TimedOut.into())),
             },
@@ -247,7 +409,7 @@ impl TcpServerClient {
                 // Otherwise it will keep reporting decryption error before reaching EOF.
                 //
                 // Note: This will drop all data in the decryption buffer, which is no going back.
-                let mut stream = self.stream.into_inner();
+                let mut stream = stream.into_inner();
 
                 let res = ignore_until_end(&mut stream).await;
 
@@ -272,7 +434,7 @@ impl TcpServerClient {
         match self.context.mock_server_protocol(&target_addr) {
             Some(protocol) => match protocol {
                 ServerMockProtocol::DNS => {
-                    let (mut r, mut w) = self.stream.into_split();
+                    let (mut r, mut w) = tokio::io::split(stream);
                     run_dns_tcp_stream(
                         self.context.dns_resolver(),
                         &self.peer_addr,
@@ -295,18 +457,18 @@ impl TcpServerClient {
             return Ok(());
         }
 
-        #[allow(unused_mut)]
+        let destination = Destination::Tcp(target_addr.clone().into());
+
         let mut remote_stream = match timeout_fut(
             self.timeout,
-            BaseOutboundTcpStream::connect_remote_with_opts(
-                self.context.context_ref(),
-                &target_addr,
-                self.context.connect_opts_ref(),
-            ),
+            self.connector.connect(&destination, self.context.connect_opts_ref()),
         )
         .await
         {
-            Ok(s) => s,
+            Ok(s) => match s {
+                Connection::Stream(s) => s,
+                Connection::Packet { .. } => unreachable!(),
+            },
             Err(err) => {
                 error!(
                     "tcp tunnel {} -> {} connect failed, error: {}",
@@ -317,8 +479,9 @@ impl TcpServerClient {
         };
 
         #[cfg(feature = "rate-limit")]
-        let mut remote_stream = OutboundTcpStream::from_stream(remote_stream, self.rate_limiter);
+        remote_stream.set_rate_limit(self.rate_limiter);
 
+        // let mut remote_stream = OutboundTcpStream::from_stream(remote_stream, self.rate_limiter);
         let _out_guard = connection_stat.add_out_connection();
 
         // https://github.com/shadowsocks/shadowsocks-rust/issues/232
@@ -328,7 +491,7 @@ impl TcpServerClient {
         // Wait at most 500ms, and then sends handshake packet to remote servers.
         if self.context.connect_opts_ref().tcp.fastopen {
             let mut buffer = [0u8; 8192];
-            match time::timeout(Duration::from_millis(500), self.stream.read(&mut buffer)).await {
+            match time::timeout(Duration::from_millis(500), stream.read(&mut buffer)).await {
                 Ok(Ok(0)) => {
                     // EOF. Just terminate right here.
                     return Ok(());
@@ -358,8 +521,7 @@ impl TcpServerClient {
             self.context.connect_opts_ref()
         );
 
-        match copy_encrypted_bidirectional(self.method, &mut self.stream, &mut remote_stream, &self.idle_timeout).await
-        {
+        match copy_encrypted_bidirectional(method, &mut stream, &mut remote_stream, &self.idle_timeout).await {
             Ok((rn, wn)) => {
                 trace!(
                     "tcp tunnel {} <-> {} closed, L2R {} bytes, R2L {} bytes",
@@ -382,3 +544,9 @@ impl TcpServerClient {
         Ok(())
     }
 }
+
+#[cfg(feature = "trojan")]
+mod trojan;
+
+#[cfg(feature = "vless")]
+mod vless;

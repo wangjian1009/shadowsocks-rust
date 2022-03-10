@@ -11,7 +11,7 @@ use shadowsocks_service::local::dns::NameServerAddr;
 use shadowsocks_service::shadowsocks::{relay::socks5::Address, ManagerAddr, ServerAddr, ServerConfig};
 
 #[cfg(feature = "rate-limit")]
-use shadowsocks_service::net::BoundWidth;
+use shadowsocks_service::shadowsocks::transport::BoundWidth;
 
 macro_rules! validate_type {
     ($name:ident, $ty:ty, $help:expr) => {
@@ -68,5 +68,35 @@ pub fn validate_ipnet(v: String) -> Result<(), String> {
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(feature = "transport")]
+pub fn validate_transport_connector(v: String) -> Result<(), String> {
+    use shadowsocks_service::shadowsocks::config::TransportConnectorConfig;
+
+    match v.parse::<TransportConnectorConfig>() {
+        Ok(..) => Ok(()),
+        Err(e) => Err(format!("transport(connector) format error: {}", e)),
+    }
+}
+
+#[cfg(feature = "transport")]
+pub fn validate_transport_acceptor(v: String) -> Result<(), String> {
+    use shadowsocks_service::shadowsocks::config::TransportAcceptorConfig;
+
+    match v.parse::<TransportAcceptorConfig>() {
+        Ok(..) => Ok(()),
+        Err(e) => Err(format!("transport(acceptor) format error: {}", e)),
+    }
+}
+
+#[cfg(feature = "vless")]
+pub fn validate_uuid(v: String) -> Result<(), String> {
+    use shadowsocks_service::shadowsocks::vless::UUID;
+
+    match v.parse::<UUID>() {
+        Ok(_id) => Ok(()),
+        Err(err) => Err(format!("vless UUID format error: {}", err)),
     }
 }

@@ -34,6 +34,10 @@ use super::{
 pub struct TcpStream(#[pin] SysTcpStream);
 
 impl TcpStream {
+    pub fn new(inner: tokio::net::TcpStream) -> TcpStream {
+        TcpStream(SysTcpStream::new(inner))
+    }
+
     /// Connects to address
     pub async fn connect_with_opts(addr: &SocketAddr, opts: &ConnectOpts) -> io::Result<TcpStream> {
         // tcp_stream_connect(addr, opts).await.map(TcpStream)

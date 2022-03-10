@@ -7,17 +7,21 @@ use std::{
 };
 
 use log::{debug, error, trace, warn};
-use shadowsocks::config::Mode;
+use shadowsocks::{config::Mode, create_connector_then};
 use tokio::{
     io::{AsyncWriteExt, BufReader},
     net::TcpStream,
 };
 
-use crate::local::{
-    context::ServiceContext,
-    loadbalancing::PingBalancer,
-    net::AutoProxyClientStream,
-    utils::establish_tcp_tunnel,
+use crate::{
+    auto_proxy_then,
+    connect_server_then,
+    local::{
+        context::ServiceContext,
+        loadbalancing::PingBalancer,
+        net::AutoProxyClientStream,
+        utils::establish_tcp_tunnel,
+    },
 };
 
 use crate::local::socks::socks4::{
@@ -97,53 +101,56 @@ impl Socks4TcpHandler {
 
         let server = self.balancer.best_tcp_server();
         let svr_cfg = server.server_config();
-        let target_addr = target_addr.into();
+        let target_addr: shadowsocks::relay::socks5::Address = target_addr.into();
 
-        let mut remote = match AutoProxyClientStream::connect(self.context.clone(), &server, &target_addr).await {
-            Ok(remote) => {
-                // Tell the client that we are ready
-                let handshake_rsp = HandshakeResponse::new(ResultCode::RequestGranted);
-                handshake_rsp.write_to(&mut stream).await?;
+        auto_proxy_then!(self.context, server.as_ref(), target_addr, |remote| {
+            let mut remote = match remote {
+                Ok(remote) => {
+                    // Tell the client that we are ready
+                    let handshake_rsp = HandshakeResponse::new(ResultCode::RequestGranted);
+                    handshake_rsp.write_to(&mut stream).await?;
 
-                trace!("sent header: {:?}", handshake_rsp);
+                    trace!("sent header: {:?}", handshake_rsp);
 
-                remote
+                    remote
+                }
+                Err(err) => {
+                    let result_code = match err.kind() {
+                        ErrorKind::ConnectionRefused => ResultCode::RequestRejectedCannotConnect,
+                        ErrorKind::ConnectionAborted => ResultCode::RequestRejectedCannotConnect,
+                        _ => ResultCode::RequestRejectedOrFailed,
+                    };
+
+                    let handshake_rsp = HandshakeResponse::new(result_code);
+                    handshake_rsp.write_to(&mut stream).await?;
+
+                    return Err(err);
+                }
+            };
+
+            // NOTE: Transfer all buffered data before unwrap, or these data will be lost
+            let buffer = stream.buffer();
+            if !buffer.is_empty() {
+                remote.write_all(buffer).await?;
             }
-            Err(err) => {
-                let result_code = match err.kind() {
-                    ErrorKind::ConnectionRefused => ResultCode::RequestRejectedCannotConnect,
-                    ErrorKind::ConnectionAborted => ResultCode::RequestRejectedCannotConnect,
-                    _ => ResultCode::RequestRejectedOrFailed,
-                };
 
-                let handshake_rsp = HandshakeResponse::new(result_code);
-                handshake_rsp.write_to(&mut stream).await?;
+            // UNWRAP.
+            #[allow(unused_mut)]
+            let mut stream = stream.into_inner();
 
-                return Err(err);
-            }
-        };
+            #[cfg(feature = "rate-limit")]
+            let mut stream =
+                shadowsocks::transport::RateLimitedStream::from_stream(stream, self.context.rate_limiter());
 
-        // NOTE: Transfer all buffered data before unwrap, or these data will be lost
-        let buffer = stream.buffer();
-        if !buffer.is_empty() {
-            remote.write_all(buffer).await?;
-        }
-
-        // UNWRAP.
-        #[allow(unused_mut)]
-        let mut stream = stream.into_inner();
-
-        #[cfg(feature = "rate-limit")]
-        let mut stream = crate::net::RateLimitedStream::from_stream(stream, self.context.rate_limiter());
-
-        establish_tcp_tunnel(
-            self.context.as_ref(),
-            svr_cfg,
-            &mut stream,
-            &mut remote,
-            peer_addr,
-            &target_addr,
-        )
-        .await
+            establish_tcp_tunnel(
+                self.context.as_ref(),
+                svr_cfg,
+                &mut stream,
+                &mut remote,
+                peer_addr,
+                &target_addr,
+            )
+            .await
+        })
     }
 }

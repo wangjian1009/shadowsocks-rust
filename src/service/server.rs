@@ -12,17 +12,26 @@ use shadowsocks_service::{
     config::{read_variable_field_value, Config, ConfigType, ManagerConfig},
     run_server,
     shadowsocks::{
-        config::{ManagerAddr, Mode, ServerAddr, ServerConfig},
+        config::{ManagerAddr, Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::v1::{available_ciphers, CipherKind},
         plugin::PluginConfig,
     },
 };
 
 #[cfg(feature = "rate-limit")]
-use shadowsocks_service::net::BoundWidth;
+use shadowsocks_service::shadowsocks::transport::BoundWidth;
+
+#[cfg(feature = "transport")]
+use shadowsocks_service::shadowsocks::config::TransportAcceptorConfig;
 
 #[cfg(feature = "server-mock")]
 use shadowsocks_service::shadowsocks::relay::socks5::Address;
+
+#[cfg(feature = "trojan")]
+use shadowsocks_service::shadowsocks::config::TrojanConfig;
+
+#[cfg(feature = "vless")]
+use shadowsocks_service::shadowsocks::config::VlessConfig;
 
 #[cfg(feature = "logging")]
 use crate::logging;
@@ -70,6 +79,21 @@ pub fn define_command_line_options<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
         (@arg OUTBOUND_RECV_BUFFER_SIZE: --("outbound-recv-buffer-size") +takes_value {validator::validate_u32} "Set outbound sockets' SO_RCVBUF option")
     );
 
+    #[cfg(feature = "vless")]
+    {
+        app = clap_app!(@app (app)
+            (@arg PROTOCOL_VLESS: --vless requires[SERVER_ADDR] "Use vless protocol")
+            (@arg VLESS_USER: --("vless-user") +takes_value requires[PROTOCOL_VLESS] {validator::validate_uuid} "Vless's users")
+        );
+    }
+
+    #[cfg(feature = "trojan")]
+    {
+        app = clap_app!(@app (app)
+            (@arg PROTOCOL_TROJAN: --trojan requires[SERVER_ADDR] "Use trojan protocol")
+        );
+    }
+
     #[cfg(feature = "logging")]
     {
         app = clap_app!(@app (app)
@@ -113,6 +137,13 @@ pub fn define_command_line_options<'a, 'b>(app: App<'a, 'b>) -> App<'a, 'b> {
     {
         app = clap_app!(@app (app)
             (@arg MAINTAIN_ADDR: --("maintain-addr") +takes_value {validator::validate_server_addr} "Maintain server address")
+        );
+    }
+
+    #[cfg(feature = "transport")]
+    {
+        app = clap_app!(@app (app)
+             (@arg TRANSPORT: --("transport") +takes_value {validator::validate_transport_acceptor} "transport settings")
         );
     }
 
@@ -212,8 +243,52 @@ pub fn main(matches: &ArgMatches<'_>) {
                 }
             };
 
-            let method = clap::value_t_or_exit!(matches.value_of("ENCRYPT_METHOD"), CipherKind);
+            let mut protocol = None;
+
+            #[cfg(feature = "vless")]
+            if protocol.is_none() && matches.is_present("PROTOCOL_VLESS") {
+                let mut vless_cfg = VlessConfig::new();
+
+                match clap::value_t!(matches.value_of("VLESS_USER"), String) {
+                    Ok(uuid) => {
+                        vless_cfg.add_user(0, uuid.as_str(), None).unwrap();
+                    }
+                    Err(err) => {
+                        eprintln!("missing `vless-user`, {}", err);
+                        return;
+                    }
+                };
+
+                protocol = Some(ServerProtocol::Vless(vless_cfg));
+            }
+
+            #[cfg(feature = "trojan")]
+            if protocol.is_none() && matches.is_present("PROTOCOL_TROJAN") {
+                let password = match clap::value_t!(matches.value_of("PASSWORD"), String) {
+                    Ok(pwd) => read_variable_field_value(&pwd).into(),
+                    Err(err) => {
+                        // NOTE: svr_addr should have been checked by crate::validator
+                        match crate::password::read_server_password(svr_addr) {
+                            Ok(pwd) => pwd,
+                            Err(..) => err.exit(),
+                        }
+                    }
+                };
+
+                protocol = Some(ServerProtocol::Trojan(TrojanConfig::new(password)));
+            }
+
+            if protocol.is_none() {
+                protocol = Some(ServerProtocol::SS(ShadowsocksConfig::new(
+                    password,
+                    clap::value_t_or_exit!(matches.value_of("ENCRYPT_METHOD"), CipherKind),
+                )));
+            };
+
             let svr_addr = svr_addr.parse::<ServerAddr>().expect("server-addr");
+
+            let mut sc = ServerConfig::new(svr_addr, protocol.unwrap());
+
             let timeout = match clap::value_t!(matches.value_of("TIMEOUT"), u64) {
                 Ok(t) => Some(Duration::from_secs(t)),
                 Err(ref err) if err.kind == ClapErrorKind::ArgumentNotFound => None,
@@ -230,7 +305,6 @@ pub fn main(matches: &ArgMatches<'_>) {
                 .map(|t| t.parse::<u64>().expect("idle-timeout"))
                 .map(Duration::from_secs);
 
-            let mut sc = ServerConfig::new(svr_addr, password, method);
             if let Some(timeout) = timeout {
                 sc.set_timeout(timeout);
             }
@@ -273,6 +347,18 @@ pub fn main(matches: &ArgMatches<'_>) {
 
         if matches.is_present("TCP_FAST_OPEN") {
             config.fast_open = true;
+        }
+
+        #[cfg(feature = "transport")]
+        if let Some(transport) = matches.value_of("TRANSPORT") {
+            let acceptor_transport = transport
+                .parse::<TransportAcceptorConfig>()
+                .expect("transport format error");
+
+            config
+                .server
+                .iter_mut()
+                .for_each(|c| c.set_acceptor_transport(Some(acceptor_transport.clone())))
         }
 
         #[cfg(feature = "rate-limit")]

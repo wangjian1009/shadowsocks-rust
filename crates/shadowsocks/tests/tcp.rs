@@ -1,8 +1,4 @@
-use std::{
-    io::{self},
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{io, net::SocketAddr, sync::Arc};
 
 use byte_string::ByteStr;
 use futures::future;
@@ -14,7 +10,7 @@ use tokio::{
 };
 
 use shadowsocks::{
-    config::{ServerConfig, ServerType},
+    config::{ServerConfig, ServerProtocol, ServerType, ShadowsocksConfig},
     context::Context,
     crypto::v1::CipherKind,
     relay::{
@@ -24,13 +20,19 @@ use shadowsocks::{
             utils::{copy_from_encrypted, copy_to_encrypted},
         },
     },
+    transport::{
+        direct::{TcpAcceptor, TcpConnector},
+        Acceptor,
+        Connection,
+        Connector,
+        StreamConnection,
+    },
     ProxyClientStream,
-    ProxyListener,
 };
 
-async fn handle_tcp_tunnel_server_client(
+async fn handle_tcp_tunnel_server_client<S: StreamConnection>(
     method: CipherKind,
-    mut stream: ProxyServerStream<TcpStream>,
+    mut stream: ProxyServerStream<S>,
 ) -> io::Result<()> {
     let addr = Address::read_from(&mut stream).await?;
 
@@ -44,7 +46,7 @@ async fn handle_tcp_tunnel_server_client(
         remote
     };
 
-    let (mut sr, mut sw) = stream.into_split();
+    let (mut sr, mut sw) = tokio::io::split(stream);
     let (mut mr, mut mw) = remote.split();
 
     let l2r = copy_from_encrypted(method, &mut sr, &mut mw, None);
@@ -60,20 +62,37 @@ async fn handle_tcp_tunnel_server_client(
     Ok(())
 }
 
-async fn handle_tcp_tunnel_local_client(
+async fn handle_tcp_tunnel_local_client<C: Connector>(
     context: Arc<Context>,
+    connector: Arc<C>,
     svr_cfg: Arc<ServerConfig>,
     mut stream: TcpStream,
 ) -> io::Result<()> {
     let target_addr = Address::from(("www.example.com".to_owned(), 80));
 
-    let remote = ProxyClientStream::connect(context, &svr_cfg, target_addr).await?;
+    let remote = ProxyClientStream::connect(
+        context,
+        connector.as_ref(),
+        &svr_cfg,
+        if let ServerProtocol::SS(c) = svr_cfg.protocol() {
+            c
+        } else {
+            unreachable!()
+        },
+        target_addr,
+    )
+    .await?;
 
     let (mut lr, mut lw) = stream.split();
-    let (mut sr, mut sw) = remote.into_split();
+    let (mut sr, mut sw) = tokio::io::split(remote);
 
-    let l2s = copy_to_encrypted(svr_cfg.method(), &mut lr, &mut sw, None);
-    let s2l = copy_from_encrypted(svr_cfg.method(), &mut sr, &mut lw, None);
+    let svr_ss_cfg = if let ServerProtocol::SS(c) = svr_cfg.protocol() {
+        c
+    } else {
+        unreachable!()
+    };
+    let l2s = copy_to_encrypted(svr_ss_cfg.method(), &mut lr, &mut sw, None);
+    let s2l = copy_from_encrypted(svr_ss_cfg.method(), &mut sr, &mut lw, None);
 
     tokio::pin!(l2s);
     tokio::pin!(s2l);
@@ -91,11 +110,15 @@ async fn tcp_tunnel_example(
     password: &str,
     method: CipherKind,
 ) -> io::Result<()> {
-    let svr_cfg_server = ServerConfig::new(server_addr, password, method);
+    let svr_cfg_server = ServerConfig::new(
+        server_addr,
+        ServerProtocol::SS(ShadowsocksConfig::new(password, method)),
+    );
     let svr_cfg_local = svr_cfg_server.clone();
 
     let ctx_server = Context::new_shared(ServerType::Server);
     let ctx_local = Context::new_shared(ServerType::Local);
+    let connector_local = Arc::new(TcpConnector::new(Some(ctx_local.clone())));
 
     let barrier_server = Arc::new(Barrier::new(3));
     let barrier_local = barrier_server.clone();
@@ -103,15 +126,32 @@ async fn tcp_tunnel_example(
 
     tokio::spawn(async move {
         let svr_cfg_server = Arc::new(svr_cfg_server);
+        let ss_cfg = if let ServerProtocol::SS(c) = svr_cfg_server.protocol() {
+            c
+        } else {
+            unreachable!()
+        };
 
-        let listener = ProxyListener::bind(ctx_server, &svr_cfg_server).await.unwrap();
+        let listener = TcpAcceptor::bind_server(ctx_server.as_ref(), svr_cfg_server.external_addr())
+            .await
+            .unwrap();
+        // let listener = ProxyListener::from_listener(ctx_server, listener, &svr_cfg_server);
         info!("server listening on {}", listener.local_addr().unwrap());
 
         barrier_server.wait().await;
 
         while let Ok((stream, peer_addr)) = listener.accept().await {
+            let peer_addr = peer_addr.unwrap();
+
+            let stream = match stream {
+                Connection::Stream(stream) => stream,
+                Connection::Packet { .. } => unreachable!(),
+            };
+
             info!("server accepted stream {}", peer_addr);
-            tokio::spawn(handle_tcp_tunnel_server_client(svr_cfg_server.method(), stream));
+
+            let stream = ProxyServerStream::from_stream(ctx_server.clone(), stream, ss_cfg.method(), ss_cfg.key());
+            tokio::spawn(handle_tcp_tunnel_server_client(ss_cfg.method(), stream));
         }
     });
 
@@ -127,8 +167,9 @@ async fn tcp_tunnel_example(
             info!("local accepted stream {}", peer_addr);
 
             let context = ctx_local.clone();
+            let connector = connector_local.clone();
             let svr_cfg = svr_cfg_local.clone();
-            tokio::spawn(handle_tcp_tunnel_local_client(context, svr_cfg, stream));
+            tokio::spawn(handle_tcp_tunnel_local_client(context, connector, svr_cfg, stream));
         }
     });
 

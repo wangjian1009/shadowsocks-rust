@@ -65,10 +65,20 @@ use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "local-tunnel", feature = "local-dns", feature = "server-mock"))]
 use shadowsocks::relay::socks5::Address;
 use shadowsocks::{
-    config::{ManagerAddr, Mode, ReplayAttackPolicy, ServerAddr, ServerConfig, ServerWeight},
+    config::{
+        ManagerAddr,
+        Mode,
+        ReplayAttackPolicy,
+        ServerAddr,
+        ServerConfig,
+        ServerProtocol,
+        ServerWeight,
+        ShadowsocksConfig,
+    },
     crypto::v1::CipherKind,
     plugin::PluginConfig,
 };
+
 #[cfg(feature = "trust-dns")]
 use trust_dns_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 
@@ -77,7 +87,7 @@ use crate::acl::AccessControl;
 use crate::local::dns::NameServerAddr;
 
 #[cfg(feature = "rate-limit")]
-use crate::net::BoundWidth;
+use shadowsocks::transport::BoundWidth;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
@@ -971,6 +981,7 @@ pub struct BalancerConfig {
 pub struct Config {
     /// Remote ShadowSocks server configurations
     pub server: Vec<ServerConfig>,
+
     /// Local server configuration
     pub local: Vec<LocalConfig>,
 
@@ -1141,6 +1152,7 @@ impl Config {
     pub fn new(config_type: ConfigType) -> Config {
         Config {
             server: Vec::new(),
+
             local: Vec::new(),
 
             dns: DnsConfig::default(),
@@ -1481,7 +1493,7 @@ impl Config {
                 // Only "password" support getting from environment variable.
                 let password = read_variable_field_value(&pwd);
 
-                let mut nsvr = ServerConfig::new(addr, password, method);
+                let mut nsvr = ServerConfig::new(addr, ServerProtocol::SS(ShadowsocksConfig::new(password, method)));
                 nsvr.set_mode(global_mode);
 
                 if let Some(ref p) = config.plugin {
@@ -1551,7 +1563,7 @@ impl Config {
                 // Only "password" support getting from environment variable.
                 let password = read_variable_field_value(&svr.password);
 
-                let mut nsvr = ServerConfig::new(addr, password, method);
+                let mut nsvr = ServerConfig::new(addr, ServerProtocol::SS(ShadowsocksConfig::new(password, method)));
 
                 match svr.mode {
                     Some(mode) => match mode.parse::<Mode>() {
@@ -2169,8 +2181,18 @@ impl fmt::Display for Config {
                     ServerAddr::SocketAddr(ref sa) => sa.port(),
                     ServerAddr::DomainName(.., port) => port,
                 });
-                jconf.method = Some(svr.method().to_string());
-                jconf.password = Some(svr.password().to_string());
+
+                match svr.protocol() {
+                    ServerProtocol::SS(cfg) => {
+                        jconf.method = Some(cfg.method().to_string());
+                        jconf.password = Some(cfg.password().to_string());
+                    }
+                    #[cfg(feature = "trojan")]
+                    ServerProtocol::Trojan(_cfg) => {}
+                    #[cfg(feature = "vless")]
+                    ServerProtocol::Vless(_cfg) => {}
+                }
+
                 jconf.plugin = svr.plugin().map(|p| p.plugin.to_string());
                 jconf.plugin_opts = svr.plugin().and_then(|p| p.plugin_opts.clone());
                 jconf.plugin_args = svr.plugin().and_then(|p| {
@@ -2197,8 +2219,20 @@ impl fmt::Display for Config {
                             ServerAddr::SocketAddr(ref sa) => sa.port(),
                             ServerAddr::DomainName(.., port) => port,
                         },
-                        password: svr.password().to_string(),
-                        method: svr.method().to_string(),
+                        password: match svr.protocol() {
+                            ServerProtocol::SS(cfg) => cfg.password().to_string(),
+                            #[cfg(feature = "trojan")]
+                            ServerProtocol::Trojan(..) => unreachable!(),
+                            #[cfg(feature = "vless")]
+                            ServerProtocol::Vless(..) => unreachable!(),
+                        },
+                        method: match svr.protocol() {
+                            ServerProtocol::SS(cfg) => cfg.method().to_string(),
+                            #[cfg(feature = "trojan")]
+                            ServerProtocol::Trojan(..) => unreachable!(),
+                            #[cfg(feature = "vless")]
+                            ServerProtocol::Vless(..) => unreachable!(),
+                        },
                         disabled: None,
                         plugin: svr.plugin().map(|p| p.plugin.to_string()),
                         plugin_opts: svr.plugin().and_then(|p| p.plugin_opts.clone()),
