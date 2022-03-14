@@ -150,6 +150,9 @@ struct SSConfig {
     plugin_args: Option<Vec<String>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    network: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1466,66 +1469,80 @@ impl Config {
             }
         }
 
-        // Standard config
-        // Server
-        match (config.server, config.server_port, config.password, &config.method) {
-            (Some(address), Some(port), Some(pwd), Some(m)) => {
-                let addr = match address.parse::<Ipv4Addr>() {
-                    Ok(v4) => ServerAddr::SocketAddr(SocketAddr::V4(SocketAddrV4::new(v4, port))),
-                    Err(..) => match address.parse::<Ipv6Addr>() {
-                        Ok(v6) => ServerAddr::SocketAddr(SocketAddr::V6(SocketAddrV6::new(v6, port, 0, 0))),
-                        Err(..) => ServerAddr::DomainName(address, port),
-                    },
-                };
+        if let Some(network) = config.network {
+            let mut nsvr = ServerConfig::from_str(network.as_str())
+                .map_err(|e| Error::new(ErrorKind::Invalid, "network parse error", Some(e.to_string())))?;
 
-                let method = match m.parse::<CipherKind>() {
-                    Ok(m) => m,
-                    Err(..) => {
-                        let err = Error::new(
-                            ErrorKind::Invalid,
-                            "unsupported method",
-                            Some(format!("`{}` is not a supported method", m)),
-                        );
-                        return Err(err);
-                    }
-                };
+            nsvr.set_mode(global_mode);
 
-                // Only "password" support getting from environment variable.
-                let password = read_variable_field_value(&pwd);
-
-                let mut nsvr = ServerConfig::new(addr, ServerProtocol::SS(ShadowsocksConfig::new(password, method)));
-                nsvr.set_mode(global_mode);
-
-                if let Some(ref p) = config.plugin {
-                    // SIP008 allows "plugin" to be an empty string
-                    // Empty string implies "no plugin"
-                    if !p.is_empty() {
-                        let plugin = PluginConfig {
-                            plugin: p.clone(),
-                            plugin_opts: config.plugin_opts.clone(),
-                            plugin_args: config.plugin_args.clone().unwrap_or_default(),
-                        };
-                        nsvr.set_plugin(plugin);
-                    }
-                }
-
-                if let Some(timeout) = config.timeout.map(Duration::from_secs) {
-                    nsvr.set_timeout(timeout);
-                }
-
-                nconfig.server.push(nsvr);
+            if let Some(timeout) = config.timeout.map(Duration::from_secs) {
+                nsvr.set_timeout(timeout);
             }
-            (None, None, None, Some(_)) if config_type.is_manager() => {
-                // Set the default method for manager
-            }
-            (None, None, None, None) => (),
-            _ => {
-                let err = Error::new(
-                    ErrorKind::Malformed,
-                    "`server`, `server_port`, `method`, `password` must be provided together",
-                    None,
-                );
-                return Err(err);
+
+            nconfig.server.push(nsvr);
+        } else {
+            // Standard config
+            // Server
+            match (config.server, config.server_port, config.password, &config.method) {
+                (Some(address), Some(port), Some(pwd), Some(m)) => {
+                    let addr = match address.parse::<Ipv4Addr>() {
+                        Ok(v4) => ServerAddr::SocketAddr(SocketAddr::V4(SocketAddrV4::new(v4, port))),
+                        Err(..) => match address.parse::<Ipv6Addr>() {
+                            Ok(v6) => ServerAddr::SocketAddr(SocketAddr::V6(SocketAddrV6::new(v6, port, 0, 0))),
+                            Err(..) => ServerAddr::DomainName(address, port),
+                        },
+                    };
+
+                    let method = match m.parse::<CipherKind>() {
+                        Ok(m) => m,
+                        Err(..) => {
+                            let err = Error::new(
+                                ErrorKind::Invalid,
+                                "unsupported method",
+                                Some(format!("`{}` is not a supported method", m)),
+                            );
+                            return Err(err);
+                        }
+                    };
+
+                    // Only "password" support getting from environment variable.
+                    let password = read_variable_field_value(&pwd);
+
+                    let mut nsvr =
+                        ServerConfig::new(addr, ServerProtocol::SS(ShadowsocksConfig::new(password, method)));
+                    nsvr.set_mode(global_mode);
+
+                    if let Some(ref p) = config.plugin {
+                        // SIP008 allows "plugin" to be an empty string
+                        // Empty string implies "no plugin"
+                        if !p.is_empty() {
+                            let plugin = PluginConfig {
+                                plugin: p.clone(),
+                                plugin_opts: config.plugin_opts.clone(),
+                                plugin_args: config.plugin_args.clone().unwrap_or_default(),
+                            };
+                            nsvr.set_plugin(plugin);
+                        }
+                    }
+
+                    if let Some(timeout) = config.timeout.map(Duration::from_secs) {
+                        nsvr.set_timeout(timeout);
+                    }
+
+                    nconfig.server.push(nsvr);
+                }
+                (None, None, None, Some(_)) if config_type.is_manager() => {
+                    // Set the default method for manager
+                }
+                (None, None, None, None) => (),
+                _ => {
+                    let err = Error::new(
+                        ErrorKind::Malformed,
+                        "`server`, `server_port`, `method`, `password` must be provided together",
+                        None,
+                    );
+                    return Err(err);
+                }
             }
         }
 
