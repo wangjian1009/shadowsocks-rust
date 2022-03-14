@@ -650,13 +650,26 @@ where
         let receiving_worker = Arc::new(ReceivingWorker::new(context.clone()));
         let sending_worker = Arc::new(SendingWorker::new(context.clone()));
 
-        let output_task = Self::start_output_task(
-            context.clone(),
-            receiving_worker.clone(),
-            sending_worker.clone(),
-            data_receiver,
-            ping_receiver,
-        );
+        let output_task = {
+            let data_update_interval = Duration::from_millis(context.config.tti as u64);
+            let ping_update_interval = Duration::from_secs(5); // 5 seconds
+            let context = context.clone();
+            let receiving_worker = receiving_worker.clone();
+            let sending_worker = sending_worker.clone();
+
+            tokio::spawn(async move {
+                Self::process_output(
+                    context,
+                    receiving_worker,
+                    sending_worker,
+                    data_receiver,
+                    ping_receiver,
+                    data_update_interval,
+                    ping_update_interval,
+                )
+                .await
+            })
+        };
 
         let conn = MkcpConnection {
             context,
@@ -856,115 +869,112 @@ where
         Poll::Ready(Ok(writed_size))
     }
 
-    fn start_output_task(
+    async fn process_output(
         context: Arc<MkcpConnectionContext<PW>>,
         receiving_worker: Arc<ReceivingWorker<PW>>,
         sending_worker: Arc<SendingWorker<PW>>,
         mut data_receiver: mpsc::Receiver<UpdaterCmd>,
         mut ping_receiver: mpsc::Receiver<UpdaterCmd>,
-    ) -> JoinHandle<()> {
-        let mut data_update_interval = Duration::from_millis(context.config.tti as u64);
-        let mut ping_update_interval = Duration::from_secs(5); // 5 seconds
+        mut data_update_interval: Duration,
+        mut ping_update_interval: Duration,
+    ) {
+        let mut data_is_wakeup = false;
+        let mut data_next_process = Instant::now();
+        let mut ping_next_process = Instant::now();
 
-        tokio::spawn(async move {
-            let mut data_is_wakeup = false;
-            let mut data_next_process = Instant::now();
-            let mut ping_next_process = Instant::now();
+        while !context.state().is_terminated() {
+            let now = Instant::now();
 
-            while !context.state().is_terminated() {
-                let now = Instant::now();
+            let data_delay = tokio::time::sleep(if data_next_process > now {
+                data_next_process - now
+            } else {
+                Duration::from_secs(0)
+            });
 
-                let data_delay = tokio::time::sleep(if data_next_process > now {
-                    data_next_process - now
-                } else {
-                    Duration::from_secs(0)
-                });
+            let ping_delay = tokio::time::sleep(if ping_next_process > now {
+                ping_next_process - now
+            } else {
+                Duration::from_secs(0)
+            });
 
-                let ping_delay = tokio::time::sleep(if ping_next_process > now {
-                    ping_next_process - now
-                } else {
-                    Duration::from_secs(0)
-                });
-
-                let is_terminating = context.state().is_terminating();
-                tokio::select! {
-                    cmd = data_receiver.recv(), if !is_terminating  => {
-                        match cmd {
-                            Some(UpdaterCmd::UpdateDuration(duration)) => {
-                                let state = context.state();
-                                log::debug!("#{}: ({}): {}: interval {:?} ==> {:?}", context.meta(), state, UPDATER_DATA, data_update_interval, duration);
-                                data_next_process -= data_update_interval;
-                                data_next_process += duration;
-                                data_update_interval = duration;
-                            }
-                            Some(UpdaterCmd::Wakeup) => {
-                                if !data_is_wakeup {
-                                    data_next_process = Instant::now();
-                                    data_is_wakeup = true;
-                                    let state = context.state();
-                                    log::debug!("#{}: ({}): {}: wakeup", context.meta(), state, UPDATER_DATA);
-                                }
-                            }
-                            None => {}
-                        };
-                    },
-                    _ = data_delay , if !is_terminating && data_is_wakeup => {
-                        log::trace!(
-                            "#{}: flush for data: sending-cache={} receiving-cache={} ack-list={} rto={}",
-                            context.meta(),
-                            sending_worker.sending_cache_len(),
-                            receiving_worker.receiving_cache_len(),
-                            receiving_worker.ack_list_count(),
-                            context.round_trip().rto(),
-                        );
-
-                        match context.flush(receiving_worker.as_ref(), sending_worker.as_ref()).await {
-                            Ok(()) => {}
-                            Err(err) => {
-                                log::error!("#{}: {}: flush(data) error {}", context.meta(), UPDATER_DATA, err);
-                            }
-                        };
-
-                        data_next_process = Instant::now() + data_update_interval;
-                        data_is_wakeup = sending_worker.update_necessary() || receiving_worker.update_necessary();
-                        if !data_is_wakeup {
+            let is_terminating = context.state().is_terminating();
+            tokio::select! {
+                cmd = data_receiver.recv(), if !is_terminating  => {
+                    match cmd {
+                        Some(UpdaterCmd::UpdateDuration(duration)) => {
                             let state = context.state();
-                            log::debug!("#{}: ({}): {}: suspend", context.meta(), state, UPDATER_DATA);
+                            log::debug!("#{}: ({}): {}: interval {:?} ==> {:?}", context.meta(), state, UPDATER_DATA, data_update_interval, duration);
+                            data_next_process -= data_update_interval;
+                            data_next_process += duration;
+                            data_update_interval = duration;
                         }
-                    },
-                    cmd = ping_receiver.recv() => {
-                        match cmd {
-                            Some(UpdaterCmd::UpdateDuration(duration)) => {
+                        Some(UpdaterCmd::Wakeup) => {
+                            if !data_is_wakeup {
+                                data_next_process = Instant::now();
+                                data_is_wakeup = true;
                                 let state = context.state();
-                                log::debug!("#{}: ({}): {}: interval {:?} ==> {:?}", context.meta(), state, UPDATER_PING, ping_update_interval, duration);
-                                ping_update_interval = duration;
+                                log::debug!("#{}: ({}): {}: wakeup", context.meta(), state, UPDATER_DATA);
                             }
-                            Some(UpdaterCmd::Wakeup) => {}
-                            None => {}
-                        };
-                    },
-                    _ = ping_delay => {
-                        log::trace!(
-                            "#{}: flush for ping: sending-cache={} receiving-cache={} ack-list={} rto={}",
-                            context.meta(),
-                            sending_worker.sending_cache_len(),
-                            receiving_worker.receiving_cache_len(),
-                            receiving_worker.ack_list_count(),
-                            context.round_trip().rto(),
-                        );
+                        }
+                        None => {}
+                    };
+                },
+                _ = data_delay , if !is_terminating && data_is_wakeup => {
+                    log::trace!(
+                        "#{}: flush for data: sending-cache={} receiving-cache={} ack-list={} rto={}",
+                        context.meta(),
+                        sending_worker.sending_cache_len(),
+                        receiving_worker.receiving_cache_len(),
+                        receiving_worker.ack_list_count(),
+                        context.round_trip().rto(),
+                    );
 
-                        match context.flush(receiving_worker.as_ref(), sending_worker.as_ref()).await {
-                            Ok(()) => {}
-                            Err(err) => {
-                                log::error!("#{}: {}: flush(ping) error {}", context.meta(), UPDATER_PING, err);
-                            }
-                        };
+                    match context.flush(receiving_worker.as_ref(), sending_worker.as_ref()).await {
+                        Ok(()) => {}
+                        Err(err) => {
+                            log::error!("#{}: {}: flush(data) error {}", context.meta(), UPDATER_DATA, err);
+                        }
+                    };
 
-                        ping_next_process = Instant::now() + ping_update_interval;
-                    },
-                }
+                    data_next_process = Instant::now() + data_update_interval;
+                    data_is_wakeup = sending_worker.update_necessary() || receiving_worker.update_necessary();
+                    if !data_is_wakeup {
+                        let state = context.state();
+                        log::debug!("#{}: ({}): {}: suspend", context.meta(), state, UPDATER_DATA);
+                    }
+                },
+                cmd = ping_receiver.recv() => {
+                    match cmd {
+                        Some(UpdaterCmd::UpdateDuration(duration)) => {
+                            let state = context.state();
+                            log::debug!("#{}: ({}): {}: interval {:?} ==> {:?}", context.meta(), state, UPDATER_PING, ping_update_interval, duration);
+                            ping_update_interval = duration;
+                        }
+                        Some(UpdaterCmd::Wakeup) => {}
+                        None => {}
+                    };
+                },
+                _ = ping_delay => {
+                    log::trace!(
+                        "#{}: flush for ping: sending-cache={} receiving-cache={} ack-list={} rto={}",
+                        context.meta(),
+                        sending_worker.sending_cache_len(),
+                        receiving_worker.receiving_cache_len(),
+                        receiving_worker.ack_list_count(),
+                        context.round_trip().rto(),
+                    );
+
+                    match context.flush(receiving_worker.as_ref(), sending_worker.as_ref()).await {
+                        Ok(()) => {}
+                        Err(err) => {
+                            log::error!("#{}: {}: flush(ping) error {}", context.meta(), UPDATER_PING, err);
+                        }
+                    };
+
+                    ping_next_process = Instant::now() + ping_update_interval;
+                },
             }
-        })
+        }
     }
 }
 
