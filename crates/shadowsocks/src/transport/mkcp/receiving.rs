@@ -29,9 +29,11 @@ impl ReceivingWindow {
 
     #[inline]
     fn set(&mut self, id: u32, value: segment::DataSegment) -> bool {
-        match self.cache.try_insert(id, value) {
-            Ok(..) => true,
-            Err(..) => false,
+        if self.cache.contains_key(&id) {
+            false
+        } else {
+            self.cache.insert(id, value);
+            true
         }
     }
 
@@ -56,20 +58,20 @@ struct Ack {
 }
 
 struct AckList {
-    acks: LinkedList<Ack>,
+    acks: Vec<Ack>,
     dirty: bool,
 }
 
 impl AckList {
     fn new() -> Self {
         Self {
-            acks: LinkedList::new(),
+            acks: Vec::new(),
             dirty: false,
         }
     }
 
     fn add(&mut self, number: u32, timestamp: u32) {
-        self.acks.push_back(Ack {
+        self.acks.push(Ack {
             timestamp,
             number,
             next_flush: 0,
@@ -80,13 +82,14 @@ impl AckList {
     fn clear(&mut self, una: u32) {
         let mut removed_count = 0;
 
-        let mut cursor = self.acks.cursor_front_mut();
-        while let Some(node) = cursor.current() {
+        let mut i = 0;
+        while i < self.acks.len() {
+            let node = &self.acks[i];
             if node.number < una {
                 removed_count += 1;
-                cursor.remove_current();
+                self.acks.remove(i);
             } else {
-                cursor.move_next();
+                i += 1;
             }
         }
 

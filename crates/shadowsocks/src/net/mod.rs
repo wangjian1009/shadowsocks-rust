@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 pub use self::sys::uds::{UnixListener, UnixStream};
 pub use self::{
     destination::Destination,
-    option::{AcceptOpts, ConnectOpts},
+    option::{AcceptOpts, ConnectOpts, TcpSocketOpts},
     sys::{set_tcp_fastopen, socket_bind_dual_stack},
     tcp::{TcpListener, TcpStream},
     udp::UdpSocket,

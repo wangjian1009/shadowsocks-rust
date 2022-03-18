@@ -48,8 +48,6 @@
 //!
 //! Of course, you can also use `cargo install` to install binaries.
 
-#![feature(trait_alias)]
-#![feature(duration_constants)]
 use std::time::Duration;
 
 #[cfg(feature = "local")]
@@ -92,7 +90,7 @@ fn hint_support_default_system_resolver() -> bool {
     cfg!(all(
         unix,
         not(target_os = "android"),
-        /* not(target_os = "macos"),
-         * not(target_os = "ios") */
+        // not(target_os = "macos"),
+        // not(target_os = "ios")
     ))
 }

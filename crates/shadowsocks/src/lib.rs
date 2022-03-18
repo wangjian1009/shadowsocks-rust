@@ -1,10 +1,14 @@
 //! Shadowsocks Core Library
 
 #![crate_type = "lib"]
-#![feature(trait_alias)]
-#![feature(map_try_insert)]
-#![feature(assert_matches)]
-#![feature(linked_list_cursors)]
+// #![feature(trait_alias)]
+// #![feature(map_try_insert)]
+// #![feature(assert_matches)]
+// #![feature(linked_list_cursors)]
+
+#[cfg(test)]
+#[macro_use]
+extern crate assert_matches;
 
 #[cfg(test)]
 #[macro_use(defer)]

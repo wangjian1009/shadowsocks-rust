@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks"
-version = "1.12.3"
+version = "1.14.0"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -8,7 +8,7 @@ readme = "README.md"
 documentation = "https://docs.rs/shadowsocks-core"
 keywords = ["shadowsocks", "proxy", "socks", "socks5", "firewall"]
 license = "MIT"
-edition = "2018"
+edition = "2021"
 
 [badges]
 maintenance = { status = "passively-maintained" }
@@ -38,12 +38,19 @@ stream-cipher = ["shadowsocks-crypto/v1-stream"]
 aead-cipher-extra = ["shadowsocks-crypto/v1-aead-extra"]
 
 # Enable detection against replay attack
-replay-attack-detect = ["bloomfilter", "spin"]
+security-replay-attack-detect = ["bloomfilter", "spin"]
+# Enable IV printable prefix
+security-iv-printable-prefix = ["rand"]
+
+# Enable ARMv8 related optimizations
+armv8 = ["shadowsocks-crypto/armv8"]
+# Enable NEON releated optimizations
+neon = ["shadowsocks-crypto/neon"]
 
 transport = []
 transport-ws = ["transport", "tokio-tungstenite"]
 transport-tls = ["transport", "tokio-rustls", "webpki"]
-transport-mkcp = ["transport", "spin", "arc-swap", "sha2", "crypto2"]
+transport-mkcp = ["transport", "spin", "arc-swap", "sha2", "aes-gcm"]
 
 trojan = ["sha2", "rand"]
 vless = ["rand", "hex", "spin"]
@@ -91,18 +98,18 @@ quanta = { version = "0.4.1", optional = true }
 lazy_static = { version = "1", optional = true }
 regex = { version = "1.4", optional = true }
 
-trust-dns-resolver = { version = "0.20", optional = true }
+trust-dns-resolver = { version = "0.21", optional = true }
 arc-swap = { version = "1.3", optional = true }
 notify = { version = "5.0.0-pre.13", optional = true }
 
 sha2 = { version = "0.9", optional = true }
-crypto2 = { version = "*", optional = true }
+aes-gcm = { version = "0.9.4", optional = true }
 
 [target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
-shadowsocks-crypto = { version = "0.2", features = ["ring"] }
+shadowsocks-crypto = { version = "0.3.3", features = ["ring"] }
 
 [target.'cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
-shadowsocks-crypto = { version = "0.2", features = [] }
+shadowsocks-crypto = { version = "0.3.3", features = [] }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["mswsock", "winsock2", "netioapi"] }
@@ -117,4 +124,5 @@ nix = "0.23"
 [dev-dependencies]
 env_logger = "0.9"
 scopeguard = "1.1.0"
+assert_matches = "1.5.0"
 mockall = "*"

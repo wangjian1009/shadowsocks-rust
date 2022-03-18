@@ -115,6 +115,8 @@ struct SSBalancerConfig {
     max_server_rtt: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     check_interval: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    check_best_interval: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -529,6 +531,12 @@ cfg_if! {
         #[derive(Debug)]
         pub struct InvalidRedirType;
 
+        impl Display for InvalidRedirType {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("invalid RedirType")
+            }
+        }
+
         impl FromStr for RedirType {
             type Err = InvalidRedirType;
 
@@ -613,6 +621,12 @@ impl Default for ManagerServerMode {
 /// Parsing ManagerServerMode error
 #[derive(Debug, Clone, Copy)]
 pub struct ManagerServerModeError;
+
+impl Display for ManagerServerModeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid ManagerServerMode")
+    }
+}
 
 impl FromStr for ManagerServerMode {
     type Err = ManagerServerModeError;
@@ -747,6 +761,12 @@ impl ProtocolType {
 /// Error while parsing `ProtocolType` from string
 #[derive(Debug)]
 pub struct ProtocolTypeError;
+
+impl Display for ProtocolTypeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid ProtocolType")
+    }
+}
 
 impl FromStr for ProtocolType {
     type Err = ProtocolTypeError;
@@ -977,6 +997,8 @@ pub struct BalancerConfig {
     pub max_server_rtt: Option<Duration>,
     /// Interval between each checking
     pub check_interval: Option<Duration>,
+    /// Interval for checking the best server
+    pub check_best_interval: Option<Duration>,
 }
 
 /// Configuration
@@ -1041,6 +1063,9 @@ pub struct Config {
     /// Set `SO_MARK` socket option for outbound sockets
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pub outbound_fwmark: Option<u32>,
+    /// Set `SO_USER_COOKIE` socket option for outbound sockets
+    #[cfg(target_os = "freebsd")]
+    pub outbound_user_cookie: Option<u32>,
     /// Set `SO_BINDTODEVICE` (Linux), `IP_BOUND_IF` (BSD), `IP_UNICAST_IF` (Windows) socket option for outbound sockets
     pub outbound_bind_interface: Option<String>,
     /// Outbound sockets will `bind` to this address
@@ -1185,6 +1210,8 @@ impl Config {
 
             #[cfg(any(target_os = "linux", target_os = "android"))]
             outbound_fwmark: None,
+            #[cfg(target_os = "freebsd")]
+            outbound_user_cookie: None,
             outbound_bind_interface: None,
             outbound_bind_addr: None,
             #[cfg(target_os = "android")]
@@ -1786,6 +1813,7 @@ impl Config {
             nconfig.balancer = BalancerConfig {
                 max_server_rtt: balancer.max_server_rtt.map(Duration::from_secs),
                 check_interval: balancer.check_interval.map(Duration::from_secs),
+                check_best_interval: balancer.check_best_interval.map(Duration::from_secs),
             };
         }
 
@@ -1798,6 +1826,8 @@ impl Config {
     /// 2. Pre-defined. Like `google`, `cloudflare`
     pub fn set_dns_formatted(&mut self, dns: &str) -> Result<(), Error> {
         self.dns = match dns {
+            "system" => DnsConfig::System,
+
             #[cfg(feature = "trust-dns")]
             "google" => DnsConfig::TrustDns(ResolverConfig::google()),
 
@@ -1815,14 +1845,14 @@ impl Config {
             #[cfg(all(feature = "trust-dns", feature = "dns-over-https"))]
             "quad9_https" => DnsConfig::TrustDns(ResolverConfig::quad9_https()),
 
-            nameservers => Config::parse_dns_nameservers(nameservers)?,
+            nameservers => self.parse_dns_nameservers(nameservers)?,
         };
 
         Ok(())
     }
 
     #[cfg(any(feature = "trust-dns", feature = "local-dns"))]
-    fn parse_dns_nameservers(nameservers: &str) -> Result<DnsConfig, Error> {
+    fn parse_dns_nameservers(&mut self, nameservers: &str) -> Result<DnsConfig, Error> {
         #[cfg(all(unix, feature = "local-dns"))]
         if let Some(nameservers) = nameservers.strip_prefix("unix://") {
             // A special DNS server only for shadowsocks-android
@@ -1894,6 +1924,7 @@ impl Config {
                     trust_nx_responses: false,
                     #[cfg(any(feature = "dns-over-tls", feature = "dns-over-https"))]
                     tls_config: None,
+                    bind_addr: None,
                 });
             }
             if protocol.enable_tcp() {
@@ -1904,6 +1935,7 @@ impl Config {
                     trust_nx_responses: false,
                     #[cfg(any(feature = "dns-over-tls", feature = "dns-over-https"))]
                     tls_config: None,
+                    bind_addr: None,
                 });
             }
         }
@@ -1916,7 +1948,7 @@ impl Config {
     }
 
     #[cfg(not(any(feature = "trust-dns", feature = "local-dns")))]
-    fn parse_dns_nameservers(_nameservers: &str) -> Result<DnsConfig, Error> {
+    fn parse_dns_nameservers(&mut self, _nameservers: &str) -> Result<DnsConfig, Error> {
         Ok(DnsConfig::System)
     }
 
@@ -2384,6 +2416,7 @@ impl fmt::Display for Config {
             jconf.balancer = Some(SSBalancerConfig {
                 max_server_rtt: self.balancer.max_server_rtt.as_ref().map(Duration::as_secs),
                 check_interval: self.balancer.check_interval.as_ref().map(Duration::as_secs),
+                check_best_interval: self.balancer.check_best_interval.as_ref().map(Duration::as_secs),
             });
         }
 

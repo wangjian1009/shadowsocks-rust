@@ -17,13 +17,7 @@ use tokio::{io::ReadBuf, sync::mpsc, task::JoinHandle, time::Instant};
 use crate::ServerAddr;
 
 use super::{
-    super::PacketWrite,
-    io::MkcpPacketWriter,
-    segment,
-    utils::Notifier,
-    MkcpConfig,
-    ReceivingWorker,
-    SendingWorker,
+    super::PacketWrite, io::MkcpPacketWriter, segment, utils::Notifier, MkcpConfig, ReceivingWorker, SendingWorker,
     StatisticStat,
 };
 
@@ -991,7 +985,6 @@ where
 #[cfg(test)]
 mod test {
     use super::{super::test::collect::*, segment::*, *};
-    use std::assert_matches::assert_matches;
 
     #[tokio::test]
     async fn basic_data_first() {
