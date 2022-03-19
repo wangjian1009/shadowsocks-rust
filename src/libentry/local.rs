@@ -1,4 +1,5 @@
 use log;
+use spin::Mutex;
 use std::{ffi::CStr, os::raw::c_char};
 use tokio::{self, runtime::Builder, sync::mpsc};
 
@@ -33,7 +34,7 @@ enum Command {
 
 pub struct SSLocal {
     config: Config,
-    ctrl_tx: Option<mpsc::Sender<Command>>,
+    ctrl_tx: Mutex<Option<Arc<mpsc::Sender<Command>>>>,
 }
 
 impl SSLocal {
@@ -93,7 +94,10 @@ impl SSLocal {
             log::error!("loading ACL \"{}\" success", acl_path);
         }
 
-        SSLocal { config, ctrl_tx: None }
+        SSLocal {
+            config,
+            ctrl_tx: Mutex::new(None),
+        }
     }
 
     fn run(&mut self) {
@@ -156,7 +160,7 @@ impl SSLocal {
     }
 
     fn stop(&self) {
-        match &self.ctrl_tx {
+        match self.ctrl_tx.lock().clone() {
             None => {
                 log::error!("sslocal stop: not started");
             }
@@ -168,7 +172,7 @@ impl SSLocal {
 
     #[cfg(feature = "host-dns")]
     fn update_host_dns(&self, servers: &Vec<&str>) {
-        match &self.ctrl_tx {
+        match self.ctrl_tx.lock().clone() {
             None => {
                 log::error!("sslocal update host dns: not started");
             }
@@ -182,7 +186,7 @@ impl SSLocal {
     async fn run_ctrl(&mut self, #[cfg(feature = "host-dns")] host_dns: Option<Arc<HostDns>>) {
         let (tx, mut rx) = mpsc::channel(1);
 
-        self.ctrl_tx = Some(tx);
+        *self.ctrl_tx.lock() = Some(Arc::new(tx));
 
         while let Some(cmd) = rx.recv().await {
             match cmd {
@@ -210,7 +214,11 @@ impl SSLocal {
 #[no_mangle]
 pub extern "C" fn lib_local_new(c_config: *const c_char, c_acl_path: *const c_char) -> *mut SSLocal {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    super::apple::logger::init().unwrap();
+    oslog::OsLogger::new("com.example.test")
+        .level_filter(log::LevelFilter::Debug)
+        .category_level_filter("Settings", log::LevelFilter::Trace)
+        .init()
+        .unwrap();
 
     log::info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
 

@@ -12,9 +12,13 @@ use futures::future;
 use log::{debug, error, info, trace, warn};
 use lru_time_cache::LruCache;
 use shadowsocks::{
+    config::ServerProtocol,
     lookup_then,
     net::UdpSocket as ShadowUdpSocket,
-    relay::{socks5::Address, udprelay::MAXIMUM_UDP_PAYLOAD_SIZE},
+    relay::{
+        socks5::Address,
+        udprelay::{ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
+    },
     ServerAddr,
 };
 use tokio::{net::UdpSocket, sync::mpsc, task::JoinHandle, time};
@@ -329,12 +333,24 @@ impl UdpAssociationContext {
                 let server = self.balancer.best_udp_server();
                 let svr_cfg = server.server_config();
 
-                // let socket =
-                //     ProxySocket::connect_with_opts(self.context.context(), svr_cfg, self.context.connect_opts_ref())
-                //         .await?;
-                // let socket = MonProxySocket::from_socket(socket, self.context.flow_stat());
+                match svr_cfg.protocol() {
+                    ServerProtocol::SS(ss_cfg) => {
+                        let socket = ProxySocket::connect_with_opts(
+                            self.context.context(),
+                            svr_cfg,
+                            ss_cfg,
+                            self.context.connect_opts_ref(),
+                        )
+                        .await?;
+                        let socket = MonProxySocket::from_socket(socket, self.context.flow_stat());
 
-                // self.proxied_socket.insert(socket)
+                        self.proxied_socket = Some(socket)
+                    }
+                    #[cfg(feature = "trojan")]
+                    ServerProtocol::Trojan(_trojan_cfg) => unreachable!(),
+                    #[cfg(feature = "vless")]
+                    ServerProtocol::Vless(_vless_cfg) => unreachable!(),
+                }
                 unreachable!()
             }
         };

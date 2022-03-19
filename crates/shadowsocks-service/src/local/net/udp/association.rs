@@ -267,7 +267,6 @@ where
 cfg_if! {
     if #[cfg(feature = "vless")] {
         struct ProxyL2RRemoteContext {
-            remote: Address,
             w: Box<dyn PacketMutWrite>,
             r2l_task: JoinHandle<io::Result<()>>,
         }
@@ -820,11 +819,7 @@ where
             }
         });
 
-        Ok(ProxyL2RRemoteContext {
-            remote: target_addr.clone(),
-            w,
-            r2l_task,
-        })
+        Ok(ProxyL2RRemoteContext { w, r2l_task })
     }
 
     async fn send_received_respond_packet(&mut self, addr: &Address, data: &[u8], bypassed: bool) {

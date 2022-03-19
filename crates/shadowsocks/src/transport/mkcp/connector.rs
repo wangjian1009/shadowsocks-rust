@@ -22,16 +22,13 @@ use super::{
     super::{Connection, Connector, DummyPacket, StreamConnection},
     connection::MkcpState,
     io::{MkcpPacketReader, MkcpPacketWriter},
-    new_error,
-    MkcpConfig,
-    MkcpConnMetadata,
-    MkcpConnWay,
-    StatisticStat,
+    new_error, MkcpConfig, MkcpConnMetadata, MkcpConnWay, StatisticStat,
 };
 
 use super::MkcpConnection;
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::task::JoinHandle;
 
 #[cfg(feature = "rate-limit")]
 use crate::transport::RateLimiter;
@@ -131,7 +128,7 @@ where
     PW: PacketWrite + 'static,
 {
     inner: Arc<MkcpConnection<PW>>,
-    // recv_task: Arc<JoinHandle<()>>,
+    _recv_task: Arc<JoinHandle<()>>,
 }
 
 impl<PW> MkcpConnectorConnection<PW>
@@ -174,14 +171,14 @@ where
         let connection = MkcpConnection::new(config, meta, Some(Box::new(remove_fn)), Arc::new(w), statistic);
         let connection = Arc::new(connection);
 
-        let _recv_task = {
+        let recv_task = {
             let connection = connection.clone();
             tokio::spawn(async move { Self::handle_incoming(r, remove_conn_rx, connection).await })
         };
 
         Self {
             inner: connection,
-            // recv_task: Arc::new(recv_task),
+            _recv_task: Arc::new(recv_task),
         }
     }
 

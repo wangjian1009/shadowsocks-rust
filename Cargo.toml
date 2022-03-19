@@ -114,7 +114,7 @@ utility = []
 service = ["local", "server", "manager"]
 
 # Enable use ss as lib
-lib-entry = []
+lib-entry = ["spin"]
 
 # Enables trust-dns for replacing tokio's builtin DNS resolver
 trust-dns = ["shadowsocks-service/trust-dns"]
@@ -201,6 +201,7 @@ build-time = "0.1"
 directories = "4.0"
 xdg = "2.4"
 rpassword = "5.0.1"
+spin = { version = "0.9", features = ["std"], optional = true }
 
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "signal"] }
@@ -223,6 +224,9 @@ shadowsocks-service = { version = "1.14.1", path = "./crates/shadowsocks-service
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.4"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+oslog = "0.2.0"
 
 [dev-dependencies]
 byteorder = "1.3"
