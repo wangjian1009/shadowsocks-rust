@@ -10,7 +10,6 @@ mod receiving;
 mod segment;
 mod sending;
 mod statistic;
-mod utils;
 mod xor;
 
 pub use acceptor::MkcpAcceptor;

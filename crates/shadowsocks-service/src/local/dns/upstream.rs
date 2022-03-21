@@ -161,21 +161,19 @@ impl DnsClient {
         connect_opts: &ConnectOpts,
         flow_stat: Arc<FlowStat>,
     ) -> io::Result<DnsClient> {
-        let socket = ProxySocket::connect_with_opts(
-            context,
-            svr_cfg,
-            match svr_cfg.protocol() {
-                ServerProtocol::SS(cfg) => cfg,
-                #[cfg(feature = "trojan")]
-                ServerProtocol::Trojan(_cfg) => unreachable!(),
-                #[cfg(feature = "vless")]
-                ServerProtocol::Vless(_cfg) => unreachable!(),
-            },
-            connect_opts,
-        )
-        .await?;
-        let socket = MonProxySocket::from_socket(socket, flow_stat);
-        Ok(DnsClient::UdpRemote { socket, ns })
+        match svr_cfg.protocol() {
+            ServerProtocol::SS(ss_cfg) => {
+                let socket = ProxySocket::connect_with_opts(context, svr_cfg, ss_cfg, connect_opts).await?;
+                let socket = MonProxySocket::from_socket(socket, flow_stat);
+                Ok(DnsClient::UdpRemote { socket, ns })
+            }
+            #[cfg(feature = "trojan")]
+            ServerProtocol::Trojan(_cfg) => {
+                Err(io::Error::new(io::ErrorKind::Other, "not support dns udp over trojan"))
+            }
+            #[cfg(feature = "vless")]
+            ServerProtocol::Vless(_cfg) => Err(io::Error::new(io::ErrorKind::Other, "not support dns udp over vless")),
+        }
     }
 
     /// Make a DNS lookup

@@ -1,10 +1,9 @@
 use bytes::Bytes;
 use shadowsocks::{
-    relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE,
+    relay::{tcprelay::utils_copy::copy_bidirectional, udprelay::MAXIMUM_UDP_PAYLOAD_SIZE},
     transport::{MutPacketWriter, PacketMutWrite, PacketRead},
     vless::{protocol, InboundHandler},
 };
-use tokio::io::copy_bidirectional;
 
 use super::{super::udprelay::UdpAssociationContext, *};
 
@@ -145,7 +144,7 @@ impl TcpServerClient {
             self.context.connect_opts_ref()
         );
 
-        match copy_bidirectional(&mut stream, &mut remote_stream).await {
+        match copy_bidirectional(&mut stream, &mut remote_stream, &self.idle_timeout).await {
             Ok((rn, wn)) => {
                 trace!(
                     "vless tcp tunnel {} <-> {} closed, L2R {} bytes, R2L {} bytes",

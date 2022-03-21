@@ -21,7 +21,6 @@ use super::{
     super::PacketWrite,
     io::MkcpPacketWriter,
     segment,
-    utils::Notifier,
     MkcpConfig,
     ReceivingWorker,
     SendingWorker,
@@ -228,7 +227,8 @@ where
     since: Instant,
     data_input_tx: mpsc::Sender<u8>,
     data_input_rx: SpinMutex<mpsc::Receiver<u8>>,
-    data_output: Notifier,
+    data_output_tx: mpsc::Sender<u8>,
+    data_output_rx: SpinMutex<mpsc::Receiver<u8>>,
     state: AtomicU8,
     state_begin_time: AtomicU32,
     last_incoming_time: AtomicU32,
@@ -253,8 +253,12 @@ where
     ) -> (Self, mpsc::Receiver<UpdaterCmd>, mpsc::Receiver<UpdaterCmd>) {
         let (data_updater, data_receiver) = Updater::new();
         let (ping_updater, ping_receiver) = Updater::new();
+
         let (data_input_tx, data_input_rx) = mpsc::channel(1);
         let data_input_rx = SpinMutex::new(data_input_rx);
+
+        let (data_output_tx, data_output_rx) = mpsc::channel(1);
+        let data_output_rx = SpinMutex::new(data_output_rx);
 
         let overhead = output.overhead() as u32;
 
@@ -267,7 +271,8 @@ where
                 since: Instant::now(),
                 data_input_tx,
                 data_input_rx,
-                data_output: Notifier::new(),
+                data_output_tx,
+                data_output_rx,
                 state: AtomicU8::new(MkcpState::Active as u8),
                 state_begin_time: AtomicU32::new(0),
                 last_incoming_time: AtomicU32::new(0),
@@ -562,7 +567,7 @@ where
         let state = self.state();
         log::debug!("#{}: ({}): terminating connection", self.meta(), state);
         let _ = self.data_input_tx.try_send(0);
-        self.data_output.signal();
+        let _ = self.data_output_tx.try_send(0);
 
         receiving_worker.release();
         sending_worker.release();
@@ -574,7 +579,7 @@ where
 
     fn close(&self, receiving_worker: &ReceivingWorker<PW>, sending_worker: &SendingWorker<PW>) -> io::Result<()> {
         let _ = self.data_input_tx.try_send(0);
-        self.data_output.signal();
+        let _ = self.data_output_tx.try_send(0);
 
         match self.state() {
             MkcpState::ReadyToClose | MkcpState::Terminating | MkcpState::Terminated => {
@@ -742,7 +747,7 @@ where
                     self.handle_option(option);
                     self.sending_worker
                         .process_segment(current, seg, self.context.round_trip().rto());
-                    self.context.data_output.signal();
+                    let _ = self.context.data_output_tx.try_send(0);
                     wakeup_updater!(self.context, UPDATER_DATA, "recv ack", self.context.data_updater);
                 }
                 segment::SegmentData::CmdOnlySegment(seg) => {
@@ -773,7 +778,7 @@ where
 
                     if segment::SegmentOption::Close.is_enable_of(option) || seg.cmd == segment::Command::Terminate {
                         let _ = self.context.data_input_tx.try_send(0);
-                        self.context.data_output.signal();
+                        let _ = self.context.data_output_tx.try_send(0);
                     }
 
                     self.sending_worker.process_receiving_next(seg.receiving_next);
@@ -884,7 +889,7 @@ where
                 break;
             }
 
-            ready!(self.context.data_output.wait().boxed().poll_unpin(cx));
+            ready!(self.context.data_output_rx.lock().poll_recv(cx));
         }
 
         Poll::Ready(Ok(writed_size))

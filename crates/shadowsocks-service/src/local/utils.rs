@@ -9,10 +9,13 @@ use std::{
 use log::{debug, trace};
 use shadowsocks::{
     config::{ServerConfig, ServerProtocol},
-    relay::{socks5::Address, tcprelay::utils::copy_encrypted_bidirectional},
+    relay::{
+        socks5::Address,
+        tcprelay::{utils::copy_encrypted_bidirectional, utils_copy::copy_bidirectional},
+    },
 };
 use tokio::{
-    io::{copy_bidirectional, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     time,
 };
 
@@ -124,9 +127,9 @@ where
     match match svr_cfg.protocol() {
         ServerProtocol::SS(ss_cfg) => copy_encrypted_bidirectional(ss_cfg.method(), shadow, &mut plain, &None).await,
         #[cfg(feature = "trojan")]
-        ServerProtocol::Trojan(_cfg) => copy_bidirectional(shadow, &mut plain).await,
+        ServerProtocol::Trojan(_cfg) => copy_bidirectional(shadow, &mut plain, &None).await,
         #[cfg(feature = "vless")]
-        ServerProtocol::Vless(_cfg) => copy_bidirectional(shadow, &mut plain).await,
+        ServerProtocol::Vless(_cfg) => copy_bidirectional(shadow, &mut plain, &None).await,
     } {
         Ok((wn, rn)) => {
             trace!(
@@ -160,7 +163,7 @@ where
     P: AsyncRead + AsyncWrite + Unpin,
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    match copy_bidirectional(&mut plain, shadow).await {
+    match copy_bidirectional(&mut plain, shadow, &None).await {
         Ok((rn, wn)) => {
             trace!(
                 "tcp tunnel {} <-> {} (bypassed) closed, L2R {} bytes, R2L {} bytes",

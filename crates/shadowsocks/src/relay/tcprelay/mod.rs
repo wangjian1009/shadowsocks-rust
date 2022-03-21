@@ -8,3 +8,4 @@ pub mod proxy_stream;
 #[cfg(feature = "stream-cipher")]
 mod stream;
 pub mod utils;
+pub mod utils_copy;

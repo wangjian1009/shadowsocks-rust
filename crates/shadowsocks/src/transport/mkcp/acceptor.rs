@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use spin::Mutex;
 use std::{
     collections::HashMap,
-    io::{self, IoSlice},
+    io,
     net::SocketAddr,
     pin::Pin,
     sync::Arc,
@@ -143,6 +143,8 @@ where
                     }
                 }
             }
+
+            tokio::task::yield_now().await;
         }
     }
 
@@ -289,11 +291,10 @@ where
         };
 
         match connection {
-            Some(connection) => {
-                if let Err(err) = connection.close() {
-                    log::debug!("#{}: close: {:?}", connection.meta(), err);
-                }
-            }
+            Some(connection) => match connection.close() {
+                Ok(()) => log::trace!("#{}: close: success", connection.meta()),
+                Err(err) => log::debug!("#{}: close: {:?}", connection.meta(), err),
+            },
             None => {}
         }
     }
@@ -350,14 +351,5 @@ where
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn poll_write_vectored(
-        self: Pin<&mut Self>,
-        _cx: &mut task::Context<'_>,
-        _bufs: &[IoSlice<'_>],
-    ) -> Poll<io::Result<usize>> {
-        unreachable!()
     }
 }

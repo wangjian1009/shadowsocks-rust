@@ -1,13 +1,12 @@
 use super::*;
 use bytes::Bytes;
 use shadowsocks::{
-    relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE,
+    relay::{tcprelay::utils_copy::copy_bidirectional, udprelay::MAXIMUM_UDP_PAYLOAD_SIZE},
     transport::{MutPacketWriter, PacketRead},
     trojan::{new_trojan_packet_connection, protocol},
 };
 
 use super::super::udprelay::UdpAssociationContext;
-use tokio::io::copy_bidirectional;
 
 impl TcpServerClient {
     pub async fn serve_trojan<IS>(self, valid_hash: &[u8], mut stream: MonProxyStream<IS>) -> io::Result<()>
@@ -171,7 +170,7 @@ impl TcpServerClient {
             self.context.connect_opts_ref()
         );
 
-        match copy_bidirectional(&mut stream, &mut remote_stream).await {
+        match copy_bidirectional(&mut stream, &mut remote_stream, &self.idle_timeout).await {
             Ok((rn, wn)) => {
                 trace!(
                     "trojan tcp tunnel {} <-> {} closed, L2R {} bytes, R2L {} bytes",

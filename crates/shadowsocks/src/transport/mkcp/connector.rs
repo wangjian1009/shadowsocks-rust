@@ -236,8 +236,9 @@ where
     PW: PacketWrite + 'static,
 {
     fn drop(&mut self) {
-        if let Err(err) = self.inner.close() {
-            log::debug!("#{}: close: {:?}", self.inner.meta(), err);
+        match self.inner.close() {
+            Ok(()) => log::trace!("#{}: close: success", self.inner.meta()),
+            Err(err) => log::debug!("#{}: close: {:?}", self.inner.meta(), err),
         }
     }
 }

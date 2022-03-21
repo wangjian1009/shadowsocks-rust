@@ -19,10 +19,9 @@ use tokio::{
     sync::Mutex,
 };
 
-use crate::{
-    crypto::v1::{CipherCategory, CipherKind},
-    timeout::Sleep,
-};
+use crate::timeout::Sleep;
+
+const DEFAULT_BUF_SIZE: usize = 8 * 1024;
 
 #[derive(Debug)]
 struct CopyBuffer {
@@ -35,13 +34,13 @@ struct CopyBuffer {
 }
 
 impl CopyBuffer {
-    fn new(buffer_size: usize, idle_timeout: Option<Arc<Mutex<Sleep>>>) -> Self {
+    fn new(idle_timeout: Option<Arc<Mutex<Sleep>>>) -> Self {
         Self {
             read_done: false,
             pos: 0,
             cap: 0,
             amt: 0,
-            buf: vec![0; buffer_size].into_boxed_slice(),
+            buf: vec![0; DEFAULT_BUF_SIZE].into_boxed_slice(),
             idle_timeout,
         }
     }
@@ -141,74 +140,6 @@ where
     }
 }
 
-/// Copy data from encrypted reader to plain writer
-pub async fn copy_from_encrypted<ER, PW>(
-    method: CipherKind,
-    reader: &mut ER,
-    writer: &mut PW,
-    idle_timeout: Option<Arc<Mutex<Sleep>>>,
-) -> io::Result<u64>
-where
-    ER: AsyncRead + Unpin + ?Sized,
-    PW: AsyncWrite + Unpin + ?Sized,
-{
-    Copy {
-        reader,
-        writer,
-        buf: CopyBuffer::new(encrypted_read_buffer_size(method), idle_timeout),
-    }
-    .await
-}
-
-/// Copy data from plain reader to encrypted writer
-pub async fn copy_to_encrypted<PR, EW>(
-    method: CipherKind,
-    reader: &mut PR,
-    writer: &mut EW,
-    idle_timeout: Option<Arc<Mutex<Sleep>>>,
-) -> io::Result<u64>
-where
-    PR: AsyncRead + Unpin + ?Sized,
-    EW: AsyncWrite + Unpin + ?Sized,
-{
-    Copy {
-        reader,
-        writer,
-        buf: CopyBuffer::new(plain_read_buffer_size(method), idle_timeout),
-    }
-    .await
-}
-
-fn encrypted_read_buffer_size(method: CipherKind) -> usize {
-    match method.category() {
-        CipherCategory::Aead => super::aead::MAX_PACKET_SIZE + method.tag_len(),
-        #[cfg(feature = "stream-cipher")]
-        CipherCategory::Stream => 1 << 14,
-        CipherCategory::None => 1 << 14,
-    }
-}
-
-fn plain_read_buffer_size(method: CipherKind) -> usize {
-    match method.category() {
-        CipherCategory::Aead => super::aead::MAX_PACKET_SIZE,
-        #[cfg(feature = "stream-cipher")]
-        CipherCategory::Stream => 1 << 14,
-        CipherCategory::None => 1 << 14,
-    }
-}
-
-/// Create a buffer for reading from shadowsocks' encrypted channel
-#[inline]
-pub fn alloc_encrypted_read_buffer(method: CipherKind) -> Box<[u8]> {
-    vec![0u8; encrypted_read_buffer_size(method)].into_boxed_slice()
-}
-
-/// Create a buffer for reading from plain channel (not encrypted), for copying data into encrypted channel
-#[inline]
-pub fn alloc_plain_read_buffer(method: CipherKind) -> Box<[u8]> {
-    vec![0u8; plain_read_buffer_size(method)].into_boxed_slice()
-}
-
 enum TransferState {
     Running(CopyBuffer),
     ShuttingDown(u64),
@@ -272,48 +203,20 @@ where
 
         // It is not a problem if ready! returns early because transfer_one_direction for the
         // other direction will keep returning TransferState::Done(count) in future calls to poll
-        let a_to_b = ready!(poll_a_to_b);
-        let b_to_a = ready!(poll_b_to_a);
+        // let a_to_b = ready!(poll_a_to_b);
+        // let b_to_a = ready!(poll_b_to_a);
 
-        Poll::Ready(Ok((a_to_b, b_to_a)))
-        // match (poll_a_to_b, poll_b_to_a) {
-        //     (Poll::Pending, Poll::Pending) => Poll::Pending,
-        //     (Poll::Ready(a_to_b), Poll::Pending) => Poll::Ready(Ok((a_to_b, 0))),
-        //     (Poll::Pending, Poll::Ready(b_to_a)) => Poll::Ready(Ok((0, b_to_a))),
-        //     (Poll::Ready(a_to_b), Poll::Ready(b_to_a)) => Poll::Ready(Ok((a_to_b, b_to_a))),
-        // }
+        // Poll::Ready(Ok((a_to_b, b_to_a)))
+        match (poll_a_to_b, poll_b_to_a) {
+            (Poll::Pending, Poll::Pending) => Poll::Pending,
+            (Poll::Ready(a_to_b), Poll::Pending) => Poll::Ready(Ok((a_to_b, 0))),
+            (Poll::Pending, Poll::Ready(b_to_a)) => Poll::Ready(Ok((0, b_to_a))),
+            (Poll::Ready(a_to_b), Poll::Ready(b_to_a)) => Poll::Ready(Ok((a_to_b, b_to_a))),
+        }
     }
 }
 
-/// Copies data in both directions between `encrypted` stream and `plain` stream.
-///
-/// This function returns a future that will read from both streams,
-/// writing any data read to the opposing stream.
-/// This happens in both directions concurrently.
-///
-/// If an EOF is observed on one stream, [`shutdown()`] will be invoked on
-/// the other, and reading from that stream will stop. Copying of data in
-/// the other direction will continue.
-///
-/// The future will complete successfully once both directions of communication has been shut down.
-/// A direction is shut down when the reader reports EOF,
-/// at which point [`shutdown()`] is called on the corresponding writer. When finished,
-/// it will return a tuple of the number of bytes copied from encrypted to plain
-/// and the number of bytes copied from plain to encrypted, in that order.
-///
-/// [`shutdown()`]: tokio::io::AsyncWriteExt::shutdown
-///
-/// # Errors
-///
-/// The future will immediately return an error if any IO operation on `encrypted`
-/// or `plain` returns an error. Some data read from either stream may be lost (not
-/// written to the other stream) in this case.
-///
-/// # Return value
-///
-/// Returns a tuple of bytes copied `encrypted` to `plain` and bytes copied `plain` to `encrypted`.
-pub async fn copy_encrypted_bidirectional<E, P>(
-    method: CipherKind,
+pub async fn copy_bidirectional<E, P>(
     encrypted: &mut E,
     plain: &mut P,
     idle_timeout: &Option<Arc<Mutex<Sleep>>>,
@@ -330,8 +233,8 @@ where
     CopyBidirectional {
         a: encrypted,
         b: plain,
-        a_to_b: TransferState::Running(CopyBuffer::new(encrypted_read_buffer_size(method), idle_timeout_a)),
-        b_to_a: TransferState::Running(CopyBuffer::new(plain_read_buffer_size(method), idle_timeout_b)),
+        a_to_b: TransferState::Running(CopyBuffer::new(idle_timeout_a)),
+        b_to_a: TransferState::Running(CopyBuffer::new(idle_timeout_b)),
     }
     .await
 }
