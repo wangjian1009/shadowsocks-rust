@@ -20,13 +20,9 @@ use shadowsocks::{
     timeout::Sleep,
     transport::{
         direct::{TcpAcceptor, TcpConnector},
-        Acceptor,
-        Connection,
-        Connector,
-        StreamConnection,
+        Acceptor, Connection, Connector, StreamConnection,
     },
-    ServerAddr,
-    ServerConfig,
+    ServerAddr, ServerConfig,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -449,11 +445,8 @@ impl TcpServerClient {
             None => {}
         }
 
-        if self.context.check_outbound_blocked(&target_addr).await {
-            error!(
-                "tcp client {} outbound {} blocked by ACL rules",
-                self.peer_addr, target_addr
-            );
+        if self.context.check_client_blocked(&self.peer_addr) {
+            warn!("access denied from {} by ACL rules", self.peer_addr);
             return Ok(());
         }
 

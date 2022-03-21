@@ -1,5 +1,6 @@
 use super::{crypt::AEAD, new_error};
-use crypto2::aeadcipher::Aes128Gcm;
+use aes_gcm::aead::{Aead, NewAead};
+use aes_gcm::{Aes128Gcm, Key, Nonce};
 use sha2::{Digest, Sha256};
 use std::io;
 
@@ -10,20 +11,20 @@ pub struct AEADAESGCMBasedOnSeed {
 impl AEADAESGCMBasedOnSeed {
     pub fn new(seed: &str) -> Self {
         let hashed_seed = Sha256::digest(seed.as_bytes());
-
+        let key = Key::from_slice(&hashed_seed.as_slice()[..16]);
         Self {
-            block: Aes128Gcm::new(&hashed_seed.as_slice()[..16]),
+            block: Aes128Gcm::new(key),
         }
     }
 }
 
 impl AEAD for AEADAESGCMBasedOnSeed {
     fn nonce_size(&self) -> usize {
-        Aes128Gcm::NONCE_LEN
+        12 // Aes128Gcm::NONCE_LEN
     }
 
     fn overhead(&self) -> usize {
-        Aes128Gcm::TAG_LEN
+        16 // Aes128Gcm::TAG_LEN
     }
 
     fn seal(
@@ -33,37 +34,67 @@ impl AEAD for AEADAESGCMBasedOnSeed {
         plen: usize,
         _extra: Option<&[u8]>,
     ) -> io::Result<usize> {
-        let tlen = Aes128Gcm::TAG_LEN;
-        let clen = tlen + plen;
-        if plain_in_cipher_out.len() < clen {
+        // let tlen = Aes128Gcm::TAG_LEN;
+        // let clen = tlen + plen;
+        // if plain_in_cipher_out.len() < clen {
+        //     return Err(new_error(format!(
+        //         "AEADAESGCMBasedOnSeed: seal: dst not enough, dst.len={}, plain.len={}, overhead={}",
+        //         plain_in_cipher_out.len(),
+        //         plen,
+        //         tlen,
+        //     )));
+        // }
+
+        let nonce = Nonce::from_slice(nonce);
+        let output = self
+            .block
+            .encrypt(nonce, &plain_in_cipher_out[..plen])
+            .map_err(|e| new_error(e))?;
+        if output.len() > plain_in_cipher_out.len() {
             return Err(new_error(format!(
-                "AEADAESGCMBasedOnSeed: seal: dst not enough, dst.len={}, plain.len={}, overhead={}",
-                plain_in_cipher_out.len(),
+                "AEADAESGCMBasedOnSeed: seal: dst not enough, plain.len={}, require={}, but={}",
                 plen,
-                tlen,
+                output.len(),
+                plain_in_cipher_out.len(),
             )));
         }
 
-        let aad = [0u8; 0];
-        self.block.encrypt_slice(nonce, &aad, &mut plain_in_cipher_out[..clen]);
-        Ok(clen)
+        plain_in_cipher_out[..output.len()].copy_from_slice(&output[..]);
+        Ok(output.len())
     }
 
     fn open<'a>(&self, nonce: &[u8], cipher_in_plain_out: &mut [u8], _extra: Option<&[u8]>) -> io::Result<usize> {
-        let tlen = Aes128Gcm::TAG_LEN;
-        let clen = cipher_in_plain_out.len();
-        if clen < tlen {
+        // let tlen = Aes128Gcm::TAG_LEN;
+        // let clen = cipher_in_plain_out.len();
+        // if clen < tlen {
+        //     return Err(new_error(format!(
+        //         "AEADAESGCMBasedOnSeed: open: cipher not enough, cipher.len={}, overhead={}",
+        //         clen, tlen,
+        //     )));
+        // }
+
+        // let aad = [0u8; 0];
+        // let mut buf = &mut cipher_in_plain_out[..clen];
+        // self.block.decrypt_slice(nonce, &aad, &mut cipher_in_plain_out[..clen]);
+
+        // let plen = clen - tlen;
+        // Ok(plen)
+
+        let nonce = Nonce::from_slice(nonce);
+        let output = self
+            .block
+            .decrypt(nonce, &cipher_in_plain_out[..])
+            .map_err(|e| new_error(e))?;
+        if output.len() > cipher_in_plain_out.len() {
             return Err(new_error(format!(
-                "AEADAESGCMBasedOnSeed: open: cipher not enough, cipher.len={}, overhead={}",
-                clen, tlen,
+                "AEADAESGCMBasedOnSeed: open: dst not enough, require={}, but={}",
+                output.len(),
+                cipher_in_plain_out.len(),
             )));
         }
 
-        let aad = [0u8; 0];
-        self.block.decrypt_slice(nonce, &aad, &mut cipher_in_plain_out[..clen]);
-
-        let plen = clen - tlen;
-        Ok(plen)
+        cipher_in_plain_out[..output.len()].copy_from_slice(&output[..]);
+        Ok(output.len())
     }
 }
 
@@ -91,6 +122,8 @@ mod test {
         let mut cache = vec![0; seal_buf_size];
         cache[..plain.len()].copy_from_slice(plain);
         let encrypt_len = auth.seal(iv, &mut cache, plain.len(), None)?;
+
+        assert_eq!(plain.len() + auth.overhead(), encrypt_len);
 
         let clen = auth.open(iv, &mut cache[..encrypt_len], None)?;
         Ok(cache[..clen].to_owned())

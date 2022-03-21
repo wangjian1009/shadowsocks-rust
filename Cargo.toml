@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks-rust"
-version = "1.12.5"
+version = "1.14.1"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -8,7 +8,7 @@ readme = "README.md"
 documentation = "https://docs.rs/shadowsocks-rust"
 keywords = ["shadowsocks", "proxy", "socks", "socks5", "firewall"]
 license = "MIT"
-edition = "2018"
+edition = "2021"
 
 [badges]
 maintenance = { status = "passively-maintained" }
@@ -46,6 +46,7 @@ required-features = ["service"]
 members = [
     "crates/shadowsocks",
     "crates/shadowsocks-service",
+    "crates/shadowsocks-tools",
 ]
 
 [profile.release]
@@ -53,6 +54,7 @@ lto = "fat"
 codegen-units = 1
 incremental = false
 panic = "abort"
+# strip = true
 
 [features]
 default = [
@@ -112,7 +114,7 @@ utility = []
 service = ["local", "server", "manager"]
 
 # Enable use ss as lib
-lib-entry = []
+lib-entry = ["spin"]
 
 # Enables trust-dns for replacing tokio's builtin DNS resolver
 trust-dns = ["shadowsocks-service/trust-dns"]
@@ -169,7 +171,15 @@ host-dns = ["trust-dns-resolver", "rand", "local-dns"]
 rate-limit = ["shadowsocks-service/rate-limit", "governor"]
 
 # Enable detection against replay attack
-replay-attack-detect = ["shadowsocks-service/replay-attack-detect"]
+security-replay-attack-detect = ["shadowsocks-service/security-replay-attack-detect"]
+replay-attack-detect = ["security-replay-attack-detect"] # Backward compatibility. DO NOT USE.
+# Enable IV printable prefix
+security-iv-printable-prefix = ["shadowsocks-service/security-iv-printable-prefix"]
+
+# Enable ARMv8 related optimizations
+armv8 = ["shadowsocks-service/armv8"]
+# Enable NEON releated optimizations
+neon = ["shadowsocks-service/neon"]
 
 [dependencies]
 log = "0.4"
@@ -178,7 +188,7 @@ serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
 thiserror = "1.0"
 
-clap = { version = "2", features = ["wrap_help", "suggestions"] }
+clap = { version = "3.1", features = ["wrap_help", "suggestions"] }
 cfg-if = "1"
 qrcode = { version = "0.12", default-features = false }
 exitcode = "1"
@@ -191,6 +201,7 @@ build-time = "0.1"
 directories = "4.0"
 xdg = "2.4"
 rpassword = "5.0.1"
+spin = { version = "0.9", features = ["std"], optional = true }
 
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "signal"] }
@@ -203,19 +214,22 @@ governor = { version = "0.3.2", optional = true }
 
 ipnet = { version = "2.3", optional = true }
 
-mimalloc = { version = "0.1", optional = true }
+mimalloc = { version = "0.1", default-features = false, optional = true }
 tcmalloc = { version = "0.3", optional = true }
 jemallocator = { version = "0.3", optional = true }
 snmalloc-rs = { version = "0.2", optional = true }
 rpmalloc = { version = "0.2", optional = true }
 
-shadowsocks-service = { version = "1.12.4", path = "./crates/shadowsocks-service", default-features = false }
+shadowsocks-service = { version = "1.14.1", path = "./crates/shadowsocks-service", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.4"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+oslog = "0.2.0"
 
 [dev-dependencies]
 byteorder = "1.3"
 env_logger = "0.9"
 byte_string = "1.0"
-tokio = { version = "1", features = ["net", "time", "macros", "io-util"]}
+tokio = { version = "1", features = ["net", "time", "macros", "io-util"] }

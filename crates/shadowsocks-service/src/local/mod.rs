@@ -146,6 +146,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
     accept_opts.tcp.nodelay = config.no_delay;
     accept_opts.tcp.fastopen = config.fast_open;
     accept_opts.tcp.keepalive = config.keep_alive.or(Some(LOCAL_DEFAULT_KEEPALIVE_TIMEOUT));
+    context.set_accept_opts(accept_opts);
 
     if let Some(resolver) = build_dns_resolver(config.dns.clone(), config.ipv6_first, context.connect_opts_ref()).await
     {
@@ -204,6 +205,10 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
 
         if let Some(intv) = config.balancer.check_interval {
             balancer_builder.check_interval(intv);
+        }
+
+        if let Some(intv) = config.balancer.check_best_interval {
+            balancer_builder.check_best_interval(intv);
         }
 
         for server in config.server {

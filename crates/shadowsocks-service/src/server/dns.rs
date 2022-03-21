@@ -156,7 +156,7 @@ async fn resolve(
                                     continue;
                                 }
                                 let mut record = Record::with(query.name().clone(), RecordType::A, DEFAULT_TTL);
-                                record.set_rdata(RData::A(addr.ip().clone()));
+                                record.set_data(Some(RData::A(addr.ip().clone())));
                                 record
                             }
                             SocketAddr::V6(addr) => {
@@ -164,7 +164,7 @@ async fn resolve(
                                     continue;
                                 }
                                 let mut record = Record::with(query.name().clone(), RecordType::AAAA, DEFAULT_TTL);
-                                record.set_rdata(RData::AAAA(addr.ip().clone()));
+                                record.set_data(Some(RData::AAAA(addr.ip().clone())));
                                 record
                             }
                         };
@@ -232,7 +232,7 @@ mod test {
 
         assert_eq!(2, response.answer_count());
 
-        assert_eq!(&RData::A(Ipv4Addr::new(1, 1, 1, 1)), response.answers()[0].rdata());
+        assert_eq!(Some(&RData::A(Ipv4Addr::new(1, 1, 1, 1))), response.answers()[0].data());
     }
 
     async fn tcp_process_query(resolver: &DnsResolver, request: &Message) -> io::Result<Message> {
@@ -288,7 +288,10 @@ mod test {
 
         assert_eq!(2, response.answer_count());
 
-        assert_eq!(&RData::A(Ipv4Addr::new(1, 1, 1, 1)), response.answers()[0].rdata());
+        assert_eq!(
+            &RData::A(Ipv4Addr::new(1, 1, 1, 1)),
+            response.answers()[0].data().unwrap()
+        );
     }
 
     async fn udp_process_query(resolver: &DnsResolver, request: &Message) -> io::Result<Message> {

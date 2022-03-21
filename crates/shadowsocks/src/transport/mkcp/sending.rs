@@ -28,7 +28,7 @@ struct CacheNode {
 }
 
 struct SendingWindow {
-    cache: Mutex<LinkedList<Arc<CacheNode>>>,
+    cache: Mutex<Vec<Arc<CacheNode>>>,
     total_in_flight_size: AtomicU32,
 }
 
@@ -49,7 +49,7 @@ impl SendingWindow {
             payload: Arc::new(b),
         };
 
-        self.cache.lock().push_back(Arc::new(CacheNode {
+        self.cache.lock().push(Arc::new(CacheNode {
             number,
             data: Mutex::new(CacheNodeData {
                 timeout: 0,
@@ -61,18 +61,18 @@ impl SendingWindow {
 
     #[inline]
     fn first_number(&self) -> Option<u32> {
-        let e = self.cache.lock().front().map(|e| e.clone());
-        e.map(|e| e.data.lock().seg.number)
+        let cache = self.cache.lock();
+        cache.get(0).map(|e| e.data.lock().seg.number)
     }
 
     #[inline]
     fn clear(&self, una: u32) {
         let mut cache = self.cache.lock();
-        while let Some(node) = cache.front() {
+        while let Some(node) = cache.get(0) {
             if node.number >= una {
                 break;
             }
-            cache.pop_front();
+            cache.remove(0);
         }
     }
 
@@ -125,14 +125,15 @@ impl SendingWindow {
     #[inline]
     fn remove(&self, conn_meta: &MkcpConnMetadata, number: u32) -> bool {
         let mut cache = self.cache.lock();
-        let mut cursor = cache.cursor_front_mut();
-        while let Some(node) = cursor.current() {
+
+        for i in 0..cache.len() {
+            let node = cache.get(i).unwrap();
             if node.number > number {
                 return false;
             } else if node.number == number {
                 self.total_in_flight_size.fetch_sub(1, Ordering::SeqCst);
                 assert!(self.total_in_flight_size() < 0x7FFFFFFF);
-                cursor.remove_current();
+                cache.remove(i);
                 log::trace!(
                     "#{}: sending: remove data segment {}, total-in-flight={}, cache={}",
                     conn_meta,
@@ -141,12 +142,10 @@ impl SendingWindow {
                     cache.len(),
                 );
                 return true;
-            } else {
-                cursor.move_next();
             }
         }
 
-        return false;
+        false
     }
 }
 
@@ -175,7 +174,7 @@ where
         Self {
             context,
             window: SendingWindow {
-                cache: Mutex::new(LinkedList::new()),
+                cache: Mutex::new(Vec::new()),
                 total_in_flight_size: AtomicU32::new(0),
             },
             first_unacknowledged: AtomicU32::new(0),
@@ -484,7 +483,6 @@ mod test {
         segment::*,
         *,
     };
-    use std::assert_matches::assert_matches;
     use tokio::sync::mpsc;
 
     #[tokio::test]

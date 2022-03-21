@@ -86,7 +86,6 @@ impl fmt::Display for UUID {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::assert_matches::assert_matches;
 
     #[test]
     fn test_parse_bytes() {

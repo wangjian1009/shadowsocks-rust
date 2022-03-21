@@ -202,7 +202,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::{assert_matches::assert_matches, io::Cursor};
+    use std::io::Cursor;
 
     #[tokio::test]
     async fn test_rebuild_domain() {

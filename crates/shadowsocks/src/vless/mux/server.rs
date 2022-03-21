@@ -3,17 +3,15 @@ use std::{future::Future, io, net::SocketAddr, sync::Arc};
 use tokio::{io::AsyncReadExt, sync::mpsc};
 
 use crate::{
-    transport::{PacketMutWrite, PacketRead, StreamConnection},
+    transport::{PacketRead, PacketWrite, StreamConnection},
     vless::new_error,
 };
 
 use super::{
     super::protocol,
-    encoding,
-    frame,
+    encoding, frame,
     session::{Session, SessionContext, SessionManager, SessionMetadata, SessionReadCmd, SessionWay},
-    MuxStream,
-    SharedStream,
+    MuxStream, SharedStream,
 };
 
 pub async fn serve<IS, PS, FutPS, PU, FutPU>(
@@ -29,7 +27,7 @@ where
     PS: (Fn(Box<dyn StreamConnection + 'static>, protocol::Address) -> FutPS) + Send + Sync + Clone + 'static,
     // 处理Packet
     FutPU: Future<Output = io::Result<()>>,
-    PU: (Fn(Box<dyn PacketRead + 'static>, Box<dyn PacketMutWrite + 'static>, protocol::Address) -> FutPU)
+    PU: (Fn(Box<dyn PacketRead + 'static>, Box<dyn PacketWrite + 'static>, protocol::Address) -> FutPU)
         + Send
         + Clone
         + 'static,
@@ -100,7 +98,7 @@ where
     PS: (Fn(Box<dyn StreamConnection + 'static>, protocol::Address) -> FutPS) + Send + Sync + 'static,
     // 处理Packet
     FutPU: Future<Output = io::Result<()>>,
-    PU: (Fn(Box<dyn PacketRead + 'static>, Box<dyn PacketMutWrite + 'static>, protocol::Address) -> FutPU)
+    PU: (Fn(Box<dyn PacketRead + 'static>, Box<dyn PacketWrite + 'static>, protocol::Address) -> FutPU)
         + Send
         + 'static,
 {
@@ -198,7 +196,7 @@ async fn handle_serve_udp<PU, FutPU>(
     _serve_udp: PU,
 ) where
     FutPU: Future<Output = io::Result<()>>,
-    PU: (Fn(Box<dyn PacketRead + 'static>, Box<dyn PacketMutWrite + 'static>, protocol::Address) -> FutPU)
+    PU: (Fn(Box<dyn PacketRead + 'static>, Box<dyn PacketWrite + 'static>, protocol::Address) -> FutPU)
         + Send
         + 'static,
 {

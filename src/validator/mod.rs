@@ -15,7 +15,7 @@ use shadowsocks_service::shadowsocks::transport::BoundWidth;
 
 macro_rules! validate_type {
     ($name:ident, $ty:ty, $help:expr) => {
-        pub fn $name(v: String) -> Result<(), String> {
+        pub fn $name(v: &str) -> Result<(), String> {
             match v.parse::<$ty>() {
                 Ok(..) => Ok(()),
                 Err(..) => Err($help.to_owned()),
@@ -50,15 +50,15 @@ validate_type!(validate_u64, u64, "should be unsigned integer");
 validate_type!(validate_u32, u32, "should be unsigned integer");
 validate_type!(validate_usize, usize, "should be unsigned integer");
 
-pub fn validate_server_url(v: String) -> Result<(), String> {
-    match ServerConfig::from_url(&v) {
+pub fn validate_server_url(v: &str) -> Result<(), String> {
+    match ServerConfig::from_url(v) {
         Ok(..) => Ok(()),
         Err(..) => Err("should be SIP002 (https://shadowsocks.org/en/wiki/SIP002-URI-Scheme.html) format".to_owned()),
     }
 }
 
 #[cfg(feature = "local-tun")]
-pub fn validate_ipnet(v: String) -> Result<(), String> {
+pub fn validate_ipnet(v: &str) -> Result<(), String> {
     match v.parse::<IpNet>() {
         Err(..) => Err("should be a CIDR address like 10.1.2.3/24".to_owned()),
         Ok(n) => {
@@ -82,7 +82,7 @@ pub fn validate_transport_connector(v: String) -> Result<(), String> {
 }
 
 #[cfg(feature = "transport")]
-pub fn validate_transport_acceptor(v: String) -> Result<(), String> {
+pub fn validate_transport_acceptor(v: &str) -> Result<(), String> {
     use shadowsocks_service::shadowsocks::config::TransportAcceptorConfig;
 
     match v.parse::<TransportAcceptorConfig>() {
@@ -92,7 +92,7 @@ pub fn validate_transport_acceptor(v: String) -> Result<(), String> {
 }
 
 #[cfg(feature = "vless")]
-pub fn validate_uuid(v: String) -> Result<(), String> {
+pub fn validate_uuid(v: &str) -> Result<(), String> {
     use shadowsocks_service::shadowsocks::vless::UUID;
 
     match v.parse::<UUID>() {

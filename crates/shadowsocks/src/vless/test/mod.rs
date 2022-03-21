@@ -13,12 +13,7 @@ use crate::{
     net::{AcceptOpts, ConnectOpts},
     transport::{
         direct::{TcpAcceptor, TcpConnector},
-        Acceptor,
-        Connection,
-        Connector,
-        PacketMutWrite,
-        PacketRead,
-        StreamConnection,
+        Acceptor, Connection, Connector, PacketRead, PacketWrite, StreamConnection,
     },
 };
 
@@ -203,7 +198,7 @@ async fn serve_tcp(
 
 async fn serve_udp(
     mut r: Box<dyn PacketRead>,
-    mut w: Box<dyn PacketMutWrite>,
+    mut w: Box<dyn PacketWrite>,
     target_addr: Address,
     modifiler: Arc<DataModifiler>,
 ) -> io::Result<()> {

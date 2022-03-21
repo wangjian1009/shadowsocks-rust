@@ -145,14 +145,14 @@ impl DnsClientCache {
                     .await;
                 }
             }
-            match self.get_client_or_create(&dck, async { dns_res }).await {
+            match self.get_client_or_create(dck, async { dns_res }).await {
                 Ok(mut client) => match client.lookup_timeout(msg.clone(), self.timeout).await {
                     Ok(msg) => {
                         self.save_client(dck.clone(), client).await;
                         return Ok(msg);
                     }
                     Err(err) => {
-                        last_err = Some(From::from(err));
+                        last_err = Some(err);
                         continue;
                     }
                 },

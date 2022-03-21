@@ -13,7 +13,7 @@ use crate::transport::mkcp::{HeaderConfig, MkcpConfig};
 fn rebuild_ss() {
     let config = ServerConfig::new(
         "1.2.3.4:5".parse::<ServerAddr>().unwrap(),
-        ServerProtocol::SS(ShadowsocksConfig::new("pwd1", CipherKind::AES_128_CFB1)),
+        ServerProtocol::SS(ShadowsocksConfig::new("pwd1", CipherKind::AES_128_GCM)),
     );
 
     let url = config.to_url();

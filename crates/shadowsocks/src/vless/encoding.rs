@@ -285,7 +285,7 @@ where
 #[cfg(test)]
 mod test {
     use super::{super::common::UUID, *};
-    use std::{assert_matches::assert_matches, io::Cursor, str::FromStr};
+    use std::{io::Cursor, str::FromStr};
 
     #[tokio::test]
     async fn test_address_ipv4() {
@@ -393,7 +393,7 @@ mod test {
         let mut buffer = Vec::new();
         assert_matches!(
             encode_request_header(&mut buffer, &expected_request, &expected_addons),
-            Ok(36),
+            Ok(36)
         );
 
         let r = decode_request_header(&mut Cursor::new(&mut buffer[..])).await;
