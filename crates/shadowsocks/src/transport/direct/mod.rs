@@ -22,7 +22,7 @@ impl StreamConnection for crate::net::TcpStream {
 
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, _limiter: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
-        unreachable!();
+        log::error!("TcpStream not support set rate-limit")
     }
 }
 
@@ -39,7 +39,7 @@ impl StreamConnection for tokio::net::TcpStream {
 
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, _limiter: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
-        unreachable!();
+        log::error!("TcpStream not support set rate-limit")
     }
 }
 
@@ -63,7 +63,7 @@ impl StreamConnection for tokio::net::UnixStream {
 
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, _limiter: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
-        unreachable!();
+        log::error!("UnixStream not support set rate-limit")
     }
 }
 

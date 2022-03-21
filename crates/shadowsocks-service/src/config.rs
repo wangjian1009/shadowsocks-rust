@@ -1470,8 +1470,13 @@ impl Config {
         }
 
         if let Some(network) = config.network {
-            let mut nsvr = ServerConfig::from_str(network.as_str())
-                .map_err(|e| Error::new(ErrorKind::Invalid, "network parse error", Some(e.to_string())))?;
+            let mut nsvr = ServerConfig::from_str(network.as_str()).map_err(|e| {
+                Error::new(
+                    ErrorKind::Invalid,
+                    "network parse error",
+                    Some(format!("network={}, error={}", network, e)),
+                )
+            })?;
 
             nsvr.set_mode(global_mode);
 

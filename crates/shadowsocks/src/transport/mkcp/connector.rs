@@ -222,8 +222,9 @@ where
                         log::error!("#{}: remove conn rx recv none", connection.meta());
                     }
                 }
-
             }
+
+            tokio::task::yield_now().await;
         }
 
         log::trace!("#{}: handle incoming stoped", connection.meta());

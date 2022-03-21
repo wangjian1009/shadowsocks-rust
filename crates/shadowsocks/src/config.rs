@@ -1060,6 +1060,13 @@ impl ServerAddr {
             ServerAddr::DomainName(_, p) => p,
         }
     }
+
+    pub fn is_unspecified(&self) -> bool {
+        match *self {
+            ServerAddr::SocketAddr(ref s) => s.ip().is_unspecified(),
+            ServerAddr::DomainName(..) => false,
+        }
+    }
 }
 
 /// Parse `ServerAddr` error

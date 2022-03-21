@@ -1,6 +1,7 @@
 use arc_swap::ArcSwap;
 use bytes::Bytes;
 use futures::{ready, FutureExt};
+use spin::Mutex as SpinMutex;
 use std::{
     fmt::{self, Display},
     io,
@@ -205,7 +206,13 @@ impl Display for MkcpConnMetadata {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.way {
             &MkcpConnWay::Incoming => write!(f, "S {} #{}", self.remote_addr, self.conversation),
-            &MkcpConnWay::Outgoing => write!(f, "C {} #{}", self.local_addr, self.conversation),
+            &MkcpConnWay::Outgoing => {
+                if self.local_addr.is_unspecified() {
+                    write!(f, "C #{}", self.conversation)
+                } else {
+                    write!(f, "C {} #{}", self.local_addr, self.conversation)
+                }
+            }
         }
     }
 }
@@ -219,7 +226,8 @@ where
     remove: Option<Box<dyn Fn() + Send + Sync>>,
     statistic: Option<Arc<StatisticStat>>,
     since: Instant,
-    data_input: Notifier,
+    data_input_tx: mpsc::Sender<u8>,
+    data_input_rx: SpinMutex<mpsc::Receiver<u8>>,
     data_output: Notifier,
     state: AtomicU8,
     state_begin_time: AtomicU32,
@@ -245,6 +253,8 @@ where
     ) -> (Self, mpsc::Receiver<UpdaterCmd>, mpsc::Receiver<UpdaterCmd>) {
         let (data_updater, data_receiver) = Updater::new();
         let (ping_updater, ping_receiver) = Updater::new();
+        let (data_input_tx, data_input_rx) = mpsc::channel(1);
+        let data_input_rx = SpinMutex::new(data_input_rx);
 
         let overhead = output.overhead() as u32;
 
@@ -255,7 +265,8 @@ where
                 remove,
                 statistic,
                 since: Instant::now(),
-                data_input: Notifier::new(),
+                data_input_tx,
+                data_input_rx,
                 data_output: Notifier::new(),
                 state: AtomicU8::new(MkcpState::Active as u8),
                 state_begin_time: AtomicU32::new(0),
@@ -550,7 +561,7 @@ where
     fn terminate(&self, receiving_worker: &ReceivingWorker<PW>, sending_worker: &SendingWorker<PW>) {
         let state = self.state();
         log::debug!("#{}: ({}): terminating connection", self.meta(), state);
-        self.data_input.signal();
+        let _ = self.data_input_tx.try_send(0);
         self.data_output.signal();
 
         receiving_worker.release();
@@ -562,7 +573,7 @@ where
     }
 
     fn close(&self, receiving_worker: &ReceivingWorker<PW>, sending_worker: &SendingWorker<PW>) -> io::Result<()> {
-        self.data_input.signal();
+        let _ = self.data_input_tx.try_send(0);
         self.data_output.signal();
 
         match self.state() {
@@ -713,7 +724,17 @@ where
                     self.handle_option(option);
                     self.receiving_worker.process_segment(seg);
                     if self.receiving_worker.is_data_available() {
-                        self.context.data_input.signal();
+                        match self.context.data_input_tx.try_send(0) {
+                            Ok(()) => {
+                                // log::info!("xxxxx: data_input signal: success");
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_message)) => {
+                                // log::info!("xxxxx: data_input signal: closed {}", _message);
+                            }
+                            Err(mpsc::error::TrySendError::Full(_message)) => {
+                                // log::info!("xxxxx: data_input signal: full {}", _message);
+                            }
+                        }
                     }
                     wakeup_updater!(self.context, UPDATER_DATA, "recv data", self.context.data_updater);
                 }
@@ -751,7 +772,7 @@ where
                     }
 
                     if segment::SegmentOption::Close.is_enable_of(option) || seg.cmd == segment::Command::Terminate {
-                        self.context.data_input.signal();
+                        let _ = self.context.data_input_tx.try_send(0);
                         self.context.data_output.signal();
                     }
 
@@ -801,8 +822,8 @@ where
         loop {
             match self.context.state() {
                 MkcpState::ReadyToClose | MkcpState::Terminating | MkcpState::Terminated => {
-                    let state = self.context.state();
-                    log::info!("#{}: read done in state {:?}", self.context.meta(), state);
+                    // let state = self.context.state();
+                    // log::info!("#{}: read done in state {:?}", self.context.meta(), state);
                     return Poll::Ready(Ok(()));
                 }
                 MkcpState::Active | MkcpState::PeerClosed | MkcpState::PeerTerminating => {
@@ -813,7 +834,7 @@ where
                         return Poll::Ready(Ok(()));
                     } else {
                         // log::info!("#{}: recv begin wait", self.context.meta());
-                        ready!(self.context.data_input.wait().boxed().poll_unpin(cx));
+                        ready!(self.context.data_input_rx.lock().recv().boxed_local().poll_unpin(cx));
                     }
                 }
             }

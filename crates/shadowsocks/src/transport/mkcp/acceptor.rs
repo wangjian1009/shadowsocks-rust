@@ -319,7 +319,7 @@ where
     #[cfg(feature = "rate-limit")]
     #[inline]
     fn set_rate_limit(&mut self, _rate_limit: Option<Arc<RateLimiter>>) {
-        unreachable!()
+        log::debug!("#{}: set_rate_limit: ignore", 1)
     }
 }
 

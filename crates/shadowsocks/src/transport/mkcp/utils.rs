@@ -14,7 +14,15 @@ impl Notifier {
     }
 
     pub fn signal(&self) {
-        let _ = self.tx.try_send(0);
+        match self.tx.try_send(0) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Closed(_message)) => {
+                // log::info!("xxxxx: signal closed {}", _message)
+            }
+            Err(mpsc::error::TrySendError::Full(_message)) => {
+                // log::info!("xxxxx: signal full {}", _message)
+            }
+        }
     }
 
     pub async fn wait(&self) {
