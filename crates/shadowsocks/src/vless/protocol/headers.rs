@@ -1,3 +1,5 @@
+use std::fmt;
+
 use super::{super::common::UUID, Address};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -5,6 +7,16 @@ pub enum RequestCommand {
     TCP = 0x01,
     UDP = 0x02,
     Mux = 0x03,
+}
+
+impl fmt::Display for RequestCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::TCP => write!(f, "tcp"),
+            Self::UDP => write!(f, "udp"),
+            Self::Mux => write!(f, "mux"),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]

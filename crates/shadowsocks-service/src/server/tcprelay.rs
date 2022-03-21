@@ -346,7 +346,7 @@ impl TcpServer {
 #[inline]
 async fn timeout_fut<F, R>(duration: Option<Duration>, f: F) -> io::Result<R>
 where
-    F: Future<Output = io::Result<R>>,
+    F: Future<Output = io::Result<R>> + Send,
 {
     match duration {
         None => f.await,

@@ -140,11 +140,12 @@ impl<S: StreamConnection> AutoProxyClientStream<S> {
         C: Connector + Connector<TS = S>,
     {
         let flow_stat = context.flow_stat();
-        let stream = match vless::ClientStream::connect_stream(
+        let stream = match vless::ClientStream::connect(
             connector.as_ref(),
             server.server_config(),
             vless_cfg,
-            addr,
+            vless::protocol::RequestCommand::TCP,
+            Some(addr),
             context.connect_opts_ref(),
             |mut stream| {
                 #[cfg(feature = "rate-limit")]

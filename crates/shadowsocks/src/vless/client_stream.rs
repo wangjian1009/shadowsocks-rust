@@ -64,11 +64,12 @@ impl<S: StreamConnection> StreamConnection for ClientStream<S> {
 
 impl<S: StreamConnection> ClientStream<S> {
     /// Connect to target `addr` via vless' server configured by `svr_cfg`, maps `TcpStream` to customized stream with `map_fn`
-    pub async fn connect_stream<C, F>(
+    pub async fn connect<C, F>(
         connector: &C,
         svr_cfg: &ServerConfig,
         svr_vless_cfg: &Config,
-        addr: Address,
+        command: protocol::RequestCommand,
+        target_address: Option<Address>,
         opts: &ConnectOpts,
         map_fn: F,
     ) -> io::Result<ClientStream<S>>
@@ -93,7 +94,8 @@ impl<S: StreamConnection> ClientStream<S> {
         };
 
         log::trace!(
-            "connected vless tcp remote {}{} (outbound: {}) with {:?}",
+            "connected vless {} remote {}{} (outbound: {}) with {:?}",
+            command,
             svr_cfg.addr(),
             svr_cfg.external_addr(),
             svr_cfg.acceptor_transport_tag(),
@@ -101,80 +103,22 @@ impl<S: StreamConnection> ClientStream<S> {
         );
 
         match stream {
-            Connection::Stream(stream) => Ok(ClientStream::new_stream(map_fn(stream), svr_vless_cfg, addr)?),
-            Connection::Packet { .. } => panic!(),
-        }
-    }
+            Connection::Stream(stream) => {
+                let request = protocol::RequestHeader {
+                    version: 0,
+                    user: Self::pick_user(svr_vless_cfg)?.account.id.clone(),
+                    command,
+                    address: target_address,
+                };
 
-    /// Connect to target `addr` via vless' server configured by `svr_cfg`, maps `TcpStream` to customized stream with `map_fn`
-    pub async fn connect_packet<C, F>(
-        connector: &C,
-        svr_cfg: &ServerConfig,
-        svr_vless_cfg: &Config,
-        addr: Address,
-        opts: &ConnectOpts,
-        map_fn: F,
-    ) -> io::Result<ClientStream<S>>
-    where
-        C: Connector,
-        F: FnOnce(C::TS) -> S,
-    {
-        let destination = Destination::Tcp(svr_cfg.external_addr().clone());
-
-        let stream = match svr_cfg.timeout() {
-            Some(d) => match time::timeout(d, connector.connect(&destination, opts)).await {
-                Ok(Ok(s)) => s,
-                Ok(Err(e)) => return Err(e),
-                Err(..) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("connect {} timeout", svr_cfg.addr()),
-                    ))
-                }
-            },
-            None => connector.connect(&destination, opts).await?,
-        };
-
-        log::trace!(
-            "connected vless tcp remote {}{} (outbound: {}) with {:?}",
-            svr_cfg.addr(),
-            svr_cfg.external_addr(),
-            svr_cfg.acceptor_transport_tag(),
-            opts
-        );
-
-        match stream {
-            Connection::Stream(stream) => Ok(ClientStream::new_packet(map_fn(stream), svr_vless_cfg, addr)?),
+                Ok(ClientStream::new(map_fn(stream), request))
+            }
             Connection::Packet { .. } => panic!(),
         }
     }
 
     #[inline]
-    fn new_stream(stream: S, cfg: &Config, addr: Address) -> io::Result<ClientStream<S>> {
-        let request = protocol::RequestHeader {
-            version: 0,
-            user: Self::pick_user(cfg)?.account.id.clone(),
-            command: protocol::RequestCommand::TCP,
-            address: Some(addr),
-        };
-
-        Ok(Self::new_by_request(stream, request))
-    }
-
-    #[inline]
-    fn new_packet(stream: S, cfg: &Config, addr: Address) -> io::Result<ClientStream<S>> {
-        let request = protocol::RequestHeader {
-            version: 0,
-            user: Self::pick_user(cfg)?.account.id.clone(),
-            command: protocol::RequestCommand::UDP,
-            address: Some(addr),
-        };
-
-        Ok(Self::new_by_request(stream, request))
-    }
-
-    #[inline]
-    fn new_by_request(stream: S, request: protocol::RequestHeader) -> ClientStream<S> {
+    fn new(stream: S, request: protocol::RequestHeader) -> ClientStream<S> {
         ClientStream {
             stream,
             write_state: Arc::new(ClientStreamWriteState::Connect { request, addons: None }),

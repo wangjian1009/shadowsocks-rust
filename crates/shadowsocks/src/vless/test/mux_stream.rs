@@ -6,7 +6,7 @@ use std::{io::Cursor, str::FromStr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
-async fn stream_basic() {
+async fn mux_stream_basic() {
     let _ = env_logger::builder()
         .filter_level(log::LevelFilter::Info)
         .is_test(true)
@@ -20,19 +20,22 @@ async fn stream_basic() {
         email: None,
         account: protocol::Account::new(uuid),
     });
+    cfg.mux = Some(mux::ClientStrategy::default());
 
     let modifiler = DataModifiler::Xor('c' as u8);
     let modifiler = Arc::new(modifiler);
+
+    let worker_picker = mux::WorkerPicker::new();
 
     // 创建服务
     let (_h, port) = start_server(&cfg, modifiler).await.unwrap();
 
     // 测试数据
-    let run_count = 10;
+    let run_count = 1;
     let mut vfut = Vec::with_capacity(run_count);
     for i in 0..run_count {
         let target_addr = Address::DomainNameAddress("www.baidu.com".to_string(), i as u16);
-        vfut.push(test_one_connection(&cfg, port, target_addr).boxed());
+        vfut.push(test_one_connection(&worker_picker, &cfg, port, target_addr).boxed());
     }
 
     while !vfut.is_empty() {
@@ -42,8 +45,13 @@ async fn stream_basic() {
     }
 }
 
-async fn test_one_connection(cfg: &Config, port: u16, target_addr: Address) -> io::Result<()> {
-    let stream = connect_stream(cfg, port, target_addr).await?;
+async fn test_one_connection(
+    worker_picker: &mux::WorkerPicker,
+    cfg: &Config,
+    port: u16,
+    target_addr: Address,
+) -> io::Result<()> {
+    let stream = connect_mux_stream(worker_picker, cfg, port, target_addr).await?;
     let (mut r, mut w) = tokio::io::split(stream);
 
     let mut client_send = vec![0u8; 1024 * 1024]; // 1048576

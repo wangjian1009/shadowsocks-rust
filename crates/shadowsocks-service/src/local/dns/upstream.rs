@@ -20,11 +20,13 @@ use shadowsocks::{
 
 #[cfg(unix)]
 use tokio::net::UnixStream;
+
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::UdpSocket,
     time,
 };
+
 use trust_dns_resolver::proto::{
     error::{ProtoError, ProtoErrorKind},
     op::Message,
@@ -120,19 +122,31 @@ impl DnsClient {
                     io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
                 }
                 #[cfg(feature = "vless")]
-                shadowsocks::config::ServerProtocol::Vless(vless_cfg) => {
-                    let stream = vless::ClientStream::connect_stream(
-                        &connector,
-                        svr_cfg,
-                        vless_cfg,
-                        ns.clone(),
-                        connect_opts,
-                        |s| MonProxyStream::from_stream(s, flow_stat, None),
-                    )
-                    .await?;
+                shadowsocks::config::ServerProtocol::Vless(vless_cfg) => match vless_cfg.mux.as_ref() {
+                    None => {
+                        let stream = vless::ClientStream::connect(
+                            &connector,
+                            svr_cfg,
+                            vless_cfg,
+                            vless::protocol::RequestCommand::TCP,
+                            Some(ns.clone()),
+                            connect_opts,
+                            |s| MonProxyStream::from_stream(s, flow_stat, None),
+                        )
+                        .await?;
 
-                    io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
-                }
+                        io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
+                    }
+                    Some(_strategy) => {
+                        let worker_picker = vless::mux::WorkerPicker::new();
+                        let stream = worker_picker
+                            .connect_stream(&connector, svr_cfg, vless_cfg, ns.clone(), connect_opts, |s| {
+                                MonProxyStream::from_stream(s, flow_stat, None)
+                            })
+                            .await?;
+                        io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
+                    }
+                },
             }
         })?;
 

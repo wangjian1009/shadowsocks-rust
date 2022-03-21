@@ -43,6 +43,33 @@ impl MutPacketWriter {
             abortable: Arc::new(handler),
         }
     }
+
+    pub fn new_boxed(mut inner: Box<dyn PacketMutWrite>, chanel_size: usize) -> Self {
+        let (tx, mut rx) = mpsc::channel::<Packet>(chanel_size);
+
+        let handler = tokio::spawn(async move {
+            while let Some(packet) = rx.recv().await {
+                match inner.write_to_mut(packet.buf.as_slice(), &packet.addr).await {
+                    Ok(()) => {}
+                    Err(err) => {
+                        match err.kind() {
+                            io::ErrorKind::UnexpectedEof => {}
+                            _ => {
+                                log::error!("MutPacketWrite: write to inner error: {}", err);
+                            }
+                        }
+                        rx.close();
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self {
+            sender: tx,
+            abortable: Arc::new(handler),
+        }
+    }
 }
 
 impl Drop for MutPacketWriter {

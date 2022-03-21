@@ -677,11 +677,12 @@ where
                                     Some(self.context.context()),
                                     svr_cfg.connector_transport(),
                                     |connector| {
-                                        let stream = vless::ClientStream::connect_packet(
+                                        let stream = vless::ClientStream::connect(
                                             &connector,
                                             svr_cfg,
                                             cfg,
-                                            target_addr.clone().into(),
+                                            vless::protocol::RequestCommand::UDP,
+                                            Some(target_addr.clone().into()),
                                             self.context.connect_opts_ref(),
                                             |f| f,
                                         )
@@ -749,11 +750,12 @@ where
                                                 Some(self.context.context()),
                                                 svr_cfg.connector_transport(),
                                                 |connector| {
-                                                    let stream = vless::ClientStream::connect_packet(
+                                                    let stream = vless::ClientStream::connect(
                                                         &connector,
                                                         svr_cfg,
                                                         cfg,
-                                                        target_addr.clone().into(),
+                                                        vless::protocol::RequestCommand::UDP,
+                                                        Some(target_addr.clone().into()),
                                                         self.context.connect_opts_ref(),
                                                         |f| f,
                                                     )

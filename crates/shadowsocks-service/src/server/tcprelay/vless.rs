@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use shadowsocks::{
     relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE,
-    transport::{MutPacketWriter, PacketRead},
-    vless::{protocol, InboundHandler, VlessUdpReader, VlessUdpWriter},
+    transport::{MutPacketWriter, PacketMutWrite, PacketRead},
+    vless::{protocol, InboundHandler},
 };
 use tokio::io::copy_bidirectional;
 
@@ -27,11 +27,11 @@ impl TcpServerClient {
                 request_timeout,
                 {
                     let arc_self = arc_self.clone();
-                    move |s, addr| arc_self.serve_vless_tcp(s, addr)
+                    move |s, addr| arc_self.clone().serve_vless_tcp(s, addr)
                 },
                 {
                     let arc_self = arc_self.clone();
-                    move |r, w, addr| arc_self.serve_vless_udp(r, w, addr)
+                    move |r, w, addr| arc_self.clone().serve_vless_udp(r, w, addr)
                 },
                 {
                     let arc_self = arc_self.clone();
@@ -41,9 +41,9 @@ impl TcpServerClient {
             .await
     }
 
-    async fn serve_vless_tcp<IS: StreamConnection>(
+    async fn serve_vless_tcp(
         self: Arc<Self>,
-        mut stream: IS,
+        mut stream: Box<dyn StreamConnection>,
         target_addr: Address,
     ) -> io::Result<()> {
         let connection_stat = self.context.connection_stat();
@@ -168,18 +168,15 @@ impl TcpServerClient {
         Ok(())
     }
 
-    async fn serve_vless_udp<IS>(
+    async fn serve_vless_udp(
         self: Arc<Self>,
-        mut reader: VlessUdpReader<IS>,
-        writer: VlessUdpWriter<IS>,
+        mut reader: Box<dyn PacketRead>,
+        writer: Box<dyn PacketMutWrite>,
         _address: protocol::Address,
-    ) -> io::Result<()>
-    where
-        IS: StreamConnection + 'static,
-    {
+    ) -> io::Result<()> {
         let (_context, sender) = UdpAssociationContext::new(
             self.context.clone(),
-            Box::new(MutPacketWriter::new(writer, 1024)),
+            Box::new(MutPacketWriter::new_boxed(writer, 1024)),
             self.peer_addr,
             None,
         );

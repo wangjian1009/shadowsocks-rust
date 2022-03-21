@@ -83,6 +83,7 @@ fn parse_vless_mkcp() {
 
     let mut mkcp_config = MkcpConfig::default();
     mkcp_config.header_config = Some(HeaderConfig::Wechat);
+    mkcp_config.seed = Some("itest123".to_owned());
     expect_config.set_connector_transport(Some(TransportConnectorConfig::Mkcp(mkcp_config)));
 
     assert_eq!(parsed_config, expect_config);

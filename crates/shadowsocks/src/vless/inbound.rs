@@ -2,17 +2,17 @@ use bytes::BytesMut;
 use std::{collections::HashMap, future::Future, io, net::SocketAddr, time::Duration};
 use tokio::{io::AsyncWriteExt, time};
 
-use crate::{transport::StreamConnection, vless::new_error};
+use crate::transport::{PacketMutWrite, PacketRead, StreamConnection};
 
 use super::{
     client_packet::new_vless_packet_connection,
     encoding,
+    mux,
+    new_error,
     protocol,
     protocol::Fallback,
     validator::Validator,
     Config,
-    VlessUdpReader,
-    VlessUdpWriter,
 };
 
 pub struct InboundHandler {
@@ -79,10 +79,16 @@ impl InboundHandler {
     ) -> io::Result<()>
     where
         IS: StreamConnection + 'static,
-        FutPS: Future<Output = io::Result<()>>,
-        PS: FnOnce(IS, protocol::Address) -> FutPS,
+        // 处理Stream
+        FutPS: Future<Output = io::Result<()>> + Send,
+        PS: (Fn(Box<dyn StreamConnection + 'static>, protocol::Address) -> FutPS) + Send + Sync + Clone + 'static,
+        // 处理Packet
         FutPU: Future<Output = io::Result<()>>,
-        PU: FnOnce(VlessUdpReader<IS>, VlessUdpWriter<IS>, protocol::Address) -> FutPU,
+        PU: (Fn(Box<dyn PacketRead + 'static>, Box<dyn PacketMutWrite + 'static>, protocol::Address) -> FutPU)
+            + Send
+            + Clone
+            + 'static,
+        // 处理Error
         FutPE: Future<Output = io::Result<()>>,
         PE: FnOnce(IS, io::Error) -> FutPE,
     {
@@ -132,7 +138,7 @@ impl InboundHandler {
         match request.command {
             protocol::RequestCommand::TCP => {
                 if let Some(address) = request.address {
-                    serve_stream(stream, address).await
+                    serve_stream(Box::new(stream), address).await
                 } else {
                     Err(new_error(format!("TCP rquest no target address")))
                 }
@@ -140,12 +146,12 @@ impl InboundHandler {
             protocol::RequestCommand::UDP => {
                 if let Some(address) = request.address {
                     let (reader, writer) = new_vless_packet_connection(stream, address.clone().into());
-                    serve_udp(reader, writer, address).await
+                    serve_udp(Box::new(reader), Box::new(writer), address).await
                 } else {
                     Err(new_error(format!("udp rquest no target address")))
                 }
             }
-            protocol::RequestCommand::Mux => unreachable!(),
+            protocol::RequestCommand::Mux => mux::serve(stream, peer_addr, serve_stream, serve_udp).await,
         }
     }
 }

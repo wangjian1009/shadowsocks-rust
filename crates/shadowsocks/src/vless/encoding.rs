@@ -187,7 +187,21 @@ where
 }
 
 #[inline]
-fn encode_address<W>(w: &mut W, address: &protocol::Address) -> io::Result<usize>
+pub fn address_serialized_len(address: &protocol::Address) -> usize
+{
+    match address {
+        Address::SocketAddress(addr) => match addr {
+            SocketAddr::V4(_addr) => 7,
+            SocketAddr::V6(_addr) => 19,
+        },
+        Address::DomainNameAddress(host, _port) => {
+            2 + 1 + 1 + host.as_bytes().len()
+        }
+    }
+}
+
+#[inline]
+pub fn encode_address<W>(w: &mut W, address: &protocol::Address) -> io::Result<usize>
 where
     W: BufMut + Unpin,
 {
@@ -221,7 +235,7 @@ where
 }
 
 #[inline]
-async fn decode_address<R>(stream: &mut R) -> io::Result<protocol::Address>
+pub async fn decode_address<R>(stream: &mut R) -> io::Result<protocol::Address>
 where
     R: AsyncRead + Unpin,
 {

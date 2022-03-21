@@ -1,6 +1,6 @@
 use std::io;
 
-use super::{Account, User};
+use super::{super::mux::ClientStrategy, Account, User};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fallback {
@@ -16,6 +16,7 @@ pub struct Config {
     pub clients: Vec<User>,
     pub decryption: Option<String>,
     pub fallbacks: Option<Vec<Fallback>>,
+    pub mux: Option<ClientStrategy>,
 }
 
 impl Config {
@@ -24,6 +25,7 @@ impl Config {
             clients: Vec::new(),
             decryption: None,
             fallbacks: None,
+            mux: None,
         }
     }
 

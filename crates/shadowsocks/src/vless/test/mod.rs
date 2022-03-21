@@ -26,8 +26,36 @@ use crate::test::transfer;
 
 type TcpStream = <TcpConnector as Connector>::TS;
 
+mod mux_stream;
 mod packet;
 mod stream;
+
+async fn connect_mux_stream(
+    worker_picker: &mux::WorkerPicker,
+    cfg: &Config,
+    proxy_port: u16,
+    target_addr: Address,
+) -> io::Result<mux::MuxStream> {
+    let svr_cfg = ServerConfig::new(
+        format!("127.0.0.1:{}", proxy_port).parse::<ServerAddr>().unwrap(),
+        ServerProtocol::Vless(cfg.clone()),
+    );
+
+    let connector = TcpConnector::new(None);
+    worker_picker
+        .connect_stream(
+            &connector,
+            &svr_cfg,
+            match svr_cfg.protocol() {
+                ServerProtocol::Vless(vless_cfg) => vless_cfg,
+                _ => unreachable!(),
+            },
+            target_addr,
+            &ConnectOpts::default(),
+            |f| f,
+        )
+        .await
+}
 
 async fn connect_stream(cfg: &Config, proxy_port: u16, target_addr: Address) -> io::Result<ClientStream<TcpStream>> {
     let connector = TcpConnector::new(None);
@@ -37,7 +65,16 @@ async fn connect_stream(cfg: &Config, proxy_port: u16, target_addr: Address) -> 
         ServerProtocol::Vless(cfg.clone()),
     );
 
-    ClientStream::connect_stream(&connector, &svr_cfg, cfg, target_addr, &ConnectOpts::default(), |f| f).await
+    ClientStream::connect(
+        &connector,
+        &svr_cfg,
+        cfg,
+        protocol::RequestCommand::TCP,
+        Some(target_addr),
+        &ConnectOpts::default(),
+        |f| f,
+    )
+    .await
 }
 
 async fn connect_packet(
@@ -55,11 +92,12 @@ async fn connect_packet(
         ServerProtocol::Vless(cfg.clone()),
     );
 
-    let stream = ClientStream::connect_packet(
+    let stream = ClientStream::connect(
         &connector,
         &svr_cfg,
         cfg,
-        target_addr.clone().into(),
+        protocol::RequestCommand::UDP,
+        Some(target_addr.clone().into()),
         &ConnectOpts::default(),
         |f| f,
     )
@@ -121,11 +159,11 @@ async fn start_server(
                         Some(Duration::from_secs(1)),
                         {
                             let modifiler = modifiler.clone();
-                            move |s, addr| serve_tcp(s, addr, modifiler)
+                            move |s, addr| serve_tcp(s, addr, modifiler.clone())
                         },
                         {
                             let modifiler = modifiler.clone();
-                            move |r, w, addr| serve_udp(r, w, addr, modifiler)
+                            move |r, w, addr| serve_udp(r, w, addr, modifiler.clone())
                         },
                         move |s, err| serve_err(s, err),
                     )
@@ -137,8 +175,8 @@ async fn start_server(
     Ok((handler, port))
 }
 
-async fn serve_tcp<IS: StreamConnection>(
-    stream: IS,
+async fn serve_tcp(
+    stream: Box<dyn StreamConnection>,
     target_addr: Address,
     modifiler: Arc<DataModifiler>,
 ) -> io::Result<()> {
@@ -163,9 +201,9 @@ async fn serve_tcp<IS: StreamConnection>(
     }
 }
 
-async fn serve_udp<IS: StreamConnection>(
-    mut r: VlessUdpReader<IS>,
-    mut w: VlessUdpWriter<IS>,
+async fn serve_udp(
+    mut r: Box<dyn PacketRead>,
+    mut w: Box<dyn PacketMutWrite>,
     target_addr: Address,
     modifiler: Arc<DataModifiler>,
 ) -> io::Result<()> {

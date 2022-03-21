@@ -20,6 +20,8 @@ mod validator;
 mod client_packet;
 pub use client_packet::{new_vless_packet_connection, VlessUdpReader, VlessUdpWriter};
 
+pub mod mux;
+
 fn new_error<T: ToString>(message: T) -> io::Error {
     io::Error::new(io::ErrorKind::Other, format!("vless: {}", message.to_string()))
 }
