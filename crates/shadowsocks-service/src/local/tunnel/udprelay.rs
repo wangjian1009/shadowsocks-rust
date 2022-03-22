@@ -13,20 +13,40 @@ use log::{debug, error, info, trace, warn};
 use lru_time_cache::LruCache;
 use shadowsocks::{
     config::ServerProtocol,
-    lookup_then,
+    create_connector_then, lookup_then,
     net::UdpSocket as ShadowUdpSocket,
     relay::{
         socks5::Address,
         udprelay::{ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
     },
+    transport::{Connector, PacketMutWrite, PacketRead},
     ServerAddr,
 };
 use tokio::{net::UdpSocket, sync::mpsc, task::JoinHandle, time};
 
 use crate::{
     local::{context::ServiceContext, loadbalancing::PingBalancer},
-    net::{MonProxySocket, UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE, UDP_ASSOCIATION_SEND_CHANNEL_SIZE},
+    net::{
+        MonProxyReader, MonProxySocket, MonProxyWriter, UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE,
+        UDP_ASSOCIATION_SEND_CHANNEL_SIZE,
+    },
 };
+
+use cfg_if::cfg_if;
+
+cfg_if! {
+    if #[cfg(feature = "trojan")] {
+        use shadowsocks::trojan;
+        use shadowsocks::trojan::new_trojan_packet_connection;
+    }
+}
+
+cfg_if! {
+    if #[cfg(feature = "vless")] {
+        use shadowsocks::vless;
+        use shadowsocks::vless::new_vless_packet_connection;
+    }
+}
 
 type AssociationMap = LruCache<SocketAddr, UdpAssociation>;
 
@@ -40,6 +60,7 @@ pub struct UdpTunnel {
 
 impl UdpTunnel {
     pub fn new(context: Arc<ServiceContext>, time_to_live: Option<Duration>, capacity: Option<usize>) -> UdpTunnel {
+        //UdpAssociationManager::new(context, respond_writer, time_to_live, capacity, balancer)
         let time_to_live = time_to_live.unwrap_or(crate::DEFAULT_UDP_EXPIRY_DURATION);
         let assoc_map = match capacity {
             Some(capacity) => LruCache::with_expiry_duration_and_capacity(time_to_live, capacity),
@@ -104,6 +125,8 @@ impl UdpTunnel {
                             continue;
                         }
                     };
+
+                    error!("xxxxxxxx: recv {}", n);
 
                     if n == 0 {
                         // For windows, it will generate a ICMP Port Unreachable Message
@@ -198,11 +221,16 @@ impl UdpAssociation {
     }
 }
 
+struct UdpAssociationSocket {
+    r: Box<dyn PacketRead>,
+    w: Box<dyn PacketMutWrite>,
+}
+
 struct UdpAssociationContext {
     context: Arc<ServiceContext>,
     peer_addr: SocketAddr,
-    forward_addr: Address,
-    proxied_socket: Option<MonProxySocket>,
+    forward_addr: ServerAddr,
+    proxied_socket: Option<UdpAssociationSocket>,
     keepalive_tx: mpsc::Sender<SocketAddr>,
     keepalive_flag: bool,
     balancer: PingBalancer,
@@ -232,7 +260,7 @@ impl UdpAssociationContext {
         let mut assoc = UdpAssociationContext {
             context,
             peer_addr,
-            forward_addr,
+            forward_addr: ServerAddr::from(forward_addr),
             proxied_socket: None,
             keepalive_tx,
             keepalive_flag: false,
@@ -262,7 +290,7 @@ impl UdpAssociationContext {
                     self.dispatch_received_packet(&data).await;
                 }
 
-                received_opt = receive_from_proxied_opt(&self.proxied_socket, &mut proxied_buffer) => {
+                received_opt = receive_from_proxied_opt(&mut self.proxied_socket, &mut proxied_buffer) => {
                     let (n, addr) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -290,16 +318,17 @@ impl UdpAssociationContext {
 
         #[inline]
         async fn receive_from_proxied_opt(
-            socket: &Option<MonProxySocket>,
+            socket: &mut Option<UdpAssociationSocket>,
             buf: &mut Vec<u8>,
         ) -> io::Result<(usize, Address)> {
-            match *socket {
+            match socket.as_mut() {
                 None => future::pending().await,
-                Some(ref s) => {
+                Some(s) => {
                     if buf.is_empty() {
                         buf.resize(MAXIMUM_UDP_PAYLOAD_SIZE, 0);
                     }
-                    s.recv(buf).await
+                    let (n, addr) = s.r.read_from(&mut buf[..]).await?;
+                    Ok((n, Address::from(addr)))
                 }
             }
         }
@@ -333,29 +362,75 @@ impl UdpAssociationContext {
                 let server = self.balancer.best_udp_server();
                 let svr_cfg = server.server_config();
 
-                match svr_cfg.protocol() {
-                    ServerProtocol::SS(ss_cfg) => {
-                        let socket = ProxySocket::connect_with_opts(
-                            self.context.context(),
-                            svr_cfg,
-                            ss_cfg,
-                            self.context.connect_opts_ref(),
-                        )
-                        .await?;
-                        let socket = MonProxySocket::from_socket(socket, self.context.flow_stat());
+                let socket = create_connector_then!(
+                    Some(self.context.context().clone()),
+                    svr_cfg.connector_transport(),
+                    |connector| {
+                        match svr_cfg.protocol() {
+                            ServerProtocol::SS(ss_cfg) => {
+                                let socket = ProxySocket::connect_with_opts(
+                                    self.context.context(),
+                                    svr_cfg,
+                                    ss_cfg,
+                                    self.context.connect_opts_ref(),
+                                )
+                                .await?;
+                                let socket = MonProxySocket::from_socket(socket, self.context.flow_stat());
 
-                        self.proxied_socket = Some(socket)
+                                let socket = Arc::new(socket);
+
+                                let r = Box::new(MonProxyReader::new(socket.clone())) as Box<dyn PacketRead>;
+                                let w = Box::new(MonProxyWriter::new(socket)) as Box<dyn PacketMutWrite>;
+
+                                Ok(UdpAssociationSocket { r, w })
+                            }
+                            #[cfg(feature = "trojan")]
+                            ServerProtocol::Trojan(trojan_cfg) => {
+                                let stream = connector
+                                    .connect_stream(svr_cfg.external_addr(), self.context.connect_opts_ref())
+                                    .await?;
+
+                                let stream = trojan::ClientStream::new_packet(stream, trojan_cfg);
+
+                                // CLIENT <- REMOTE
+                                let (r, w) = new_trojan_packet_connection(stream);
+                                let r = Box::new(r) as Box<dyn PacketRead>;
+                                let w = Box::new(w) as Box<dyn PacketMutWrite>;
+
+                                Ok(UdpAssociationSocket { r, w })
+                            }
+                            #[cfg(feature = "vless")]
+                            ServerProtocol::Vless(vless_cfg) => {
+                                let stream = vless::ClientStream::connect(
+                                    &connector,
+                                    svr_cfg,
+                                    vless_cfg,
+                                    vless::protocol::RequestCommand::UDP,
+                                    Some(Address::from(self.forward_addr.clone())),
+                                    self.context.connect_opts_ref(),
+                                    |f| f,
+                                )
+                                .await?;
+
+                                // CLIENT <- REMOTE
+
+                                let (r, w) = new_vless_packet_connection(stream, self.forward_addr.clone());
+                                let r = Box::new(r) as Box<dyn PacketRead>;
+                                let w = Box::new(w) as Box<dyn PacketMutWrite>;
+
+                                Ok(UdpAssociationSocket { r, w })
+                            }
+                        }
                     }
-                    #[cfg(feature = "trojan")]
-                    ServerProtocol::Trojan(_trojan_cfg) => unreachable!(),
-                    #[cfg(feature = "vless")]
-                    ServerProtocol::Vless(_vless_cfg) => unreachable!(),
-                }
-                unreachable!()
+                )?;
+
+                self.proxied_socket = Some(socket);
+
+                self.proxied_socket.as_mut().unwrap()
             }
         };
 
-        match socket.send(&self.forward_addr, data).await {
+        match socket.w.write_to_mut(data, &self.forward_addr).await {
             Ok(..) => return Ok(()),
             Err(err) => {
                 debug!(

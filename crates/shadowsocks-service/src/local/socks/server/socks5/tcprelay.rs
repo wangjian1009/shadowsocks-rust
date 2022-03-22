@@ -11,14 +11,7 @@ use shadowsocks::{
     config::Mode,
     create_connector_then,
     relay::socks5::{
-        self,
-        Address,
-        Command,
-        Error as Socks5Error,
-        HandshakeRequest,
-        HandshakeResponse,
-        Reply,
-        TcpRequestHeader,
+        self, Address, Command, Error as Socks5Error, HandshakeRequest, HandshakeResponse, Reply, TcpRequestHeader,
         TcpResponseHeader,
     },
     transport::StreamConnection,
@@ -27,13 +20,9 @@ use shadowsocks::{
 use tokio::net::TcpStream;
 
 use crate::{
-    auto_proxy_then,
-    connect_server_then,
+    auto_proxy_then, connect_server_then,
     local::{
-        context::ServiceContext,
-        loadbalancing::PingBalancer,
-        net::AutoProxyClientStream,
-        utils::establish_tcp_tunnel,
+        context::ServiceContext, loadbalancing::PingBalancer, net::AutoProxyClientStream, utils::establish_tcp_tunnel,
     },
     net::utils::ignore_until_end,
 };

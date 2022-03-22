@@ -35,11 +35,14 @@ use tokio::{
 };
 use tokio::{net::TcpStream, sync::Mutex, task::JoinHandle, time};
 
-use crate::local::{
-    context::ServiceContext,
-    loadbalancing::PingBalancer,
-    net::AutoProxyClientStream,
-    utils::{establish_tcp_tunnel, to_ipv4_mapped},
+use crate::{
+    auto_proxy_then,
+    local::{
+        context::ServiceContext,
+        loadbalancing::PingBalancer,
+        net::AutoProxyClientStream,
+        utils::{establish_tcp_tunnel, to_ipv4_mapped},
+    },
 };
 
 use super::virt_device::VirtTunDevice;
@@ -487,9 +490,14 @@ async fn establish_client_tcp_redir<'a, C: Connector>(
     let server = balancer.best_tcp_server();
     let svr_cfg = server.server_config();
 
-    let mut remote = AutoProxyClientStream::connect(context.clone(), connector, &server, addr).await?;
+    auto_proxy_then!(context.clone(), server.as_ref(), addr, |remote| {
+        let mut remote = remote?;
 
-    establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
+        #[cfg(feature = "rate-limit")]
+        stream.set_rate_limit(context.rate_limiter());
+
+        establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
+    })
 }
 
 async fn handle_redir_client<C: Connector>(
