@@ -29,7 +29,7 @@ use super::DEFAULT_SNI;
 use transport::tls::{TlsAcceptorConfig, TlsConnectorConfig};
 
 #[cfg(feature = "transport-mkcp")]
-use transport::mkcp::{MkcpConfig, HeaderConfig};
+use transport::mkcp::{HeaderConfig, MkcpConfig};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransportConnectorConfig {
@@ -46,19 +46,19 @@ pub enum TransportConnectorConfig {
 impl TransportConnectorConfig {
     fn build(
         protocol: &str,
-        host: &Option<&str>,
+        _host: &Option<&str>,
         _path: &str,
         _args: Option<Vec<(&str, &str)>>,
     ) -> Result<Self, String> {
         match protocol {
             #[cfg(feature = "transport-ws")]
-            "ws" => Ok(TransportConnectorConfig::Ws(Self::build_ws_config(host, _path))),
+            "ws" => Ok(TransportConnectorConfig::Ws(Self::build_ws_config(_host, _path))),
             #[cfg(feature = "transport-tls")]
-            "tls" => Ok(TransportConnectorConfig::Tls(Self::build_tls_config(host, &_args)?)),
+            "tls" => Ok(TransportConnectorConfig::Tls(Self::build_tls_config(_host, &_args)?)),
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
             "wss" => Ok(TransportConnectorConfig::Wss(
-                Self::build_ws_config(host, _path),
-                Self::build_tls_config(host, &_args)?,
+                Self::build_ws_config(_host, _path),
+                Self::build_tls_config(_host, &_args)?,
             )),
             #[cfg(feature = "transport-mkcp")]
             "mkcp" => Ok(TransportConnectorConfig::Mkcp(build_mkcp_config(&_args)?)),
@@ -116,7 +116,7 @@ fn build_mkcp_config(args: &Option<Vec<(&str, &str)>>) -> Result<MkcpConfig, Str
     if let Some(seed) = find_arg(args, "seed") {
         config.seed = Some(seed.to_string());
     }
-    
+
     Ok(config)
 }
 

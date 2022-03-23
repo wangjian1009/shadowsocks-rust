@@ -114,7 +114,7 @@ utility = []
 service = ["local", "server", "manager"]
 
 # Enable use ss as lib
-lib-entry = ["spin"]
+lib-entry = ["spin", "serde_json"]
 
 # Enables trust-dns for replacing tokio's builtin DNS resolver
 trust-dns = ["shadowsocks-service/trust-dns"]
@@ -219,6 +219,8 @@ tcmalloc = { version = "0.3", optional = true }
 jemallocator = { version = "0.3", optional = true }
 snmalloc-rs = { version = "0.2", optional = true }
 rpmalloc = { version = "0.2", optional = true }
+
+serde_json = { version = "1.0", optional = true }
 
 shadowsocks-service = { version = "1.14.1", path = "./crates/shadowsocks-service", default-features = false }
 

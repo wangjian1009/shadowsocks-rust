@@ -2486,6 +2486,7 @@ dependencies = [
  "rpassword",
  "rpmalloc",
  "serde",
+ "serde_json",
  "shadowsocks-service",
  "snmalloc-rs",
  "spin 0.9.2",

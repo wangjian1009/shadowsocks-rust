@@ -126,8 +126,6 @@ impl UdpTunnel {
                         }
                     };
 
-                    error!("xxxxxxxx: recv {}", n);
-
                     if n == 0 {
                         // For windows, it will generate a ICMP Port Unreachable Message
                         // https://docs.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-recvfrom

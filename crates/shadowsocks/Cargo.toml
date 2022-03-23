@@ -50,7 +50,7 @@ neon = ["shadowsocks-crypto/neon"]
 transport = []
 transport-ws = ["transport", "tokio-tungstenite"]
 transport-tls = ["transport", "tokio-rustls", "webpki"]
-transport-mkcp = ["transport", "spin", "arc-swap", "sha2", "aes-gcm"]
+transport-mkcp = ["transport", "spin", "arc-swap", "sha2", "aes-gcm", "rand"]
 
 trojan = ["sha2", "rand"]
 vless = ["rand", "hex", "spin"]

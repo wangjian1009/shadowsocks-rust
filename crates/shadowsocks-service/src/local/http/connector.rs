@@ -63,9 +63,11 @@ impl Service<Uri> for Connector {
                     Some(addr) => {
                         let s = match server {
                             Some(ser) => connect_server_then!(context, ser.as_ref(), addr, |s| {
-                                Ok(Box::new(s?) as Box<dyn StreamConnection>)
+                                io::Result::Ok(Box::new(s?) as Box<dyn StreamConnection>)
                             }),
-                            None => Ok(Box::new(connect_bypassed(context, addr).await?) as Box<dyn StreamConnection>),
+                            None => io::Result::Ok(
+                                Box::new(connect_bypassed(context, addr).await?) as Box<dyn StreamConnection>
+                            ),
                         }?;
 
                         if is_https {

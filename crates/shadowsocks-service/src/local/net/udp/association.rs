@@ -91,7 +91,9 @@ where
     assoc_map: AssociationMap,
     keepalive_tx: mpsc::Sender<SocketAddr>,
     balancer: PingBalancer,
+    #[allow(unused_mut)]
     time_to_live: Duration,
+    #[allow(unused_mut)]
     capacity: Option<usize>,
 }
 
@@ -291,6 +293,7 @@ impl UdpAssociationProxyState {
         *self = UdpAssociationProxyState::Connected(UdpAssociationSocket::MultiTarget { r, w });
     }
 
+    #[cfg(feature = "vless")]
     fn set_connected_single_target(
         &mut self,
         svr_cfg: shadowsocks::ServerConfig,
@@ -327,7 +330,9 @@ where
     keepalive_flag: bool,
     balancer: PingBalancer,
     respond_writer: W,
+    #[allow(dead_code)]
     time_to_live: Duration,
+    #[allow(dead_code)]
     capacity: Option<usize>,
 }
 
@@ -642,7 +647,7 @@ where
 
                                     // CLIENT <- REMOTE
                                     let (r, w) = new_trojan_packet_connection(stream);
-                                    Ok((
+                                    io::Result::Ok((
                                         Box::new(r) as Box<dyn PacketRead>,
                                         Box::new(w) as Box<dyn PacketMutWrite>,
                                     ))
@@ -782,7 +787,7 @@ where
             // CLIENT <- REMOTE
 
             let (r, w) = new_vless_packet_connection(stream, target_addr.clone().into());
-            Ok((
+            io::Result::Ok((
                 Box::new(r) as Box<dyn PacketRead>,
                 Box::new(w) as Box<dyn PacketMutWrite>,
             ))
