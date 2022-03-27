@@ -32,31 +32,57 @@ use futures::{
 };
 
 #[no_mangle]
-pub extern "C" fn lib_local_run(c_config: *const c_char, c_acl_path: *const c_char, control_port: c_ushort) {
+pub extern "C" fn lib_local_run(
+    c_config: *const c_char,
+    c_acl_path: *const c_char,
+    #[cfg(feature = "local-flow-stat")] c_stat_path: *const c_char,
+    control_port: c_ushort,
+) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     oslog::OsLogger::new("com.example.test")
         .level_filter(log::LevelFilter::Info)
         .init()
         .unwrap();
 
+    #[cfg(target_os = "android")]
+    android_logger::init_once(
+        android_logger::Config::default()
+            .with_min_level(log::Level::Trace)
+            .with_tag("SS"),
+    );
+
     log::info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
 
     let str_config = unsafe { CStr::from_ptr(c_config).to_string_lossy().to_owned() };
 
-    let mut acl_path: Option<String> = None;
-    if !c_acl_path.is_null() {
-        acl_path = unsafe { Some(CStr::from_ptr(c_acl_path).to_string_lossy().to_owned().into_owned()) };
+    let acl_path = if !c_acl_path.is_null() {
+        unsafe { Some(CStr::from_ptr(c_acl_path).to_string_lossy().to_owned().into_owned()) }
+    } else {
+        None
     };
 
-    let config = load_config(&str_config, acl_path.as_deref());
+    #[cfg(feature = "local-flow-stat")]
+    let stat_path = if !c_stat_path.is_null() {
+        unsafe { Some(CStr::from_ptr(c_stat_path).to_string_lossy().to_owned().into_owned()) }
+    } else {
+        None
+    };
+
+    let config = load_config(
+        &str_config,
+        acl_path.as_deref(),
+        #[cfg(feature = "local-flow-stat")]
+        stat_path.as_deref(),
+    );
     run(config, control_port);
 }
 
-fn load_config(str_config: &str, acl_path: Option<&str>) -> Config {
-    log::info!("config {}", str_config);
-
+fn load_config(
+    str_config: &str,
+    acl_path: Option<&str>,
+    #[cfg(feature = "local-flow-stat")] stat_path: Option<&str>,
+) -> Config {
     let mut config = Config::load_from_str(&str_config, ConfigType::Local).unwrap();
-    log::info!("passed config {}", config);
 
     #[cfg(feature = "encrypt-password")]
     for svr in config.server.iter_mut() {
@@ -93,7 +119,21 @@ fn load_config(str_config: &str, acl_path: Option<&str>) -> Config {
         panic!();
     }
 
-    log::info!("loading config {}", config);
+    #[cfg(target_os = "android")]
+    {
+        // A socket `protect_path` in CWD
+        // Same as shadowsocks-libev's android.c
+        config.outbound_vpn_protect_path = Some(From::from("protect_path"));
+    }
+
+    #[cfg(feature = "local-flow-stat")]
+    {
+        if let Some(stat_path) = stat_path {
+            config.stat_path = Some(From::from(stat_path));
+        }
+    }
+
+    log::trace!("config {}", config);
 
     if let Some(acl_path) = acl_path {
         let acl = match AccessControl::load_from_file(acl_path) {
@@ -188,6 +228,7 @@ async fn run_ctrl(control_port: u16, #[cfg(feature = "host-dns")] host_dns: Opti
                 }
             };
 
+            #[allow(unused_variables)]
             let args = cmd.get("args");
 
             let cmd = match cmd.get("cmd") {
