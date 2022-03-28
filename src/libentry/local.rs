@@ -37,6 +37,7 @@ pub extern "C" fn lib_local_run(
     c_acl_path: *const c_char,
     #[cfg(feature = "local-flow-stat")] c_stat_path: *const c_char,
     control_port: c_ushort,
+    #[cfg(target_os = "android")] c_vpn_protect_path: *const c_char,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     oslog::OsLogger::new("com.example.test")
@@ -68,11 +69,27 @@ pub extern "C" fn lib_local_run(
         None
     };
 
+    #[cfg(target_os = "android")]
+    let vpn_protect_path = if !c_vpn_protect_path.is_null() {
+        unsafe {
+            Some(
+                CStr::from_ptr(c_vpn_protect_path)
+                    .to_string_lossy()
+                    .to_owned()
+                    .into_owned(),
+            )
+        }
+    } else {
+        None
+    };
+
     let config = load_config(
         &str_config,
         acl_path.as_deref(),
         #[cfg(feature = "local-flow-stat")]
         stat_path.as_deref(),
+        #[cfg(target_os = "android")]
+        vpn_protect_path.as_deref(),
     );
     run(config, control_port);
 }
@@ -81,6 +98,7 @@ fn load_config(
     str_config: &str,
     acl_path: Option<&str>,
     #[cfg(feature = "local-flow-stat")] stat_path: Option<&str>,
+    #[cfg(target_os = "android")] vpn_protect_path: Option<&str>,
 ) -> Config {
     let mut config = Config::load_from_str(&str_config, ConfigType::Local).unwrap();
 
@@ -120,17 +138,15 @@ fn load_config(
     }
 
     #[cfg(target_os = "android")]
-    {
+    if let Some(vpn_protect_path) = vpn_protect_path {
         // A socket `protect_path` in CWD
         // Same as shadowsocks-libev's android.c
-        config.outbound_vpn_protect_path = Some(From::from("protect_path"));
+        config.outbound_vpn_protect_path = Some(From::from(vpn_protect_path));
     }
 
     #[cfg(feature = "local-flow-stat")]
-    {
-        if let Some(stat_path) = stat_path {
-            config.stat_path = Some(From::from(stat_path));
-        }
+    if let Some(stat_path) = stat_path {
+        config.stat_path = Some(From::from(stat_path));
     }
 
     log::trace!("config {}", config);
@@ -145,7 +161,7 @@ fn load_config(
         };
         config.acl = Some(acl);
 
-        log::error!("loading ACL \"{}\" success", acl_path);
+        log::info!("loading ACL \"{}\" success", acl_path);
     }
 
     config
