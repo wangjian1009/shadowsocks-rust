@@ -35,6 +35,7 @@ impl MutPacketWriter {
                         break;
                     }
                 }
+                tokio::task::yield_now().await;
             }
         });
 
@@ -62,6 +63,7 @@ impl MutPacketWriter {
                         break;
                     }
                 }
+                tokio::task::yield_now().await;
             }
         });
 

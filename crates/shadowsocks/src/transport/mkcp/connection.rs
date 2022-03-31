@@ -994,6 +994,8 @@ where
                     ping_next_process = Instant::now() + ping_update_interval;
                 },
             }
+
+            tokio::task::yield_now().await;
         }
     }
 }

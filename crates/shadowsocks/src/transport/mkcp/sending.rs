@@ -393,6 +393,7 @@ where
                 }
 
                 *current = self.context.elapsed();
+                tokio::task::yield_now().await;
             }
 
             let total_in_flight_size = self.window.total_in_flight_size();

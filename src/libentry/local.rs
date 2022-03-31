@@ -221,6 +221,14 @@ fn run(config: Config, control_port: u16) {
 
         vfut.push(ctrl.boxed());
 
+        // vfut.push(
+        //     async {
+        //         tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        //         panic!();
+        //     }
+        //     .boxed(),
+        // );
+
         let (_res, _) = vfut.into_future().await;
 
         log::info!("server stoped");
