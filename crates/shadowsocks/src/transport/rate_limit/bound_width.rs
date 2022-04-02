@@ -10,10 +10,7 @@ use governor::Quota;
 use nonzero_ext::*;
 use serde::{
     de::{self, Visitor},
-    Deserialize,
-    Deserializer,
-    Serialize,
-    Serializer,
+    Deserialize, Deserializer, Serialize, Serializer,
 };
 
 use regex::Regex;
@@ -121,6 +118,16 @@ impl<'de> Visitor<'de> for BoundWidthVisitor {
             Ok(r) => Ok(r),
             Err(err) => Err(E::custom(format!("{}", err))),
         }
+    }
+
+    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(BoundWidth {
+            amount: v as u32,
+            duration: Duration::S,
+        })
     }
 }
 

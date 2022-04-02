@@ -100,7 +100,13 @@ fn load_config(
     #[cfg(feature = "local-flow-stat")] stat_path: Option<&str>,
     #[cfg(target_os = "android")] vpn_protect_path: Option<&str>,
 ) -> Config {
-    let mut config = Config::load_from_str(&str_config, ConfigType::Local).unwrap();
+    let mut config = match Config::load_from_str(str_config, ConfigType::Local) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("load_config fail: {}", e);
+            panic!()
+        }
+    };
 
     #[cfg(feature = "encrypt-password")]
     for svr in config.server.iter_mut() {
