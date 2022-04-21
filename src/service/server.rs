@@ -71,23 +71,30 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                 .long("server-addr")
                 .takes_value(true)
                 .validator(validator::validate_server_addr)
-                .requires("ENCRYPT_METHOD")
                 .help("Server address"),
         )
         .arg(
-            Arg::new("PASSWORD")
+            Arg::new("PROTOCOL_SS")
+                .long("ss")
+                .requires("SERVER_ADDR")
+                .takes_value(false)
+                .conflicts_with_all(&["PROTOCOL_TROJAN", "PROTOCOL_VLESS"])
+                .help("Use shadowsocks protocol"),
+        )
+        .arg(
+            Arg::new("SS_PASSWORD")
                 .short('k')
                 .long("password")
                 .takes_value(true)
-                .requires("SERVER_ADDR")
-                .help("Server's password"),
+                .requires("PROTOCOL_SS")
+                .help("Shadowsocks server's password"),
         )
         .arg(
-            Arg::new("ENCRYPT_METHOD")
+            Arg::new("SS_ENCRYPT_METHOD")
                 .short('m')
                 .long("encrypt-method")
                 .takes_value(true)
-                .requires("SERVER_ADDR")
+                .requires("PROTOCOL_SS")
                 .possible_values(available_ciphers())
                 .help("Server's encryption method"),
         )
@@ -171,7 +178,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                     .long("vless")
                     .requires("SERVER_ADDR")
                     .takes_value(false)
-                    //.validator(validator::validate_uuid)
+                    .conflicts_with_all(&["PROTOCOL_TROJAN", "PROTOCOL_SS"])
                     .help("Use vless protocol"),
             )
             .arg(
@@ -186,13 +193,22 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
 
     #[cfg(feature = "trojan")]
     {
-        app = app.arg(
-            Arg::new("PROTOCOL_TROJAN")
-                .long("trojan")
-                .requires("SERVER_ADDR")
-                .takes_value(false)
-                .help("Use trojan protocol"),
-        );
+        app = app
+            .arg(
+                Arg::new("PROTOCOL_TROJAN")
+                    .long("trojan")
+                    .requires("SERVER_ADDR")
+                    .takes_value(false)
+                    .conflicts_with_all(&["PROTOCOL_VLESS", "PROTOCOL_SS"])
+                    .help("Use trojan protocol"),
+            )
+            .arg(
+                Arg::new("TROJAN_PASSWORD")
+                    .long("trojan-password")
+                    .takes_value(true)
+                    .requires("PROTOCOL_TROJAN")
+                    .help("Trojan server's password"),
+            );
     }
 
     #[cfg(feature = "logging")]
@@ -398,17 +414,6 @@ pub fn main(matches: &ArgMatches) {
         };
 
         if let Some(svr_addr) = matches.value_of("SERVER_ADDR") {
-            let password = match matches.value_of_t::<String>("PASSWORD") {
-                Ok(pwd) => read_variable_field_value(&pwd).into(),
-                Err(err) => {
-                    // NOTE: svr_addr should have been checked by crate::validator
-                    match crate::password::read_server_password(svr_addr) {
-                        Ok(pwd) => pwd,
-                        Err(..) => err.exit(),
-                    }
-                }
-            };
-
             let mut protocol = None;
 
             #[cfg(feature = "vless")]
@@ -432,7 +437,7 @@ pub fn main(matches: &ArgMatches) {
 
             #[cfg(feature = "trojan")]
             if protocol.is_none() && matches.is_present("PROTOCOL_TROJAN") {
-                let password = match matches.value_of("PASSWORD") {
+                let password = match matches.value_of("TROJAN_PASSWORD") {
                     Some(pwd) => read_variable_field_value(&pwd).into(),
                     None => {
                         // NOTE: svr_addr should have been checked by crate::validator
@@ -449,15 +454,31 @@ pub fn main(matches: &ArgMatches) {
                 protocol = Some(ServerProtocol::Trojan(TrojanConfig::new(password)));
             }
 
-            if protocol.is_none() {
+            if protocol.is_none() && matches.is_present("PROTOCOL_SS") {
+                let password = match matches.value_of_t::<String>("SS_PASSWORD") {
+                    Ok(pwd) => read_variable_field_value(&pwd).into(),
+                    Err(err) => {
+                        // NOTE: svr_addr should have been checked by crate::validator
+                        match crate::password::read_server_password(svr_addr) {
+                            Ok(pwd) => pwd,
+                            Err(..) => err.exit(),
+                        }
+                    }
+                };
+
                 protocol = Some(ServerProtocol::SS(ShadowsocksConfig::new(
                     password,
-                    match matches.value_of_t::<CipherKind>("ENCRYPT_METHOD") {
+                    match matches.value_of_t::<CipherKind>("SS_ENCRYPT_METHOD") {
                         Ok(kind) => kind,
                         Err(err) => err.exit(),
                     },
                 )));
             };
+
+            if protocol.is_none() {
+                eprintln!("No protocol specfic");
+                process::exit(crate::EXIT_CODE_LOAD_CONFIG_FAILURE);
+            }
 
             let svr_addr = svr_addr.parse::<ServerAddr>().expect("server-addr");
 
