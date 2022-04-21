@@ -17,7 +17,7 @@ async fn test() {
     let listen_addr = listener.local_addr().unwrap();
 
     // 启动回显服务
-    let acceptor_task = direct::start_echo_server(Arc::new(listener));
+    let acceptor_task = direct::start_echo_server(listener);
     defer!({
         acceptor_task.abort();
     });

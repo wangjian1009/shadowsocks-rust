@@ -2,8 +2,7 @@ use crate::ServerAddr;
 
 use super::{
     super::{Acceptor, Connection},
-    cvt_error,
-    BinaryWsStream,
+    cvt_error, BinaryWsStream,
 };
 use async_trait::async_trait;
 use log::error;
@@ -49,7 +48,7 @@ impl<T: Acceptor> Acceptor for WebSocketAcceptor<T> {
     type PW = T::PW;
     type TS = BinaryWsStream<T::TS>;
 
-    async fn accept(&self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
+    async fn accept(&mut self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
         let (stream, addr) = self.inner.accept().await?;
         match stream {
             Connection::Stream(stream) => {

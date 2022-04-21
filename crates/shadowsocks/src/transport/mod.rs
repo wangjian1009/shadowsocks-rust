@@ -40,6 +40,9 @@ pub mod tls;
 #[cfg(feature = "transport-mkcp")]
 pub mod mkcp;
 
+#[cfg(feature = "transport-skcp")]
+pub mod skcp;
+
 /// Stream traits
 pub trait StreamConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {
     fn local_addr(&self) -> io::Result<Destination>;
@@ -100,7 +103,14 @@ pub trait Acceptor: Send + Sync + 'static {
     type PR: PacketRead;
     type PW: PacketMutWrite;
 
-    async fn accept(&self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)>;
+    async fn accept(&mut self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)>;
+
+    async fn accept_stream(&mut self) -> io::Result<(Self::TS, Option<ServerAddr>)> {
+        match self.accept().await? {
+            (Connection::Stream(stream), addr) => Ok((stream, addr)),
+            (Connection::Packet { .. }, _addr) => unreachable!(),
+        }
+    }
 
     fn local_addr(&self) -> io::Result<SocketAddr>;
 }

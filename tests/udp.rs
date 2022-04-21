@@ -9,8 +9,7 @@ use tokio::time::{self, Duration};
 use shadowsocks_service::{
     config::{Config, ConfigType, LocalConfig, ProtocolType},
     local::socks::client::socks5::Socks5UdpClient,
-    run_local,
-    run_server,
+    run_local, run_server,
     shadowsocks::{
         config::{Mode, ServerProtocol, ShadowsocksConfig},
         crypto::v1::CipherKind,
@@ -84,7 +83,10 @@ fn start_udp_echo_server() {
 
 #[tokio::test]
 async fn udp_relay() {
-    let _ = env_logger::try_init();
+    let _ = env_logger::builder()
+        .filter_level(log::LevelFilter::Trace)
+        .is_test(true)
+        .try_init();
 
     let remote_addr = Address::SocketAddress(UDP_ECHO_SERVER_ADDR.parse().unwrap());
 

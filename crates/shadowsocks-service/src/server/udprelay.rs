@@ -76,7 +76,7 @@ impl UdpServer {
         );
 
         let listener_r = Arc::new(MonProxySocket::from_socket(socket, self.context.flow_stat()));
-        let listener_w = Arc::new(Box::new(MonProxyWriter::new(listener_r.clone())) as Box<dyn PacketWrite>);
+        let listener_w = listener_r.clone();
 
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         let mut cleanup_timer = time::interval(self.time_to_live);
@@ -142,7 +142,7 @@ impl UdpServer {
 
     async fn send_packet(
         &mut self,
-        listener: &Arc<Box<dyn PacketWrite>>,
+        listener: &Arc<MonProxySocket>,
         peer_addr: SocketAddr,
         target_addr: Address,
         data: &[u8],
@@ -153,7 +153,9 @@ impl UdpServer {
 
         let assoc = UdpAssociation::new(
             self.context.clone(),
-            listener.clone(),
+            Arc::new(
+                Box::new(MonProxyWriter::with_peer_addr(peer_addr.clone(), listener.clone())) as Box<dyn PacketWrite>,
+            ),
             peer_addr,
             self.keepalive_tx.clone(),
         );

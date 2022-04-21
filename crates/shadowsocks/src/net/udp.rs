@@ -12,9 +12,7 @@ use crate::{context::Context, relay::socks5::Address, ServerAddr};
 
 use super::{
     sys::{create_inbound_udp_socket, create_outbound_udp_socket},
-    AcceptOpts,
-    AddrFamily,
-    ConnectOpts,
+    AcceptOpts, AddrFamily, ConnectOpts,
 };
 
 /// Wrappers for outbound `UdpSocket`
@@ -44,6 +42,25 @@ impl UdpSocket {
         };
 
         Ok(UdpSocket(socket))
+    }
+
+    /// Connects to shadowsocks server
+    pub async fn create_for_connect_to(
+        context: &Context,
+        addr: &ServerAddr,
+        opts: &ConnectOpts,
+    ) -> io::Result<(SocketAddr, UdpSocket)> {
+        let (remote_addr, socket) = match *addr {
+            ServerAddr::SocketAddr(ref remote_addr) => {
+                let socket = create_outbound_udp_socket(From::from(remote_addr), opts).await?;
+                (remote_addr.clone(), socket)
+            }
+            ServerAddr::DomainName(ref dname, port) => lookup_then!(context, dname, port, |remote_addr| {
+                create_outbound_udp_socket(From::from(&remote_addr), opts).await
+            })?,
+        };
+
+        Ok((remote_addr, UdpSocket(socket)))
     }
 
     /// Connects to proxy target

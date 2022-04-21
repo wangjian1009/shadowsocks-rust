@@ -23,11 +23,9 @@ use shadowsocks::{
     },
     transport::{
         direct::{TcpAcceptor, TcpConnector},
-        Acceptor,
-        Connection,
+        Acceptor, Connection,
     },
-    ProxyClientStream,
-    ServerConfig,
+    ProxyClientStream, ServerConfig,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -50,7 +48,7 @@ async fn tcp_tunnel_tfo() {
         let mut accept_opts = AcceptOpts::default();
         accept_opts.tcp.fastopen = true;
 
-        let listener = TcpAcceptor::bind_server_with_opts(context.as_ref(), svr_cfg.external_addr(), accept_opts)
+        let mut listener = TcpAcceptor::bind_server_with_opts(context.as_ref(), svr_cfg.external_addr(), accept_opts)
             .await
             .unwrap();
 

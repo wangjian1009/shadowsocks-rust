@@ -16,6 +16,8 @@ pub const fn available_transports() -> &'static [&'static str] {
         "wss",
         #[cfg(feature = "transport-mkcp")]
         "mkcp",
+        #[cfg(feature = "transport-skcp")]
+        "skcp",
     ]
 }
 
@@ -31,6 +33,9 @@ use transport::tls::{TlsAcceptorConfig, TlsConnectorConfig};
 #[cfg(feature = "transport-mkcp")]
 use transport::mkcp::{HeaderConfig, MkcpConfig};
 
+#[cfg(feature = "transport-skcp")]
+use transport::skcp::SkcpConfig;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransportConnectorConfig {
     #[cfg(feature = "transport-ws")]
@@ -41,6 +46,8 @@ pub enum TransportConnectorConfig {
     Wss(WebSocketConnectorConfig, TlsConnectorConfig),
     #[cfg(feature = "transport-mkcp")]
     Mkcp(MkcpConfig),
+    #[cfg(feature = "transport-skcp")]
+    Skcp(SkcpConfig),
 }
 
 impl TransportConnectorConfig {
@@ -62,6 +69,8 @@ impl TransportConnectorConfig {
             )),
             #[cfg(feature = "transport-mkcp")]
             "mkcp" => Ok(TransportConnectorConfig::Mkcp(build_mkcp_config(&_args)?)),
+            #[cfg(feature = "transport-skcp")]
+            "skcp" => Ok(TransportConnectorConfig::Skcp(build_skcp_config(&_args)?)),
             _ => Err(format!("not support transport protocol {}", protocol)),
         }
     }
@@ -120,6 +129,13 @@ fn build_mkcp_config(args: &Option<Vec<(&str, &str)>>) -> Result<MkcpConfig, Str
     Ok(config)
 }
 
+#[cfg(feature = "transport-skcp")]
+fn build_skcp_config(_args: &Option<Vec<(&str, &str)>>) -> Result<SkcpConfig, String> {
+    let config = SkcpConfig::default();
+
+    Ok(config)
+}
+
 impl FromStr for TransportConnectorConfig {
     type Err = String;
 
@@ -155,6 +171,11 @@ impl fmt::Display for TransportConnectorConfig {
                 write!(f, "mkcp://")?;
                 Ok(())
             }
+            #[cfg(feature = "transport-skcp")]
+            Self::Skcp(ref _config) => {
+                write!(f, "skcp://")?;
+                Ok(())
+            }
         }
     }
 }
@@ -169,6 +190,8 @@ pub enum TransportAcceptorConfig {
     Wss(WebSocketAcceptorConfig, TlsAcceptorConfig),
     #[cfg(feature = "transport-mkcp")]
     Mkcp(MkcpConfig),
+    #[cfg(feature = "transport-skcp")]
+    Skcp(SkcpConfig),
 }
 
 impl TransportAcceptorConfig {
@@ -182,6 +205,8 @@ impl TransportAcceptorConfig {
             Self::Wss(..) => "wss",
             #[cfg(feature = "transport-mkcp")]
             Self::Mkcp(..) => "mkcp",
+            #[cfg(feature = "transport-skcp")]
+            Self::Skcp(..) => "skcp",
         }
     }
 
@@ -203,6 +228,8 @@ impl TransportAcceptorConfig {
             )),
             #[cfg(feature = "transport-mkcp")]
             "mkcp" => Ok(TransportAcceptorConfig::Mkcp(build_mkcp_config(&_args)?)),
+            #[cfg(feature = "transport-skcp")]
+            "skcp" => Ok(TransportAcceptorConfig::Skcp(build_skcp_config(&_args)?)),
             _ => Err(format!("not support transport protocol {}", protocol)),
         }
     }
@@ -279,6 +306,11 @@ impl fmt::Display for TransportAcceptorConfig {
             #[cfg(feature = "transport-mkcp")]
             Self::Mkcp(ref _config) => {
                 write!(f, "mkcp://")?;
+                Ok(())
+            }
+            #[cfg(feature = "transport-skcp")]
+            Self::Skcp(ref _config) => {
+                write!(f, "skcp://")?;
                 Ok(())
             }
         }

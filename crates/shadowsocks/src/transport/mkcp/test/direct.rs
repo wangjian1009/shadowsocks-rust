@@ -35,7 +35,7 @@ pub async fn create_acceptor(
     TestMkcpAcceptor::new(config, local_addr, r, w, statistic)
 }
 
-pub fn start_echo_server(listener: Arc<TestMkcpAcceptor>) -> JoinHandle<()> {
+pub fn start_echo_server(mut listener: TestMkcpAcceptor) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Ok((connection, _peer_addr)) = listener.accept().await {
             let stream = match connection {

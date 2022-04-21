@@ -22,8 +22,7 @@ use crate::transport::RateLimiter;
 
 use super::{
     super::{Acceptor, Connection, DummyPacket, PacketRead, PacketWrite, StreamConnection},
-    MkcpConfig,
-    StatisticStat,
+    MkcpConfig, StatisticStat,
 };
 
 use super::{
@@ -242,7 +241,7 @@ impl<PW: PacketWrite + 'static> Acceptor for MkcpAcceptor<PW> {
     type PW = DummyPacket;
     type TS = MkcpAcceptorConnection<PW>;
 
-    async fn accept(&self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
+    async fn accept(&mut self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
         loop {
             let id = match self.rx.lock().await.recv().await {
                 Some(id) => id,

@@ -10,10 +10,7 @@ use crate::{net::Destination, ServerAddr};
 
 use super::{
     super::{Acceptor, Connection, DummyPacket, StreamConnection},
-    get_cipher_suite,
-    load_cert,
-    load_key,
-    new_error,
+    get_cipher_suite, load_cert, load_key, new_error,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,7 +50,7 @@ where
     type PW = DummyPacket;
     type TS = TokioTlsStream<S>;
 
-    async fn accept(&self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
+    async fn accept(&mut self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
         let (stream, addr) = self.inner.accept().await?;
         match stream {
             Connection::Stream(stream) => {

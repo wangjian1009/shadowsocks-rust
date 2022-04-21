@@ -55,6 +55,12 @@ cfg_if! {
    }
 }
 
+cfg_if! {
+   if #[cfg(feature = "transport-skcp")] {
+       use crate::transport::skcp::SkcpConfig;
+   }
+}
+
 /// Shadowsocks server type
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ServerType {
@@ -411,6 +417,8 @@ impl ServerConfig {
                 &TransportAcceptorConfig::Wss(..) => "(wss)",
                 #[cfg(feature = "transport-mkcp")]
                 &TransportAcceptorConfig::Mkcp(..) => "(mkcp)",
+                #[cfg(feature = "transport-skcp")]
+                &TransportAcceptorConfig::Skcp(..) => "(skcp)",
             },
         }
 
@@ -441,6 +449,8 @@ impl ServerConfig {
                 &TransportConnectorConfig::Wss(..) => "(wss)",
                 #[cfg(feature = "transport-mkcp")]
                 &TransportConnectorConfig::Mkcp(..) => "(mkcp)",
+                #[cfg(feature = "transport-skcp")]
+                &TransportConnectorConfig::Skcp(..) => "(skcp)",
             },
         }
 
@@ -525,8 +535,14 @@ impl ServerConfig {
                             }
                         }
                         #[cfg(feature = "transport-mkcp")]
-                        "kcp" => {
+                        "kcp" | "mkcp" => {
                             config.set_connector_transport(Some(TransportConnectorConfig::Mkcp(Self::from_url_mkcp(
+                                &query,
+                            )?)));
+                        }
+                        #[cfg(feature = "transport-skcp")]
+                        "skcp" => {
+                            config.set_connector_transport(Some(TransportConnectorConfig::Skcp(Self::from_url_skcp(
                                 &query,
                             )?)));
                         }
@@ -655,6 +671,12 @@ impl ServerConfig {
         }
 
         Ok(mkcp_config)
+    }
+
+    #[cfg(feature = "transport-skcp")]
+    fn from_url_skcp(_params: &Vec<(String, String)>) -> Result<SkcpConfig, UrlParseError> {
+        let skcp_config = SkcpConfig::default();
+        Ok(skcp_config)
     }
 
     #[cfg(feature = "transport-tls")]
@@ -960,6 +982,10 @@ impl ServerConfig {
                 #[cfg(feature = "transport-mkcp")]
                 TransportConnectorConfig::Mkcp(_mkcp_config) => {
                     params.push(("type", "kcp".to_owned()));
+                }
+                #[cfg(feature = "transport-skcp")]
+                TransportConnectorConfig::Skcp(_skcp_config) => {
+                    params.push(("type", "skcp".to_owned()));
                 }
             }
         }
@@ -1343,6 +1369,12 @@ macro_rules! create_connector_then {
                     let $connector = shadowsocks::transport::direct::TcpConnector::new($context);
                     let $connector =
                         $crate::transport::mkcp::MkcpConnector::new(Arc::new(mkcp_config.clone()), $connector, None);
+                    $body
+                }
+                #[cfg(feature = "transport-skcp")]
+                &shadowsocks::config::TransportConnectorConfig::Skcp(ref skcp_config) => {
+                    let $connector =
+                        $crate::transport::skcp::SkcpConnector::new($context, Arc::new(skcp_config.clone()));
                     $body
                 }
             },

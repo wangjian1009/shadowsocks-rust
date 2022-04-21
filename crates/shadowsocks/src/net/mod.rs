@@ -17,6 +17,7 @@ mod option;
 pub mod sys;
 pub mod tcp;
 pub mod udp;
+pub mod util;
 
 /// Address family `AF_INET`, `AF_INET6`
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

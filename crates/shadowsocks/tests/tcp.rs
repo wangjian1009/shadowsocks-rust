@@ -22,10 +22,7 @@ use shadowsocks::{
     },
     transport::{
         direct::{TcpAcceptor, TcpConnector},
-        Acceptor,
-        Connection,
-        Connector,
-        StreamConnection,
+        Acceptor, Connection, Connector, StreamConnection,
     },
     ProxyClientStream,
 };
@@ -132,7 +129,7 @@ async fn tcp_tunnel_example(
             unreachable!()
         };
 
-        let listener = TcpAcceptor::bind_server(ctx_server.as_ref(), svr_cfg_server.external_addr())
+        let mut listener = TcpAcceptor::bind_server(ctx_server.as_ref(), svr_cfg_server.external_addr())
             .await
             .unwrap();
         // let listener = ProxyListener::from_listener(ctx_server, listener, &svr_cfg_server);

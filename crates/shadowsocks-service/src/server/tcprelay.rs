@@ -46,10 +46,14 @@ use shadowsocks::transport::websocket::WebSocketAcceptor;
 #[cfg(feature = "transport-tls")]
 use shadowsocks::transport::tls::TlsAcceptor;
 
-#[cfg(feature = "transport-mkcp")]
+#[cfg(any(feature = "transport-mkcp", feature = "transport-skcp"))]
 use shadowsocks::net::UdpSocket;
+
 #[cfg(feature = "transport-mkcp")]
 use shadowsocks::transport::mkcp::MkcpAcceptor;
+
+#[cfg(feature = "transport-skcp")]
+use shadowsocks::transport::skcp::SkcpAcceptor;
 
 use cfg_if::cfg_if;
 cfg_if! {
@@ -134,6 +138,17 @@ impl TcpServer {
                     let listener = MkcpAcceptor::new(Arc::new(mkcp_config.clone()), local_addr, r, w, None);
                     self.run_with_acceptor(listener, svr_cfg).await
                 }
+                #[cfg(feature = "transport-skcp")]
+                &TransportAcceptorConfig::Skcp(skcp_config) => {
+                    let socket = UdpSocket::listen_server_with_opts(
+                        self.context.context().as_ref(),
+                        svr_cfg.external_addr(),
+                        self.accept_opts.clone(),
+                    )
+                    .await?;
+                    let listener = SkcpAcceptor::new(skcp_config.clone(), socket)?;
+                    self.run_with_acceptor(listener, svr_cfg).await
+                }
             },
             None => {
                 let listener = TcpAcceptor::bind_server_with_opts(
@@ -159,7 +174,7 @@ impl TcpServer {
         }
     }
 
-    async fn run_with_acceptor<A: Acceptor>(self, listener: A, svr_cfg: &ServerConfig) -> io::Result<()> {
+    async fn run_with_acceptor<A: Acceptor>(self, mut listener: A, svr_cfg: &ServerConfig) -> io::Result<()> {
         info!(
             "{} tcp server listening on {}{}, inbound address {}",
             svr_cfg.protocol().name(),

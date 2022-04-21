@@ -1290,6 +1290,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kcp"
+version = "0.4.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a1fcfafc8d9d988888fa77f0d2cca895f52526b0e102c9cb0e7bc77fbf3c3d8"
+dependencies = [
+ "bytes",
+ "log",
+]
+
+[[package]]
 name = "kqueue"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2421,6 +2431,7 @@ dependencies = [
  "futures-util",
  "governor",
  "hex",
+ "kcp",
  "lazy_static",
  "libc",
  "log",

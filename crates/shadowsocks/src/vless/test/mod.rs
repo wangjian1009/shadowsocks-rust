@@ -125,7 +125,7 @@ async fn start_server(
 ) -> io::Result<(tokio::task::JoinHandle<io::Result<()>>, u16)> {
     let context = Context::new(ServerType::Server);
     let addr = "127.0.0.1:0".parse::<ServerAddr>().unwrap();
-    let acceptor = TcpAcceptor::bind_server_with_opts(&context, &addr, AcceptOpts::default()).await?;
+    let mut acceptor = TcpAcceptor::bind_server_with_opts(&context, &addr, AcceptOpts::default()).await?;
     let port = acceptor.local_addr()?.port();
 
     let inbound = InboundHandler::new(cfg)?;

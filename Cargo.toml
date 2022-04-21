@@ -82,6 +82,7 @@ default = [
     "transport-ws",
     "transport-tls",
     "transport-mkcp",
+    "transport-skcp",
     "trojan",
     "vless",
 ]
@@ -97,6 +98,7 @@ transport = []
 transport-ws = ["shadowsocks-service/transport-ws", "transport"]
 transport-tls = ["shadowsocks-service/transport-tls", "transport"]
 transport-mkcp = ["shadowsocks-service/transport-mkcp", "transport"]
+transport-skcp = ["shadowsocks-service/transport-skcp", "transport"]
 
 trojan = ["shadowsocks-service/trojan"]
 vless = ["shadowsocks-service/vless"]

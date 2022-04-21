@@ -495,7 +495,11 @@ where
                         ..
                     } => match packet_receiver.recv().await {
                         Some((addr, data)) => {
-                            buf.copy_from_slice(&data[..]);
+                            if buf.is_empty() {
+                                buf.resize(MAXIMUM_UDP_PAYLOAD_SIZE, 0);
+                            }
+
+                            buf[..data.len()].copy_from_slice(&data[..]);
                             Ok((data.len(), addr))
                         }
                         None => Err(io::Error::new(
