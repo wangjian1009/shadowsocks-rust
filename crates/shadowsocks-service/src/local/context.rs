@@ -10,7 +10,7 @@ use shadowsocks::{
     config::ServerType,
     context::{Context, SharedContext},
     dns_resolver::DnsResolver,
-    net::{AcceptOpts, ConnectOpts},
+    net::{AcceptOpts, ConnectOpts, FlowStat},
     relay::Address,
 };
 #[cfg(feature = "local-dns")]
@@ -22,7 +22,7 @@ use shadowsocks::transport::RateLimiter;
 #[cfg(feature = "transport")]
 use shadowsocks::config::TransportConnectorConfig;
 
-use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
+use crate::{acl::AccessControl, config::SecurityConfig};
 
 use cfg_if::cfg_if;
 

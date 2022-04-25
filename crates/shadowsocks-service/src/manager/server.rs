@@ -11,28 +11,18 @@ use shadowsocks::{
     crypto::v1::CipherKind,
     dns_resolver::DnsResolver,
     manager::protocol::{
-        self,
-        AddRequest,
-        AddResponse,
-        ErrorResponse,
-        ListResponse,
-        ManagerRequest,
-        PingResponse,
-        RemoveRequest,
-        RemoveResponse,
-        StatRequest,
+        self, AddRequest, AddResponse, ErrorResponse, ListResponse, ManagerRequest, PingResponse, RemoveRequest,
+        RemoveResponse, StatRequest,
     },
-    net::{AcceptOpts, ConnectOpts},
+    net::{AcceptOpts, ConnectOpts, FlowStat},
     plugin::PluginConfig,
-    ManagerListener,
-    ServerAddr,
+    ManagerListener, ServerAddr,
 };
 use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
     acl::AccessControl,
     config::{ManagerConfig, ManagerServerHost, ManagerServerMode, SecurityConfig},
-    net::FlowStat,
     server::Server,
 };
 

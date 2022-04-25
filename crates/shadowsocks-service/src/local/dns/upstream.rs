@@ -12,7 +12,7 @@ use shadowsocks::{
     config::{ServerConfig, ServerProtocol},
     context::SharedContext,
     create_connector_then,
-    net::{ConnectOpts, TcpStream as ShadowTcpStream, UdpSocket as ShadowUdpSocket},
+    net::{ConnectOpts, FlowStat, TcpStream as ShadowTcpStream, UdpSocket as ShadowUdpSocket},
     relay::{udprelay::ProxySocket, Address},
     transport::StreamConnection,
     ProxyClientStream,
@@ -38,7 +38,7 @@ use shadowsocks::trojan;
 #[cfg(feature = "vless")]
 use shadowsocks::vless;
 
-use crate::net::{FlowStat, MonProxySocket, MonProxyStream};
+use crate::net::{MonProxySocket, MonProxyStream};
 
 /// Collection of various DNS connections
 #[allow(clippy::large_enum_variant)]

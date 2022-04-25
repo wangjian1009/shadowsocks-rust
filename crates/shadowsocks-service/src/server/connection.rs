@@ -10,7 +10,7 @@ use std::{
 
 use cfg_if::cfg_if;
 
-use crate::net::FlowStat;
+use shadowsocks::net::FlowStat;
 use shadowsocks::relay::socks5::Address;
 
 use std::net::{IpAddr, SocketAddr};

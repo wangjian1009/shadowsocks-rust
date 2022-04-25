@@ -13,8 +13,11 @@ use tokio::{
     sync::Mutex,
 };
 
-use super::flow::FlowStat;
-use shadowsocks::{net::Destination, timeout::Sleep, transport::StreamConnection};
+use shadowsocks::{
+    net::{Destination, FlowStat},
+    timeout::Sleep,
+    transport::StreamConnection,
+};
 
 /// Monitored `ProxyStream`
 #[pin_project]

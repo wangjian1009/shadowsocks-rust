@@ -4,14 +4,12 @@ use std::{io, net::SocketAddr, ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 use shadowsocks::{
+    net::FlowStat,
     relay::socks5::Address,
     transport::{PacketMutWrite, PacketRead, PacketWrite},
-    ProxySocket,
-    ServerAddr,
+    ProxySocket, ServerAddr,
 };
 use tokio::net::ToSocketAddrs;
-
-use super::flow::FlowStat;
 
 /// Monitored `ProxySocket`
 pub struct MonProxySocket {

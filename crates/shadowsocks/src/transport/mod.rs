@@ -10,9 +10,11 @@ use crate::{
 
 pub mod direct;
 mod dummy_packet;
+mod mon_traffic;
 mod mut_packet;
 
 pub use dummy_packet::DummyPacket;
+pub use mon_traffic::MonTraffic;
 pub use mut_packet::MutPacketWriter;
 
 cfg_if! {

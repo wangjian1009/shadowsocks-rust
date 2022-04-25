@@ -16,6 +16,7 @@ maintenance = { status = "passively-maintained" }
 [features]
 default = [
     "trust-dns",
+    "flow-stat",
     "rate-limit",
     "transport-ws",
     "transport-tls",
@@ -53,6 +54,7 @@ transport-ws = ["transport", "tokio-tungstenite"]
 transport-tls = ["transport", "tokio-rustls", "webpki"]
 transport-mkcp = ["transport", "spin", "arc-swap", "sha2", "aes-gcm", "rand"]
 transport-skcp = ["transport", "kcp"]
+flow-stat = []
 
 trojan = ["sha2", "rand"]
 vless = ["rand", "hex", "spin"]

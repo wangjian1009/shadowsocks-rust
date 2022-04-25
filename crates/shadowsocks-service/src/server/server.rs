@@ -13,14 +13,14 @@ use log::{error, trace};
 use shadowsocks::{
     config::{ManagerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
     dns_resolver::DnsResolver,
-    net::{AcceptOpts, ConnectOpts},
+    net::{AcceptOpts, ConnectOpts, FlowStat},
     plugin::{Plugin, PluginMode},
     transport::direct::TcpConnector,
     ServerAddr,
 };
 use tokio::time;
 
-use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
+use crate::{acl::AccessControl, config::SecurityConfig};
 
 use super::{
     connection::ConnectionStat, context::ServiceContext, manager::ManagerClient, tcprelay::TcpServer,

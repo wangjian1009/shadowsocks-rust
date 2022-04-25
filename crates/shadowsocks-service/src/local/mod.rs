@@ -17,11 +17,10 @@ use log::trace;
 use shadowsocks::{
     config::{Mode, ServerType},
     context::Context,
-    net::{AcceptOpts, ConnectOpts},
+    net::{AcceptOpts, ConnectOpts, FlowStat},
 };
 
 #[cfg(feature = "local-flow-stat")]
-use crate::net::FlowStat;
 use crate::{
     config::{Config, ConfigType, ProtocolType},
     dns::build_dns_resolver,

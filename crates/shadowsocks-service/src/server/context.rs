@@ -6,11 +6,11 @@ use shadowsocks::{
     config::ServerType,
     context::{Context, SharedContext},
     dns_resolver::DnsResolver,
-    net::ConnectOpts,
+    net::{ConnectOpts, FlowStat},
     relay::Address,
 };
 
-use crate::{acl::AccessControl, config::SecurityConfig, net::FlowStat};
+use crate::{acl::AccessControl, config::SecurityConfig};
 
 use cfg_if::cfg_if;
 cfg_if! {

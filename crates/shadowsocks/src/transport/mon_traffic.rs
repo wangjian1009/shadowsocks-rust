@@ -1,0 +1,136 @@
+use async_trait::async_trait;
+use futures::ready;
+use std::io::{self, IoSlice};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+use crate::{
+    net::{Destination, FlowStat},
+    ServerAddr,
+};
+
+use super::{PacketMutWrite, PacketRead, PacketWrite, StreamConnection};
+
+#[cfg(feature = "rate-limit")]
+use super::RateLimiter;
+
+#[pin_project::pin_project]
+pub struct MonTraffic<T> {
+    tx: Option<Arc<FlowStat>>,
+    rx: Option<Arc<FlowStat>>,
+    #[pin]
+    s: T,
+}
+
+impl<T> MonTraffic<T> {
+    #[inline]
+    pub fn new(s: T, tx: Option<Arc<FlowStat>>, rx: Option<Arc<FlowStat>>) -> Self {
+        Self { tx, rx, s }
+    }
+
+    #[inline]
+    pub fn set_tx(&mut self, tx: Option<Arc<FlowStat>>) {
+        self.tx = tx;
+    }
+
+    #[inline]
+    pub fn set_rx(&mut self, rx: Option<Arc<FlowStat>>) {
+        self.rx = rx;
+    }
+}
+
+#[async_trait]
+impl<T: PacketMutWrite> PacketMutWrite for MonTraffic<T> {
+    async fn write_to_mut(&mut self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
+        self.s.write_to_mut(buf, addr).await?;
+        self.tx.as_ref().map(|tx| tx.incr_tx(buf.len() as u64));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl<T: PacketWrite> PacketWrite for MonTraffic<T> {
+    async fn write_to(&self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
+        self.s.write_to(buf, addr).await?;
+        self.tx.as_ref().map(|tx| tx.incr_tx(buf.len() as u64));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl<T: PacketRead> PacketRead for MonTraffic<T> {
+    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
+        let r = self.s.read_from(buf).await?;
+        self.rx.as_ref().map(|rx| rx.incr_rx(buf.len() as u64));
+        Ok(r)
+    }
+}
+
+#[async_trait]
+impl<T: StreamConnection> StreamConnection for MonTraffic<T> {
+    #[inline]
+    fn local_addr(&self) -> io::Result<Destination> {
+        self.s.local_addr()
+    }
+
+    #[inline]
+    fn check_connected(&self) -> bool {
+        self.s.check_connected()
+    }
+
+    #[cfg(feature = "rate-limit")]
+    fn set_rate_limit(&mut self, rate_limit: Option<Arc<RateLimiter>>) {
+        self.s.set_rate_limit(rate_limit)
+    }
+}
+
+impl<T: AsyncRead> AsyncRead for MonTraffic<T> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        let this = self.project();
+        let r = ready!(this.s.poll_read(cx, buf));
+        if r.is_ok() {
+            this.rx.as_ref().map(|rx| rx.incr_rx(buf.filled().len() as u64));
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<T: AsyncWrite> AsyncWrite for MonTraffic<T> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
+        let this = self.project();
+        let r = ready!(this.s.poll_write(cx, buf));
+        if let Ok(n) = r {
+            this.tx.as_ref().map(|tx| tx.incr_rx(n as u64));
+        }
+        Poll::Ready(r)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        let this = self.project();
+        this.s.poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        let this = self.project();
+        this.s.poll_shutdown(cx)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<Result<usize, io::Error>> {
+        let this = self.project();
+        let r = ready!(this.s.poll_write_vectored(cx, bufs));
+        if let Ok(n) = r {
+            this.tx.as_ref().map(|tx| tx.incr_rx(n as u64));
+        }
+        Poll::Ready(r)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.s.is_write_vectored()
+    }
+}

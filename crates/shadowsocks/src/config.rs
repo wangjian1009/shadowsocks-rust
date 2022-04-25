@@ -546,6 +546,12 @@ impl ServerConfig {
                                 &query,
                             )?)));
                         }
+                        #[cfg(feature = "transport-tls")]
+                        "tls" => {
+                            config.set_connector_transport(Some(TransportConnectorConfig::Tls(Self::from_url_tls(
+                                &query,
+                            )?)));
+                        }
                         _ => {
                             error!("url to config: vless: not support transport type {}", transport_type);
                             return Err(UrlParseError::InvalidQueryString);
