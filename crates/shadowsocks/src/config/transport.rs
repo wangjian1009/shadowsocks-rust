@@ -34,7 +34,7 @@ use transport::tls::{TlsAcceptorConfig, TlsConnectorConfig};
 use transport::mkcp::{HeaderConfig, MkcpConfig};
 
 #[cfg(feature = "transport-skcp")]
-use transport::skcp::SkcpConfig;
+use transport::skcp::{KcpNoDelayConfig, SkcpConfig};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransportConnectorConfig {
@@ -130,8 +130,67 @@ fn build_mkcp_config(args: &Option<Vec<(&str, &str)>>) -> Result<MkcpConfig, Str
 }
 
 #[cfg(feature = "transport-skcp")]
-fn build_skcp_config(_args: &Option<Vec<(&str, &str)>>) -> Result<SkcpConfig, String> {
-    let config = SkcpConfig::default();
+pub fn build_skcp_config(args: &Option<Vec<(&str, &str)>>) -> Result<SkcpConfig, String> {
+    use std::time::Duration;
+    let mut config = SkcpConfig::default();
+
+    if let Some(mode) = find_arg(args, "mode") {
+        match mode {
+            "default" => {}
+            "fastest" => config.nodelay = KcpNoDelayConfig::fastest(),
+            "normal" => config.nodelay = KcpNoDelayConfig::normal(),
+            _ => {
+                return Err(format!(
+                    "skcp: not support mode {}, support default|fastest|normal",
+                    mode
+                ))
+            }
+        };
+    }
+
+    if let Some(mtu) = find_arg_as::<usize>(args, "mtu")? {
+        config.mtu = mtu
+    }
+
+    if let Some(nodelay) = find_arg_as::<bool>(args, "nodelay")? {
+        config.nodelay.nodelay = nodelay;
+    }
+
+    if let Some(interval) = find_arg_as::<i32>(args, "interval")? {
+        config.nodelay.interval = interval;
+    }
+
+    if let Some(resend) = find_arg_as::<i32>(args, "resend")? {
+        config.nodelay.resend = resend;
+    }
+
+    if let Some(nc) = find_arg_as::<bool>(args, "nc")? {
+        config.nodelay.nc = nc;
+    }
+
+    if let Some(wnd_size_send) = find_arg_as::<u16>(args, "wnd-size-send")? {
+        config.wnd_size.0 = wnd_size_send;
+    }
+
+    if let Some(wnd_size_recv) = find_arg_as::<u16>(args, "wnd-size-recv")? {
+        config.wnd_size.1 = wnd_size_recv;
+    }
+
+    if let Some(session_expire) = find_arg_as::<u64>(args, "session-expire")? {
+        config.session_expire = Duration::from_secs(session_expire);
+    }
+
+    if let Some(flush_write) = find_arg_as::<bool>(args, "flush-write")? {
+        config.flush_write = flush_write;
+    }
+
+    if let Some(flush_acks_input) = find_arg_as::<bool>(args, "flush-acks-input")? {
+        config.flush_acks_input = flush_acks_input;
+    }
+
+    if let Some(stream) = find_arg_as::<bool>(args, "stream")? {
+        config.stream = stream;
+    }
 
     Ok(config)
 }
@@ -309,8 +368,22 @@ impl fmt::Display for TransportAcceptorConfig {
                 Ok(())
             }
             #[cfg(feature = "transport-skcp")]
-            Self::Skcp(ref _config) => {
-                write!(f, "skcp://")?;
+            Self::Skcp(ref skcp_config) => {
+                write!(
+                    f,
+                    "skcp://?mtu={}&nodelay={}&interval={}&resend={}&nc={}&wnd-size-send={}&wnd-size-recv={}&session-expire={}&flush-write={}&flush-acks-input={}&stream={}",
+                    skcp_config.mtu,
+                    skcp_config.nodelay.nodelay,
+                    skcp_config.nodelay.interval,
+                    skcp_config.nodelay.resend,
+                    skcp_config.nodelay.nc,
+                    skcp_config.wnd_size.0,
+                    skcp_config.wnd_size.1,
+                    skcp_config.session_expire.as_secs(),
+                    skcp_config.flush_write,
+                    skcp_config.flush_acks_input,
+                    skcp_config.stream,
+                )?;
                 Ok(())
             }
         }
@@ -353,6 +426,17 @@ fn find_arg<'a>(args: &'a Option<Vec<(&str, &str)>>, key: &str) -> Option<&'a st
         args.iter().find_map(|(k, v)| if *k == key { Some(*v) } else { None })
     } else {
         None
+    }
+}
+
+#[allow(unused)]
+fn find_arg_as<T: FromStr>(args: &Option<Vec<(&str, &str)>>, key: &str) -> Result<Option<T>, String> {
+    match find_arg(args, key) {
+        Some(v) => match v.parse::<T>() {
+            Ok(v) => Ok(Some(v)),
+            Err(e) => Err(format!("{}={} format error", key, v)),
+        },
+        None => Ok(None),
     }
 }
 

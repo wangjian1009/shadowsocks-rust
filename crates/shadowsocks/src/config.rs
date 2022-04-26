@@ -576,6 +576,17 @@ impl ServerConfig {
         None
     }
 
+    #[allow(dead_code)]
+    fn from_url_get_arg_as<T: FromStr>(params: &Vec<(String, String)>, k: &str) -> Result<Option<T>, UrlParseError> {
+        match Self::from_url_get_arg(params, k) {
+            Some(v) => match v.parse::<T>() {
+                Ok(v) => Ok(Some(v)),
+                Err(_e) => Err(UrlParseError::InvalidQueryString),
+            },
+            None => Ok(None),
+        }
+    }
+
     #[cfg(feature = "trojan")]
     fn from_url_trojan(_parsed: &Url) -> Result<ServerConfig, UrlParseError> {
         Err(UrlParseError::InvalidScheme)
@@ -680,9 +691,15 @@ impl ServerConfig {
     }
 
     #[cfg(feature = "transport-skcp")]
-    fn from_url_skcp(_params: &Vec<(String, String)>) -> Result<SkcpConfig, UrlParseError> {
-        let skcp_config = SkcpConfig::default();
-        Ok(skcp_config)
+    fn from_url_skcp(params: &Vec<(String, String)>) -> Result<SkcpConfig, UrlParseError> {
+        let params = params.into_iter().map(|e| (e.0.as_str(), e.1.as_str())).collect();
+        match transport::build_skcp_config(&Some(params)) {
+            Ok(c) => Ok(c),
+            Err(e) => {
+                error!("url to config: skcp: {}", e);
+                Err(UrlParseError::InvalidQueryString)
+            }
+        }
     }
 
     #[cfg(feature = "transport-tls")]
@@ -968,32 +985,7 @@ impl ServerConfig {
 
         #[cfg(feature = "transport")]
         if let Some(transport) = self.connector_transport.as_ref() {
-            match transport {
-                #[cfg(feature = "transport-ws")]
-                TransportConnectorConfig::Ws(ws_config) => {
-                    params.push(("type", "ws".to_owned()));
-                    params.push(("path", ws_config.path.to_owned()));
-                    params.push(("host", ws_config.host.to_owned()));
-                }
-                #[cfg(feature = "transport-tls")]
-                TransportConnectorConfig::Tls(_tls_config) => {}
-                #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
-                TransportConnectorConfig::Wss(ws_config, tls_config) => {
-                    params.push(("type", "ws".to_owned()));
-                    params.push(("path", ws_config.path.to_owned()));
-                    params.push(("host", ws_config.host.to_owned()));
-                    params.push(("security", "tls".to_owned()));
-                    params.push(("sni", tls_config.sni.to_owned()));
-                }
-                #[cfg(feature = "transport-mkcp")]
-                TransportConnectorConfig::Mkcp(_mkcp_config) => {
-                    params.push(("type", "kcp".to_owned()));
-                }
-                #[cfg(feature = "transport-skcp")]
-                TransportConnectorConfig::Skcp(_skcp_config) => {
-                    params.push(("type", "skcp".to_owned()));
-                }
-            }
+            Self::to_url_transport(&mut params, transport);
         }
 
         if !params.is_empty() {
@@ -1007,6 +999,47 @@ impl ServerConfig {
         }
 
         url
+    }
+
+    #[cfg(feature = "transport")]
+    fn to_url_transport(params: &mut Vec<(&str, String)>, transport: &TransportConnectorConfig) {
+        match transport {
+            #[cfg(feature = "transport-ws")]
+            TransportConnectorConfig::Ws(ws_config) => {
+                params.push(("type", "ws".to_owned()));
+                params.push(("path", ws_config.path.to_owned()));
+                params.push(("host", ws_config.host.to_owned()));
+            }
+            #[cfg(feature = "transport-tls")]
+            TransportConnectorConfig::Tls(_tls_config) => {}
+            #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+            TransportConnectorConfig::Wss(ws_config, tls_config) => {
+                params.push(("type", "ws".to_owned()));
+                params.push(("path", ws_config.path.to_owned()));
+                params.push(("host", ws_config.host.to_owned()));
+                params.push(("security", "tls".to_owned()));
+                params.push(("sni", tls_config.sni.to_owned()));
+            }
+            #[cfg(feature = "transport-mkcp")]
+            TransportConnectorConfig::Mkcp(_mkcp_config) => {
+                params.push(("type", "kcp".to_owned()));
+            }
+            #[cfg(feature = "transport-skcp")]
+            TransportConnectorConfig::Skcp(skcp_config) => {
+                params.push(("type", "skcp".to_owned()));
+                params.push(("mtu", skcp_config.mtu.to_string()));
+                params.push(("nodelay", skcp_config.nodelay.nodelay.to_string()));
+                params.push(("interval", skcp_config.nodelay.interval.to_string()));
+                params.push(("resend", skcp_config.nodelay.resend.to_string()));
+                params.push(("nc", skcp_config.nodelay.nc.to_string()));
+                params.push(("wnd-size-send", skcp_config.wnd_size.0.to_string()));
+                params.push(("wnd-size-recv", skcp_config.wnd_size.1.to_string()));
+                params.push(("session-expire", skcp_config.session_expire.as_secs().to_string()));
+                params.push(("flush-write", skcp_config.flush_write.to_string()));
+                params.push(("flush-acks-input", skcp_config.flush_acks_input.to_string()));
+                params.push(("stream", skcp_config.stream.to_string()));
+            }
+        }
     }
 
     /// Get server's balancer weight

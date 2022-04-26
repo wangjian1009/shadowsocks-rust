@@ -19,3 +19,6 @@ mod tls_acceptor;
 
 #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
 mod wss;
+
+#[cfg(feature = "transport-skcp")]
+mod skcp;
