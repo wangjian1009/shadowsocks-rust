@@ -77,7 +77,7 @@ default = [
     "rate-limit",
     "lib-entry",
     "host-dns",
-    "encrypt-password",
+    "env-crypt",
     "sniffer-bittorrent",
     "transport-ws",
     "transport-tls",
@@ -89,7 +89,9 @@ default = [
 
 # Enable local server
 local = ["shadowsocks-service/local"]
-encrypt-password = []
+
+# Enable env-crypt
+env-crypt = ["shadowsocks-service/env-crypt"]
 
 # Enable bittorrent protocol reject
 sniffer-bittorrent = ["shadowsocks-service/sniffer-bittorrent"]
@@ -207,10 +209,6 @@ spin = { version = "0.9", features = ["std"], optional = true }
 
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "signal"] }
-
-aes = "0.7"
-block-modes = "0.8"
-base64 = "0.13.0"
 
 governor = { version = "0.3.2", optional = true }
 

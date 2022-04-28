@@ -11,7 +11,7 @@ type Aes256Cbc = Cbc<Aes256, Pkcs7>;
 //     return parts[4];
 // }
 
-pub fn decrypt_password(enc_password: &str) -> Result<String, String> {
+pub fn decrypt(enc_password: &str) -> Result<String, String> {
     let key = getkey();
     let iv: [u8; 16] = [
         0xae, 0x80, 0xed, 0xcb, 0x37, 0xc2, 0x70, 0x33, 0x21, 0xb3, 0x31, 0x07, 0xcf, 0x35, 0x88, 0xc3,
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn decrypt_password_works() {
         let encryped_passwd = encrypt_password("*!hvk9^4baX#Y%Ja");
-        let decrypt_passwd = decrypt_password(&encryped_passwd).unwrap();
+        let decrypt_passwd = decrypt(&encryped_passwd).unwrap();
         // println!("xxxx: hexkey: {}", hex::encode(getkey().to_vec()));
         println!("xxxx: encryped_passwd: {}", encryped_passwd);
         assert_eq!(decrypt_passwd, "*!hvk9^4baX#Y%Ja");
@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn decrypt_password_origin() {
         assert_eq!(
-            decrypt_password("N35GLo6e1JXk8HEjABg54Wtyn4pvyApBAwjvBKjN3Bo=").unwrap(),
+            decrypt("N35GLo6e1JXk8HEjABg54Wtyn4pvyApBAwjvBKjN3Bo=").unwrap(),
             "*!hvk9^4baX#Y%Ja"
         );
     }

@@ -30,6 +30,7 @@ default = [
     "server-limit",
     "server-mock",
     "rate-limit",
+    "env-crypt",
     "sniffer-bittorrent",
     "sniffer-http",
     "sniffer-tls",
@@ -66,6 +67,7 @@ full = [
 
 # Enable local server
 local = []
+
 # Enable remote server
 server = ["rand"]
 server-maintain = ["hyper", "csv"]
@@ -84,12 +86,17 @@ sniffer-bittorrent = ["sniffer"]
 sniffer-http = ["sniffer"]
 sniffer-tls = ["sniffer"]
 
+# env-crypt
+env-crypt = ["aes", "block-modes", "base64"]
+
+# enable transport
 transport = []
 transport-ws = ["transport", "shadowsocks/transport-ws"]
 transport-tls = ["transport", "shadowsocks/transport-tls"]
 transport-mkcp = ["transport", "shadowsocks/transport-mkcp"]
 transport-skcp = ["transport", "shadowsocks/transport-skcp"]
 
+# enable protocol
 trojan = ["shadowsocks/trojan"]
 vless = ["shadowsocks/vless"]
 
@@ -189,6 +196,10 @@ smoltcp = { version = "0.8", optional = true, features = [] }
 
 serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
+
+aes = { version = "0.7", optional = true }
+block-modes = { version = "0.8", optional = true }
+base64 = { version = "0.13.0", optional = true }
 
 governor = { version = "0.3.2", optional = true }
 nonzero_ext = { version = "0.2", optional = true }

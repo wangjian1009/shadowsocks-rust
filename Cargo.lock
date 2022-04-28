@@ -2488,10 +2488,7 @@ dependencies = [
 name = "shadowsocks-rust"
 version = "1.14.1"
 dependencies = [
- "aes",
  "android_logger",
- "base64",
- "block-modes",
  "build-time",
  "byte_string",
  "byteorder",
@@ -2531,8 +2528,11 @@ dependencies = [
 name = "shadowsocks-service"
 version = "1.14.1"
 dependencies = [
+ "aes",
  "arc-swap 1.5.0",
  "async-trait",
+ "base64",
+ "block-modes",
  "byte_string",
  "byteorder",
  "bytes",

@@ -75,6 +75,11 @@ mod sys;
 #[cfg(feature = "sniffer")]
 pub mod sniffer;
 
+#[cfg(feature = "env-crypt")]
+mod env_crypt;
+#[cfg(feature = "env-crypt")]
+pub use env_crypt::decrypt;
+
 #[cfg(test)]
 #[macro_use]
 extern crate mockall;

@@ -388,8 +388,8 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
     #[cfg(feature = "rate-limit")]
     {
         app = app.arg(
-            Arg::new("CONN_LIMIT_RATE")
-                .long("conn-limit-rate")
+            Arg::new("LIMIT_RATE")
+                .long("limit-rate")
                 .takes_value(true)
                 .validator(validator::validate_bound_width)
                 .help("connection speed rate limit per connection"),
@@ -479,28 +479,7 @@ pub fn main(matches: &ArgMatches) {
 
         let mut config = match config_path_opt {
             Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Local) {
-                #[cfg(not(feature = "encrypt-password"))]
                 Ok(cfg) => cfg,
-                #[cfg(feature = "encrypt-password")]
-                Ok(mut cfg) => {
-                    // let package_name = parse_package_name(cpath);
-                    for svr in cfg.server.iter_mut() {
-                        match svr.protocol_mut() {
-                            ServerProtocol::SS(ss_cfg) => {
-                                let password = crate::decrypt_password(ss_cfg.password()).unwrap();
-                                ss_cfg.set_password(password.as_str());
-                            }
-                            #[cfg(feature = "trojan")]
-                            ServerProtocol::Trojan(cfg) => {
-                                let password = crate::decrypt_password(cfg.password()).unwrap();
-                                cfg.set_password(password.as_str());
-                            }
-                            #[cfg(feature = "vless")]
-                            ServerProtocol::Vless(..) => {}
-                        }
-                    }
-                    cfg
-                }
                 Err(err) => {
                     eprintln!("loading config {:?}, {}", cpath, err);
                     process::exit(crate::EXIT_CODE_LOAD_CONFIG_FAILURE);
@@ -802,7 +781,7 @@ pub fn main(matches: &ArgMatches) {
         }
 
         #[cfg(feature = "rate-limit")]
-        if let Some(speed_limit) = matches.value_of("CONN_LIMIT_RATE") {
+        if let Some(speed_limit) = matches.value_of("LIMIT_RATE") {
             use std::str::FromStr;
 
             let speed_limit = BoundWidth::from_str(speed_limit).expect("speed limit with b/s or Kb/s or Mb/s or Gb/s");
@@ -1001,28 +980,7 @@ fn launch_reload_server_task(config_path: PathBuf, balancer: PingBalancer) {
 
         while sigusr1.recv().await.is_some() {
             let config = match Config::load_from_file(&config_path, ConfigType::Local) {
-                #[cfg(not(feature = "encrypt-password"))]
                 Ok(c) => c,
-                #[cfg(feature = "encrypt-password")]
-                Ok(mut cfg) => {
-                    // let package_name = parse_package_name(cpath);
-                    for svr in cfg.server.iter_mut() {
-                        match svr.protocol_mut() {
-                            ServerProtocol::SS(ss_cfg) => {
-                                let password = crate::decrypt_password(ss_cfg.password()).unwrap();
-                                ss_cfg.set_password(password.as_str());
-                            }
-                            #[cfg(feature = "trojan")]
-                            ServerProtocol::Trojan(cfg) => {
-                                let password = crate::decrypt_password(cfg.password()).unwrap();
-                                cfg.set_password(password.as_str());
-                            }
-                            #[cfg(feature = "vless")]
-                            ServerProtocol::Vless(..) => {}
-                        }
-                    }
-                    cfg
-                }
                 Err(err) => {
                     error!("auto-reload {} failed with error: {}", config_path.display(), err);
                     continue;

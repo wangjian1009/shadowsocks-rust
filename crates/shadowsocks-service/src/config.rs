@@ -1123,6 +1123,9 @@ pub enum ErrorKind {
     JsonParsingError,
     /// `std::io::Error`
     IoError,
+    /// 密码解密失败
+    #[cfg(feature = "env-crypt")]
+    CryptError,
 }
 
 /// Configuration parsing error
@@ -1953,7 +1956,32 @@ impl Config {
 
     /// Load Config from a `str`
     pub fn load_from_str(s: &str, config_type: ConfigType) -> Result<Config, Error> {
-        let c = json5::from_str::<SSConfig>(s)?;
+        #[allow(unused_mut)]
+        let mut c = json5::from_str::<SSConfig>(s)?;
+
+        #[cfg(feature = "env-crypt")]
+        {
+            if c.network.is_some() && c.network.as_ref().unwrap().find("://").is_none() {
+                c.network = match crate::decrypt(c.network.as_ref().unwrap().as_str()) {
+                    Ok(v) => {
+                        log::info!("env-crypt: network {} => {}", c.network.as_ref().unwrap(), v);
+                        Some(v)
+                    }
+                    Err(e) => return Err(Error::new(ErrorKind::CryptError, "decrypt network error", Some(e))),
+                };
+            }
+
+            if c.password.is_some() {
+                c.password = match crate::decrypt(c.password.as_ref().unwrap().as_str()) {
+                    Ok(v) => {
+                        log::info!("env-crypt: password {} => {}", c.password.as_ref().unwrap(), v);
+                        Some(v)
+                    }
+                    Err(e) => return Err(Error::new(ErrorKind::CryptError, "decrypt password error", Some(e))),
+                };
+            }
+        }
+
         Config::load_from_ssconfig(c, config_type)
     }
 
