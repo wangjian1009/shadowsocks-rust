@@ -42,9 +42,20 @@ impl KcpStream {
 
         let udp = Arc::new(udp);
         let conv = rand::random();
-        let socket = KcpSocket::new(config, conv, udp, addr.clone(), config.stream)?;
 
-        let session = KcpSession::new_shared(socket, config.session_expire, None);
+        let header = config.create_header().map(|e| Arc::new(e));
+        let security = config.create_security().map(|e| Arc::new(e));
+        let socket = KcpSocket::new(
+            config,
+            conv,
+            udp,
+            addr.clone(),
+            config.stream,
+            header.clone(),
+            security.clone(),
+        )?;
+
+        let session = KcpSession::new_shared(socket, header, security, config.session_expire, None);
 
         Ok(KcpStream::with_session(session))
     }

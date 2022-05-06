@@ -1,6 +1,6 @@
-use std::{io::Write, time::Duration};
+use std::time::Duration;
 
-use kcp::Kcp;
+use super::super::{HeaderConfig, HeaderPolicy, Security, SecurityConfig};
 
 /// Kcp Delay Config
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,7 +59,7 @@ impl KcpNoDelayConfig {
 }
 
 /// Kcp Config
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct KcpConfig {
     /// Max Transmission Unit
     pub mtu: usize,
@@ -75,6 +75,10 @@ pub struct KcpConfig {
     pub flush_acks_input: bool,
     /// Stream mode
     pub stream: bool,
+    // KCP 进行伪装, utp、srtp、wechat-video、dtls、wireguard 或者 none
+    pub header_config: Option<HeaderConfig>,
+    // 数据加密（验证）配置 simple,aes-gcm
+    pub security_config: Option<SecurityConfig>,
 }
 
 impl Default for KcpConfig {
@@ -87,23 +91,24 @@ impl Default for KcpConfig {
             flush_write: false,
             flush_acks_input: false,
             stream: true,
+            header_config: None,
+            security_config: None,
         }
     }
 }
 
 impl KcpConfig {
-    /// Applies config onto `Kcp`
-    #[doc(hidden)]
-    pub fn apply_config<W: Write>(&self, k: &mut Kcp<W>) {
-        k.set_mtu(self.mtu).expect("invalid MTU");
+    pub fn create_header(&self) -> Option<HeaderPolicy> {
+        match self.header_config.as_ref() {
+            None => None,
+            Some(head_config) => Some(head_config.create_policy()),
+        }
+    }
 
-        k.set_nodelay(
-            self.nodelay.nodelay,
-            self.nodelay.interval,
-            self.nodelay.resend,
-            self.nodelay.nc,
-        );
-
-        k.set_wndsize(self.wnd_size.0, self.wnd_size.1);
+    pub fn create_security(&self) -> Option<Security> {
+        match self.security_config.as_ref() {
+            None => None,
+            Some(security_config) => Some(security_config.create_security()),
+        }
     }
 }

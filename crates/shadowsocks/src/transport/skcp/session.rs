@@ -20,7 +20,9 @@ use tokio::{
 
 use crate::net::UdpSocket;
 
-use super::{config::KcpConfig, skcp::KcpSocket};
+use super::super::{HeaderPolicy, Security};
+
+use super::{config::KcpConfig, io::InputDecorate, skcp::KcpSocket};
 
 pub struct KcpSession {
     socket: SpinMutex<KcpSocket>,
@@ -50,6 +52,8 @@ impl KcpSession {
 
     pub fn new_shared(
         socket: KcpSocket,
+        header: Option<Arc<HeaderPolicy>>,
+        security: Option<Arc<Security>>,
         session_expire: Duration,
         session_close_notifier: Option<(mpsc::Sender<SocketAddr>, SocketAddr)>,
     ) -> Arc<KcpSession> {
@@ -58,6 +62,8 @@ impl KcpSession {
         let (input_tx, mut input_rx) = mpsc::channel(64);
 
         let udp_socket = socket.udp_socket().clone();
+
+        let mut input_decorate = InputDecorate::new(socket.mtu(), header, security);
 
         let session = Arc::new(KcpSession::new(
             socket,
@@ -81,7 +87,17 @@ impl KcpSession {
                                     error!("[SESSION] UDP recv failed, error: {}", err);
                                 }
                                 Ok(n) => {
-                                    let input_buffer = &input_buffer[..n];
+                                    let input_buffer = {
+                                        let buf = &mut input_buffer[..n];
+                                        match input_decorate.decode(buf) {
+                                            Ok(buf) => buf,
+                                            Err(err) => {
+                                                error!("[SESSION] UDP input {} bytes error: decode: {}, input buffer {:?}", n, err, ByteStr::new(buf));
+                                                continue;
+                                            }
+                                        }
+                                    };
+
                                     let input_conv = kcp::get_conv(input_buffer);
                                     trace!("[SESSION] UDP recv {} bytes, conv: {}, going to input {:?}", n, input_conv, ByteStr::new(input_buffer));
 
@@ -276,6 +292,8 @@ impl KcpSessionManager {
         udp: &Arc<UdpSocket>,
         peer_addr: SocketAddr,
         session_close_notifier: &mpsc::Sender<SocketAddr>,
+        header: &Option<Arc<HeaderPolicy>>,
+        security: &Option<Arc<Security>>,
     ) -> KcpResult<(Arc<KcpSession>, bool)> {
         match self.sessions.entry(peer_addr) {
             Entry::Occupied(mut occ) => {
@@ -285,9 +303,20 @@ impl KcpSessionManager {
                     // This is the first packet received from this peer.
                     // Recreate a new session for this specific client.
 
-                    let socket = KcpSocket::new(config, conv, udp.clone(), peer_addr, config.stream)?;
+                    let socket = KcpSocket::new(
+                        config,
+                        conv,
+                        udp.clone(),
+                        peer_addr,
+                        config.stream,
+                        header.clone(),
+                        security.clone(),
+                    )?;
+
                     let session = KcpSession::new_shared(
                         socket,
+                        header.clone(),
+                        security.clone(),
                         config.session_expire,
                         Some((session_close_notifier.clone(), peer_addr)),
                     );
@@ -307,9 +336,19 @@ impl KcpSessionManager {
                 }
             }
             Entry::Vacant(vac) => {
-                let socket = KcpSocket::new(config, conv, udp.clone(), peer_addr, config.stream)?;
+                let socket = KcpSocket::new(
+                    config,
+                    conv,
+                    udp.clone(),
+                    peer_addr,
+                    config.stream,
+                    header.clone(),
+                    security.clone(),
+                )?;
                 let session = KcpSession::new_shared(
                     socket,
+                    header.clone(),
+                    security.clone(),
                     config.session_expire,
                     Some((session_close_notifier.clone(), peer_addr)),
                 );

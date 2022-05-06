@@ -30,8 +30,11 @@ use super::DEFAULT_SNI;
 #[cfg(feature = "transport-tls")]
 use transport::tls::{TlsAcceptorConfig, TlsConnectorConfig};
 
+#[cfg(any(feature = "transport-mkcp", feature = "transport-skcp"))]
+use transport::{HeaderConfig, SecurityConfig};
+
 #[cfg(feature = "transport-mkcp")]
-use transport::mkcp::{HeaderConfig, MkcpConfig};
+use transport::mkcp::MkcpConfig;
 
 #[cfg(feature = "transport-skcp")]
 use transport::skcp::{KcpNoDelayConfig, SkcpConfig};
@@ -190,6 +193,29 @@ pub fn build_skcp_config(args: &Option<Vec<(&str, &str)>>) -> Result<SkcpConfig,
 
     if let Some(stream) = find_arg_as::<bool>(args, "stream")? {
         config.stream = stream;
+    }
+
+    if let Some(header) = find_arg(args, "header") {
+        config.header_config = Some(header.parse().map_err(|e| format!("header: {}", e))?);
+    }
+
+    if let Some(security) = find_arg(args, "security") {
+        config.security_config = Some(match security {
+            "simple" => SecurityConfig::Simple,
+            "aes-gcm" => {
+                if let Some(seed) = find_arg(args, "seed") {
+                    SecurityConfig::AESGCM { seed: seed.to_owned() }
+                } else {
+                    return Err(format!("skcp: not security {}, no seed configured", security));
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "skcp: not support security {}, support simple|aes-gcm",
+                    security
+                ))
+            }
+        });
     }
 
     Ok(config)
@@ -384,6 +410,15 @@ impl fmt::Display for TransportAcceptorConfig {
                     skcp_config.flush_acks_input,
                     skcp_config.stream,
                 )?;
+                if let Some(header) = skcp_config.header_config.as_ref() {
+                    write!(f, "&header={}", header)?;
+                }
+                if let Some(security) = skcp_config.security_config.as_ref() {
+                    match security {
+                        SecurityConfig::AESGCM { seed } => write!(f, "&security=aes-gcm&seed={}", seed)?,
+                        SecurityConfig::Simple => write!(f, "&security=simple")?,
+                    }
+                }
                 Ok(())
             }
         }

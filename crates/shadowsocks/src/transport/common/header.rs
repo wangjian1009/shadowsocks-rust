@@ -1,6 +1,6 @@
 use std::{fmt, io, str::FromStr};
 
-use super::new_error;
+pub type HeaderPolicy = Box<dyn Header + Send + Sync>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum HeaderConfig {
@@ -9,6 +9,18 @@ pub enum HeaderConfig {
     Dtls,
     Wechat,
     Wireguard,
+}
+
+impl HeaderConfig {
+    pub fn create_policy(&self) -> HeaderPolicy {
+        match self {
+            HeaderConfig::Srtp => Box::new(srtp::SRTP::new()) as HeaderPolicy,
+            HeaderConfig::Utp => Box::new(utp::UTP::new()) as HeaderPolicy,
+            HeaderConfig::Dtls => Box::new(dtls::DTLS::new()) as HeaderPolicy,
+            HeaderConfig::Wechat => Box::new(wechat::VideoChat::new()) as HeaderPolicy,
+            HeaderConfig::Wireguard => Box::new(wireguard::Wireguard::new()) as HeaderPolicy,
+        }
+    }
 }
 
 impl FromStr for HeaderConfig {
@@ -21,7 +33,10 @@ impl FromStr for HeaderConfig {
             "wechat-video" => Ok(HeaderConfig::Wechat),
             "dtls" => Ok(HeaderConfig::Dtls),
             "wireguard" => Ok(HeaderConfig::Wireguard),
-            _ => Err(new_error(format!("not support header config {}", s))),
+            _ => Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("not support header config {}", s),
+            )),
         }
     }
 }

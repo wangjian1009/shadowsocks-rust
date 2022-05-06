@@ -2,10 +2,24 @@ use std::io;
 
 use bytes::{Buf, BufMut};
 
-use super::{
-    new_error,
-    xor::{xorbkd_with_pending, xorfwd_with_pending},
-};
+use super::xor::{xorbkd_with_pending, xorfwd_with_pending};
+
+pub type Security = Box<dyn AEAD + Send + Sync>;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SecurityConfig {
+    Simple,
+    AESGCM { seed: String },
+}
+
+impl SecurityConfig {
+    pub fn create_security(&self) -> Security {
+        match self {
+            Self::Simple => Box::new(SimpleAuthenticator::new()) as Security,
+            Self::AESGCM { seed } => Box::new(super::cryptreal::AEADAESGCMBasedOnSeed::new(seed)) as Security,
+        }
+    }
+}
 
 pub trait AEAD {
     // NonceSize returns the size of the nonce that must be passed to Seal
@@ -23,13 +37,7 @@ pub trait AEAD {
     //
     // To reuse plaintext's storage for the encrypted output, use plaintext[:0]
     // as dst. Otherwise, the remaining capacity of dst must not overlap plaintext.
-    fn seal(
-        &self,
-        nonce: &[u8],
-        plain_in_cipher_out: &mut [u8],
-        plain_len: usize,
-        extra: Option<&[u8]>,
-    ) -> io::Result<usize>;
+    fn seal(&self, nonce: &[u8], plain_in: &[u8], cipher_out: &mut [u8], extra: Option<&[u8]>) -> io::Result<usize>;
 
     // Open decrypts and authenticates ciphertext, authenticates the
     // additional data and, if successful, appends the resulting plaintext
@@ -42,7 +50,7 @@ pub trait AEAD {
     //
     // Even if the function fails, the contents of dst, up to its capacity,
     // may be overwritten.
-    fn open(&self, nonce: &[u8], cipher_in_plain_out: &mut [u8], extra: Option<&[u8]>) -> io::Result<usize>;
+    fn open(&self, nonce: &[u8], cipher_in: &[u8], plain_out: &mut [u8], extra: Option<&[u8]>) -> io::Result<usize>;
 }
 
 pub struct SimpleAuthenticator {}
@@ -64,57 +72,60 @@ impl AEAD for SimpleAuthenticator {
     }
 
     // Seal implements cipher.AEAD.Seal().
-    fn seal(
-        &self,
-        _nonce: &[u8],
-        plain_in_cipher_out: &mut [u8],
-        plain_len: usize,
-        _extra: Option<&[u8]>,
-    ) -> io::Result<usize> {
+    fn seal(&self, _nonce: &[u8], plain_in: &[u8], cipher_out: &mut [u8], _extra: Option<&[u8]>) -> io::Result<usize> {
         // 4 bytes for hash, and then 2 bytes for length
-        let dst_len = 6 + plain_len;
-        if plain_in_cipher_out.len() < dst_len {}
+        let dst_len = 6 + plain_in.len();
+        assert!(dst_len <= cipher_out.len());
 
-        plain_in_cipher_out.copy_within(..plain_len, 6);
+        cipher_out[6..dst_len].copy_from_slice(plain_in);
 
-        (&mut plain_in_cipher_out[4..]).put_u16(plain_len as u16);
+        (&mut cipher_out[4..]).put_u16(plain_in.len() as u16);
 
-        let hash = fnv_32_hash(&plain_in_cipher_out[4..dst_len]);
-        (&mut plain_in_cipher_out[..4]).put_u32(hash);
+        let hash = fnv_32_hash(&cipher_out[4..dst_len]);
+        (&mut cipher_out[..4]).put_u32(hash);
 
-        xorfwd_with_pending(plain_in_cipher_out, dst_len);
+        xorfwd_with_pending(cipher_out, dst_len);
         Ok(dst_len)
     }
 
     // Open implements cipher.AEAD.Open().
-    fn open(&self, _nonce: &[u8], cipher_in_plain_out: &mut [u8], _extra: Option<&[u8]>) -> io::Result<usize> {
-        let clen = cipher_in_plain_out.len();
+    fn open(&self, _nonce: &[u8], cipher_in: &[u8], plain_out: &mut [u8], _extra: Option<&[u8]>) -> io::Result<usize> {
+        let clen = cipher_in.len();
         if clen < 6 {
-            return Err(new_error(format!(
-                "simple authenticator: invalid auth(cipher len {} too small)",
-                clen
-            )));
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("simple authenticator: invalid auth(cipher len {} too small)", clen),
+            ));
         }
 
         let plen = clen - 6;
 
-        xorbkd_with_pending(cipher_in_plain_out, clen);
+        let mut cipher_in = cipher_in.to_owned();
 
-        let hash = (&cipher_in_plain_out[..4]).get_u32();
-        if hash != fnv_32_hash(&cipher_in_plain_out[4..clen]) {
-            return Err(new_error(format!("simple authenticator: invalid auth(hash)")));
+        xorbkd_with_pending(&mut cipher_in[..], clen);
+
+        let hash = (&cipher_in[..4]).get_u32();
+        if hash != fnv_32_hash(&cipher_in[4..clen]) {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("simple authenticator: invalid auth(hash)"),
+            ));
         }
 
-        let length = (&cipher_in_plain_out[4..6]).get_u16() as usize;
+        let length = (&cipher_in[4..6]).get_u16() as usize;
         if length + 6 != clen {
-            return Err(new_error(format!("simple authenticator: invalid auth(len)")));
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("simple authenticator: invalid auth(len)"),
+            ));
         }
 
-        cipher_in_plain_out.copy_within(6..clen, 0);
+        plain_out[..plen].copy_from_slice(&cipher_in[6..clen]);
         Ok(plen)
     }
 }
 
+#[inline]
 pub fn fnv_32_hash(src: &[u8]) -> u32 {
     const OFFSET_BASIS: u32 = 2166136261; // 32位offset basis
     const PRIME: u32 = 16777619; // 32位prime
@@ -169,10 +180,10 @@ mod test {
         let auth = SimpleAuthenticator::new();
 
         let mut cache = vec![0; seal_buf_size];
-        cache[..plain.len()].copy_from_slice(plain);
-        let encrypt_len = auth.seal(&[], &mut cache, plain.len(), None)?;
+        let encrypt_len = auth.seal(&[], plain, &mut cache, None)?;
 
-        let output_len = auth.open(&[], &mut cache[..encrypt_len], None)?;
-        Ok(cache[..output_len].to_owned())
+        let mut rebuild = vec![0u8; plain.len()];
+        let _output_len = auth.open(&[], &cache[..encrypt_len], &mut rebuild, None)?;
+        Ok(rebuild)
     }
 }

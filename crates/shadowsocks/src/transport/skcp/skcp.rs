@@ -1,5 +1,4 @@
 use std::{
-    io::{self, ErrorKind, Write},
     net::SocketAddr,
     sync::Arc,
     task::{Context, Poll, Waker},
@@ -8,70 +7,23 @@ use std::{
 
 use futures::future;
 use kcp::{Error as KcpError, Kcp, KcpResult};
-use log::{error, trace};
-use tokio::sync::mpsc;
 
 use crate::net::UdpSocket;
 
-use super::{config::KcpConfig, utils::now_millis};
+use super::super::{HeaderPolicy, Security};
 
-/// Writer for sending packets to the underlying UdpSocket
-struct UdpOutput {
-    socket: Arc<UdpSocket>,
-    target_addr: SocketAddr,
-    delay_tx: mpsc::UnboundedSender<Vec<u8>>,
-}
-
-impl UdpOutput {
-    /// Create a new Writer for writing packets to UdpSocket
-    pub fn new(socket: Arc<UdpSocket>, target_addr: SocketAddr) -> UdpOutput {
-        let (delay_tx, mut delay_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-
-        {
-            let socket = socket.clone();
-            tokio::spawn(async move {
-                while let Some(buf) = delay_rx.recv().await {
-                    if let Err(err) = socket.send_to(&buf, target_addr).await {
-                        error!("[SEND] UDP delayed send failed, error: {}", err);
-                    }
-                }
-            });
-        }
-
-        UdpOutput {
-            socket,
-            target_addr,
-            delay_tx,
-        }
-    }
-}
-
-impl Write for UdpOutput {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self.socket.try_send_to(buf, self.target_addr) {
-            Ok(n) => Ok(n),
-            Err(ref err) if err.kind() == ErrorKind::WouldBlock => {
-                // send return EAGAIN
-                // ignored as packet was lost in transmission
-                trace!("[SEND] UDP send EAGAIN, packet.size: {} bytes, delayed send", buf.len());
-
-                self.delay_tx.send(buf.to_owned()).expect("channel closed unexpectly");
-
-                Ok(buf.len())
-            }
-            Err(err) => Err(err),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
+use super::{
+    config::KcpConfig,
+    io::{DecorateOutput, UdpOutput},
+    utils::now_millis,
+};
 
 pub struct KcpSocket {
-    kcp: Kcp<UdpOutput>,
+    kcp: Kcp<DecorateOutput<UdpOutput>>,
     last_update: Instant,
     socket: Arc<UdpSocket>,
+    // header: Option<Arc<HeaderPolicy>>,
+    // security: Option<Arc<Security>>,
     flush_write: bool,
     flush_ack_input: bool,
     sent_first: bool,
@@ -87,14 +39,43 @@ impl KcpSocket {
         socket: Arc<UdpSocket>,
         target_addr: SocketAddr,
         stream: bool,
+        header: Option<Arc<HeaderPolicy>>,
+        security: Option<Arc<Security>>,
     ) -> KcpResult<KcpSocket> {
-        let output = UdpOutput::new(socket.clone(), target_addr);
+        let mut overhead = 0;
+        if let Some(header) = header.as_ref() {
+            overhead += header.size();
+        }
+
+        if let Some(security) = security.as_ref() {
+            overhead += security.overhead();
+        }
+
+        let mut presend_buf = None;
+        if overhead > 0 {
+            presend_buf = Some(Vec::with_capacity(c.mtu));
+            unsafe { presend_buf.as_mut().unwrap().set_len(c.mtu) };
+        }
+
+        if c.mtu < overhead {
+            return Err(KcpError::InvalidMtu(c.mtu));
+        }
+
+        let output = DecorateOutput::new(
+            UdpOutput::new(socket.clone(), target_addr),
+            header.clone(),
+            security,
+            presend_buf,
+        );
         let mut kcp = if stream {
             Kcp::new_stream(conv, output)
         } else {
             Kcp::new(conv, output)
         };
-        c.apply_config(&mut kcp);
+
+        kcp.set_mtu(c.mtu - overhead)?;
+        kcp.set_nodelay(c.nodelay.nodelay, c.nodelay.interval, c.nodelay.resend, c.nodelay.nc);
+        kcp.set_wndsize(c.wnd_size.0, c.wnd_size.1);
 
         // Ask server to allocate one
         if conv == 0 {
@@ -116,12 +97,16 @@ impl KcpSocket {
         })
     }
 
-    /// Call every time you got data from transmission
+    #[inline]
+    pub fn mtu(&self) -> usize {
+        self.kcp.mtu()
+    }
+
     pub fn input(&mut self, buf: &[u8]) -> KcpResult<bool> {
         match self.kcp.input(buf) {
             Ok(..) => {}
             Err(KcpError::ConvInconsistent(expected, actual)) => {
-                trace!("[INPUT] Conv expected={} actual={} ignored", expected, actual);
+                log::trace!("[INPUT] Conv expected={} actual={} ignored", expected, actual);
                 return Ok(false);
             }
             Err(err) => return Err(err),
@@ -145,7 +130,7 @@ impl KcpSocket {
         //     1. Have sent the first packet (asking for conv)
         //     2. Too many pending packets
         if self.sent_first && (self.kcp.wait_snd() >= self.kcp.snd_wnd() as usize || self.kcp.waiting_conv()) {
-            trace!(
+            log::trace!(
                 "[SEND] waitsnd={} sndwnd={} excceeded or waiting conv={}",
                 self.kcp.wait_snd(),
                 self.kcp.snd_wnd(),
@@ -299,7 +284,6 @@ impl KcpSocket {
 mod test {
 
     use kcp::Error as KcpError;
-    use log::trace;
     use std::net::SocketAddr;
     use std::sync::Arc;
     use tokio::{
@@ -332,8 +316,8 @@ mod test {
         let s2 = Arc::new(s2);
 
         let config = KcpConfig::default();
-        let kcp1 = KcpSocket::new(&config, 0, s1.clone(), s2_addr, true).unwrap();
-        let kcp2 = KcpSocket::new(&config, CONV, s2.clone(), s1_addr, true).unwrap();
+        let kcp1 = KcpSocket::new(&config, 0, s1.clone(), s2_addr, true, None, None).unwrap();
+        let kcp2 = KcpSocket::new(&config, CONV, s2.clone(), s1_addr, true, None, None).unwrap();
 
         let kcp1 = Arc::new(Mutex::new(kcp1));
         let kcp2 = Arc::new(Mutex::new(kcp2));
@@ -344,7 +328,7 @@ mod test {
                 loop {
                     let mut kcp = kcp1.lock().await;
                     let next = kcp.update().expect("update");
-                    trace!("kcp1 next tick {:?}", next);
+                    log::trace!("kcp1 next tick {:?}", next);
                     time::sleep_until(Instant::from_std(next)).await;
                 }
             })
@@ -356,7 +340,7 @@ mod test {
                 loop {
                     let mut kcp = kcp2.lock().await;
                     let next = kcp.update().expect("update");
-                    trace!("kcp2 next tick {:?}", next);
+                    log::trace!("kcp2 next tick {:?}", next);
                     time::sleep_until(Instant::from_std(next)).await;
                 }
             })

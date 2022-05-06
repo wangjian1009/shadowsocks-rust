@@ -49,9 +49,19 @@ impl Connector for SkcpConnector {
 
                 let udp = Arc::new(udp);
                 let conv = rand::random();
-                let socket = KcpSocket::new(self.config.as_ref(), conv, udp, remote_addr, self.config.stream)?;
+                let header = self.config.create_header().map(|e| Arc::new(e));
+                let security = self.config.create_security().map(|e| Arc::new(e));
+                let socket = KcpSocket::new(
+                    self.config.as_ref(),
+                    conv,
+                    udp,
+                    remote_addr,
+                    self.config.stream,
+                    header.clone(),
+                    security.clone(),
+                )?;
 
-                let session = KcpSession::new_shared(socket, self.config.session_expire, None);
+                let session = KcpSession::new_shared(socket, header, security, self.config.session_expire, None);
 
                 Ok(Connection::Stream(SkcpStream::with_session(session)))
             }

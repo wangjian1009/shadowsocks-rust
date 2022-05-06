@@ -8,6 +8,13 @@ use crate::{
     ServerAddr,
 };
 
+mod common;
+
+pub use common::{
+    crypt::{Security, SecurityConfig},
+    header::{HeaderConfig, HeaderPolicy},
+};
+
 pub mod direct;
 mod dummy_packet;
 mod mon_traffic;

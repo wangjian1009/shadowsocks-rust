@@ -6,8 +6,14 @@ use crate::transport::websocket::WebSocketConnectorConfig;
 #[cfg(feature = "transport-tls")]
 use crate::transport::tls::TlsConnectorConfig;
 
+#[cfg(any(feature = "transport-mkcp", feature = "transport-skcp"))]
+use crate::transport::HeaderConfig;
+
 #[cfg(feature = "transport-mkcp")]
-use crate::transport::mkcp::{HeaderConfig, MkcpConfig};
+use crate::transport::mkcp::MkcpConfig;
+
+#[cfg(feature = "transport-skcp")]
+use crate::transport::skcp::SkcpConfig;
 
 #[test]
 fn rebuild_ss() {
@@ -85,6 +91,38 @@ fn parse_vless_mkcp() {
     mkcp_config.header_config = Some(HeaderConfig::Wechat);
     mkcp_config.seed = Some("itest123".to_owned());
     expect_config.set_connector_transport(Some(TransportConnectorConfig::Mkcp(mkcp_config)));
+
+    assert_eq!(parsed_config, expect_config);
+}
+
+#[cfg(feature = "transport-skcp")]
+#[test]
+fn parse_vless_skcp() {
+    let _ = env_logger::builder()
+        .filter_level(log::LevelFilter::Info)
+        .is_test(true)
+        .try_init();
+
+    let parsed_config =
+        "vless://c93b0258-6847-42c8-92ac-7b8ac8e390ad@104.237.56.68:7777/?type=skcp&header=wechat-video#68-us"
+            .parse::<ServerConfig>()
+            .unwrap();
+
+    let mut vless_config = VlessConfig::new();
+    vless_config
+        .add_user(0, "c93b0258-6847-42c8-92ac-7b8ac8e390ad", None)
+        .unwrap();
+
+    vless_config.decryption = Some("68-us".to_owned());
+
+    let mut expect_config = ServerConfig::new(
+        "104.237.56.68:7777".parse::<ServerAddr>().unwrap(),
+        ServerProtocol::Vless(vless_config),
+    );
+
+    let mut skcp_config = SkcpConfig::default();
+    skcp_config.header_config = Some(HeaderConfig::Wechat);
+    expect_config.set_connector_transport(Some(TransportConnectorConfig::Skcp(skcp_config)));
 
     assert_eq!(parsed_config, expect_config);
 }

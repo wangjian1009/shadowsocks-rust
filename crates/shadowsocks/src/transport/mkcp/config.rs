@@ -1,10 +1,4 @@
-use super::{
-    crypt::SimpleAuthenticator,
-    cryptreal::AEADAESGCMBasedOnSeed,
-    header::{dtls::DTLS, srtp::SRTP, utp::UTP, wechat::VideoChat, wireguard::Wireguard, HeaderConfig},
-    HeaderPolicy,
-    Security,
-};
+use super::super::{HeaderConfig, HeaderPolicy, Security, SecurityConfig};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MkcpConfig {
@@ -32,13 +26,7 @@ impl MkcpConfig {
     pub fn create_header(&self) -> Option<HeaderPolicy> {
         match self.header_config.as_ref() {
             None => None,
-            Some(head_config) => match head_config {
-                HeaderConfig::Srtp => Some(Box::new(SRTP::new()) as HeaderPolicy),
-                HeaderConfig::Utp => Some(Box::new(UTP::new()) as HeaderPolicy),
-                HeaderConfig::Dtls => Some(Box::new(DTLS::new()) as HeaderPolicy),
-                HeaderConfig::Wechat => Some(Box::new(VideoChat::new()) as HeaderPolicy),
-                HeaderConfig::Wireguard => Some(Box::new(Wireguard::new()) as HeaderPolicy),
-            },
+            Some(head_config) => Some(head_config.create_policy()),
         }
     }
 
@@ -68,9 +56,10 @@ impl MkcpConfig {
 
     pub fn create_security(&self) -> Security {
         match self.seed.as_ref() {
-            Some(seed) => Box::new(AEADAESGCMBasedOnSeed::new(seed.as_str())) as Security,
-            None => Box::new(SimpleAuthenticator::new()) as Security,
+            Some(seed) => SecurityConfig::AESGCM { seed: seed.clone() },
+            None => SecurityConfig::Simple,
         }
+        .create_security()
     }
 }
 

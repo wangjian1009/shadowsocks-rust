@@ -50,8 +50,14 @@ cfg_if! {
 }
 
 cfg_if! {
+   if #[cfg(any(feature = "transport-mkcp", feature = "transport-skcp"))] {
+       use crate::transport::HeaderConfig;
+   }
+}
+
+cfg_if! {
    if #[cfg(feature = "transport-mkcp")] {
-       use crate::transport::mkcp::{HeaderConfig, MkcpConfig};
+       use crate::transport::mkcp::MkcpConfig;
    }
 }
 

@@ -9,11 +9,9 @@ use rand::RngCore;
 use crate::{relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE, ServerAddr};
 
 use super::{
-    super::{PacketRead, PacketWrite},
+    super::{HeaderPolicy, PacketRead, PacketWrite, Security},
     new_error,
     segment::Segment,
-    HeaderPolicy,
-    Security,
 };
 
 pub struct MkcpPacketReader<PR: PacketRead> {
@@ -55,7 +53,8 @@ impl<PR: PacketRead> MkcpPacketReader<PR> {
             }
 
             let (nonce, data) = b.split_at_mut(nonce_size);
-            let plen = security.open(nonce, data, None)?;
+            let encrypt_data = data.to_owned();
+            let plen = security.open(nonce, &encrypt_data, data, None)?;
             b = &mut data[..plen];
         }
 
@@ -150,9 +149,9 @@ impl<PW: PacketWrite> MkcpPacketWriter<PW> {
                 output_len += nonce_size;
             }
 
-            let mut cursor = &mut b[..seg_size];
-            seg.write_to_buf(&mut cursor);
-            let cipher_len = security.seal(&nonce, &mut b[..], seg_size, None)?;
+            let mut plain_in = Vec::with_capacity(seg.byte_size());
+            seg.write_to_buf(&mut plain_in);
+            let cipher_len = security.seal(&nonce, &plain_in[..], &mut b[..seg_size], None)?;
             output_len += cipher_len;
         } else {
             seg.write_to(&mut Cursor::new(b)).await?;
@@ -169,9 +168,7 @@ impl<PW: PacketWrite> MkcpPacketWriter<PW> {
 mod test {
     use super::{
         super::{
-            crypt::SimpleAuthenticator,
-            cryptreal::AEADAESGCMBasedOnSeed,
-            header::wechat::VideoChat,
+            super::common::{crypt::SimpleAuthenticator, cryptreal::AEADAESGCMBasedOnSeed, header::wechat::VideoChat},
             segment::{AckSegment, DataSegment, SegmentData},
             test::mock::{MockPacketRead, MockPacketWrite},
         },

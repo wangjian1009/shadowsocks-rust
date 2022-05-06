@@ -17,7 +17,7 @@ use crate::{
     ServerAddr,
 };
 
-use super::{config::KcpConfig, session::KcpSessionManager, stream::KcpStream};
+use super::{config::KcpConfig, io::InputDecorate, session::KcpSessionManager, stream::KcpStream};
 
 use super::super::{Acceptor, Connection, DummyPacket};
 
@@ -71,7 +71,14 @@ impl KcpListener {
         let udp = Arc::new(udp);
         let server_udp = udp.clone();
 
+        let header = config.create_header().map(|e| Arc::new(e));
+        let security = config.create_security().map(|e| Arc::new(e));
+
+        let overhead = header.as_ref().map_or(0, |e| e.size()) + security.as_ref().map_or(0, |e| e.overhead());
+        if overhead > config.mtu {}
+
         let (accept_tx, accept_rx) = mpsc::channel(1024 /* backlogs */);
+        let mut input_decorate = InputDecorate::new(config.mtu - overhead, header.clone(), security.clone());
         let task_watcher = tokio::spawn(async move {
             let (close_tx, mut close_rx) = mpsc::channel(64);
 
@@ -93,6 +100,13 @@ impl KcpListener {
                             }
                             Ok((n, peer_addr)) => {
                                 let packet = &mut packet_buffer[..n];
+                                let packet = match input_decorate.decode(packet) {
+                                    Ok(buf) => buf,
+                                    Err(err) =>  {
+                                        log::error!("received peer: {}, decorate error {}, input {:?}", peer_addr, err, ByteStr::new(packet));
+                                        continue;
+                                    }
+                                };
 
                                 log::trace!("received peer: {}, {:?}", peer_addr, ByteStr::new(packet));
 
@@ -107,7 +121,7 @@ impl KcpListener {
 
                                 let sn = kcp::get_sn(packet);
 
-                                let session = match sessions.get_or_create(&config, conv, sn, &udp, peer_addr, &close_tx).await {
+                                let session = match sessions.get_or_create(&config, conv, sn, &udp, peer_addr, &close_tx, &header, &security).await {
                                     Ok((s, created)) => {
                                         if created {
                                             // Created a new session, constructed a new accepted client
@@ -160,17 +174,57 @@ impl KcpListener {
 
 #[cfg(test)]
 mod test {
+    use crate::transport::{HeaderConfig, SecurityConfig};
+
     use super::super::stream::KcpStream;
     use super::*;
     use futures::future;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
-    async fn multi_echo() {
+    async fn multi_echo_origin() {
         let _ = env_logger::try_init();
 
         let config = KcpConfig::default();
+        multi_echo_with_cfg(config).await
+    }
 
+    #[tokio::test]
+    async fn multi_echo_header() {
+        let _ = env_logger::try_init();
+
+        let mut config = KcpConfig::default();
+        config.header_config = Some(HeaderConfig::Wechat);
+
+        multi_echo_with_cfg(config).await
+    }
+
+    #[tokio::test]
+    async fn multi_echo_security() {
+        let _ = env_logger::try_init();
+
+        let mut config = KcpConfig::default();
+        config.security_config = Some(SecurityConfig::AESGCM {
+            seed: "1234".to_owned(),
+        });
+
+        multi_echo_with_cfg(config).await
+    }
+
+    #[tokio::test]
+    async fn multi_echo_header_security() {
+        let _ = env_logger::try_init();
+
+        let mut config = KcpConfig::default();
+        config.header_config = Some(HeaderConfig::Wechat);
+        config.security_config = Some(SecurityConfig::AESGCM {
+            seed: "1234".to_owned(),
+        });
+
+        multi_echo_with_cfg(config).await
+    }
+
+    async fn multi_echo_with_cfg(config: KcpConfig) {
         let addr = "127.0.0.1:0".parse::<SocketAddr>().unwrap();
         let mut listener = KcpListener::bind(config.clone(), &addr).await.unwrap();
         let server_addr = listener.local_addr().unwrap();
@@ -197,6 +251,7 @@ mod test {
         let mut vfut = Vec::new();
 
         for _ in 0..100 {
+            let config = config.clone();
             vfut.push(async move {
                 let mut stream = KcpStream::connect(&config, &server_addr).await.unwrap();
 
