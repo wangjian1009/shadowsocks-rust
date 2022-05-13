@@ -259,7 +259,7 @@ async fn serve_udp(
                     log::error!("test server to {}: read error {}", target_addr, err);
                 },
                 Ok(()) => {
-                    log::error!("test server to {}: read success", target_addr);
+                    log::error!("test server to {}: read shutdown", target_addr);
                 }
             }
         }
@@ -269,7 +269,7 @@ async fn serve_udp(
                     log::error!("test server write error {}", err);
                 },
                 Ok(()) => {
-                    log::error!("test server write success");
+                    log::error!("test server write shutdown");
                 }
             }
         }

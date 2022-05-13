@@ -47,7 +47,7 @@ async fn test_one_connection(
 ) -> io::Result<()> {
     let (mut r, mut w) = connect_packet(cfg, port, target_addr.clone()).await?;
 
-    let mut client_send = vec![0u8; TOTAL_SIZE]; // 1048576
+    let mut client_send = vec![0u8; TOTAL_SIZE];
     rand::thread_rng().fill_bytes(&mut client_send);
 
     let mut client_expected = client_send.clone();
@@ -78,6 +78,7 @@ async fn test_one_connection(
     let mut received_len = 0;
     let mut recv = &mut client_received[..];
     let mut recv_expect = &mut client_expected[..];
+
     while recv.len() > 0 {
         let (sz, addr) = r.read_from(recv).await.unwrap_or_else(|err| {
             panic!(
@@ -89,6 +90,8 @@ async fn test_one_connection(
         });
         received_len += sz;
 
+        assert!(sz <= recv.len());
+        assert!(sz <= recv_expect.len(), "接收到的数据超过应该收到的最大长度");
         assert_eq!(&recv[..sz], &recv_expect[..sz]);
         assert_eq!(addr, target_addr);
 

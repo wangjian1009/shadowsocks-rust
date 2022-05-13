@@ -100,6 +100,6 @@ impl PacketWrite for MutPacketWriter {
 #[async_trait]
 impl PacketMutWrite for MutPacketWriter {
     async fn write_to_mut(&mut self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
-        self.write_to_mut(buf, addr).await
+        self.write_to(buf, addr).await
     }
 }
