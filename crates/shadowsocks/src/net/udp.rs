@@ -5,8 +5,32 @@ use std::{
     net::SocketAddr,
     ops::{Deref, DerefMut},
 };
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+use std::{
+    io::{ErrorKind, IoSlice, IoSliceMut},
+    task::{Context as TaskContext, Poll},
+};
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+use futures::{future, ready};
 use pin_project::pin_project;
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+use tokio::io::Interest;
 
 use crate::{context::Context, relay::socks5::Address, ServerAddr};
 
@@ -14,6 +38,32 @@ use super::{
     sys::{create_inbound_udp_socket, create_outbound_udp_socket},
     AcceptOpts, AddrFamily, ConnectOpts,
 };
+
+/// Message struct for `batch_send`
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+pub struct BatchSendMessage<'a> {
+    pub addr: Option<SocketAddr>,
+    pub data: &'a [IoSlice<'a>],
+    pub data_len: usize,
+}
+
+/// Message struct for `batch_recv`
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+pub struct BatchRecvMessage<'a> {
+    pub addr: SocketAddr,
+    pub data: &'a mut [IoSliceMut<'a>],
+    pub data_len: usize,
+}
 
 /// Wrappers for outbound `UdpSocket`
 #[pin_project]
@@ -127,6 +177,78 @@ impl UdpSocket {
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.0.local_addr()
+    }
+
+    /// Batch send packets
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "freebsd"
+    ))]
+    pub fn poll_batch_send(
+        &self,
+        cx: &mut TaskContext<'_>,
+        msgs: &mut [BatchSendMessage<'_>],
+    ) -> Poll<io::Result<usize>> {
+        use super::sys::batch_sendmsg;
+
+        loop {
+            ready!(self.0.poll_send_ready(cx))?;
+
+            match self.0.try_io(Interest::WRITABLE, || batch_sendmsg(&self.0, msgs)) {
+                Ok(n) => return Ok(n).into(),
+                Err(ref err) if err.kind() == ErrorKind::WouldBlock => {}
+                Err(err) => return Err(err).into(),
+            }
+        }
+    }
+
+    /// Batch send packets
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "freebsd"
+    ))]
+    pub async fn batch_send(&self, msgs: &mut [BatchSendMessage<'_>]) -> io::Result<usize> {
+        future::poll_fn(|cx| self.poll_batch_send(cx, msgs)).await
+    }
+
+    /// Batch recv packets
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "freebsd"
+    ))]
+    pub fn poll_batch_recv(
+        &self,
+        cx: &mut TaskContext<'_>,
+        msgs: &mut [BatchRecvMessage<'_>],
+    ) -> Poll<io::Result<usize>> {
+        use super::sys::batch_recvmsg;
+
+        loop {
+            ready!(self.0.poll_recv_ready(cx))?;
+
+            match self.0.try_io(Interest::READABLE, || batch_recvmsg(&self.0, msgs)) {
+                Ok(n) => return Ok(n).into(),
+                Err(ref err) if err.kind() == ErrorKind::WouldBlock => {}
+                Err(err) => return Err(err).into(),
+            }
+        }
+    }
+
+    /// Batch recv packets
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "freebsd"
+    ))]
+    pub async fn batch_recv(&self, msgs: &mut [BatchRecvMessage<'_>]) -> io::Result<usize> {
+        future::poll_fn(|cx| self.poll_batch_recv(cx, msgs)).await
     }
 }
 

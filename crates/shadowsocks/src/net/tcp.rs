@@ -25,8 +25,7 @@ use crate::{context::Context, relay::socks5::Address, ServerAddr};
 use super::{
     is_dual_stack_addr,
     sys::{set_tcp_fastopen, socket_bind_dual_stack, TcpStream as SysTcpStream},
-    AcceptOpts,
-    ConnectOpts,
+    AcceptOpts, ConnectOpts,
 };
 
 /// TcpStream for outbound connections
@@ -100,6 +99,10 @@ impl TcpStream {
     /// Sets the value of the `TCP_NODELAY` option on this socket.
     pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
         self.0.set_nodelay(nodelay)
+    }
+
+    pub fn inner(&self) -> &SysTcpStream {
+        &self.0
     }
 }
 

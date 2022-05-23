@@ -18,7 +18,7 @@ use shadowsocks_service::{
     local::loadbalancing::PingBalancer,
     shadowsocks::{
         config::{Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
-        crypto::v1::{available_ciphers, CipherKind},
+        crypto::{available_ciphers, CipherKind},
         plugin::PluginConfig,
     },
 };
@@ -477,6 +477,8 @@ pub fn main(matches: &ArgMatches) {
             }
         }
 
+        log::trace!("{:?}", service_config);
+
         let mut config = match config_path_opt {
             Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Local) {
                 Ok(cfg) => cfg,
@@ -510,16 +512,16 @@ pub fn main(matches: &ArgMatches) {
 
             #[cfg(feature = "trojan")]
             if protocol.is_none() && matches.is_present("PROTOCOL_TROJAN") {
-                let password = match matches.value_of("PASSWORD") {
-                    Some(pwd) => read_variable_field_value(pwd).into(),
-                    None => {
+                let password = match matches.value_of_t::<String>("PASSWORD") {
+                    Ok(pwd) => read_variable_field_value(pwd.as_str()).into(),
+                    Err(err) => {
                         // NOTE: svr_addr should have been checked by crate::validator
                         match crate::password::read_server_password(svr_addr) {
                             Ok(pwd) => pwd,
-                            Err(..) => {
-                                eprintln!("missing `password`");
-                                process::exit(crate::EXIT_CODE_LOAD_CONFIG_FAILURE);
-                            }
+                            Err(..) => match crate::password::read_server_password(svr_addr) {
+                                Ok(pwd) => pwd,
+                                Err(..) => err.exit(),
+                            },
                         }
                     }
                 };
@@ -528,27 +530,31 @@ pub fn main(matches: &ArgMatches) {
             }
 
             if protocol.is_none() {
-                let password = match matches.value_of("PASSWORD") {
-                    Some(pwd) => read_variable_field_value(&pwd).into(),
-                    None => {
+                let method = matches.value_of_t_or_exit::<CipherKind>("ENCRYPT_METHOD");
+
+                let password = match matches.value_of_t::<String>("PASSWORD") {
+                    Ok(pwd) => read_variable_field_value(pwd.as_str()).into(),
+                    Err(err) => {
                         // NOTE: svr_addr should have been checked by crate::validator
                         match crate::password::read_server_password(svr_addr) {
                             Ok(pwd) => pwd,
                             Err(..) => {
-                                eprintln!("missing `password`");
-                                process::exit(crate::EXIT_CODE_LOAD_CONFIG_FAILURE);
+                                // NOTE: svr_addr should have been checked by crate::validator
+                                if method.is_none() {
+                                    // If method doesn't need a key (none, plain), then we can leave it empty
+                                    String::new()
+                                } else {
+                                    match crate::password::read_server_password(svr_addr) {
+                                        Ok(pwd) => pwd,
+                                        Err(..) => err.exit(),
+                                    }
+                                }
                             }
                         }
                     }
                 };
 
-                protocol = Some(ServerProtocol::SS(ShadowsocksConfig::new(
-                    password,
-                    match matches.value_of_t::<CipherKind>("ENCRYPT_METHOD") {
-                        Ok(kind) => kind,
-                        Err(err) => err.exit(),
-                    },
-                )));
+                protocol = Some(ServerProtocol::SS(ShadowsocksConfig::new(password, method)));
             }
 
             let mut protocol = protocol.unwrap();
@@ -825,7 +831,9 @@ pub fn main(matches: &ArgMatches) {
         #[cfg(all(unix, not(target_os = "android")))]
         match matches.value_of_t::<u64>("NOFILE") {
             Ok(nofile) => config.nofile = Some(nofile),
-            Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {}
+            Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {
+                crate::sys::adjust_nofile();
+            }
             Err(err) => err.exit(),
         }
 
@@ -948,7 +956,7 @@ pub fn main(matches: &ArgMatches) {
         }
 
         let abort_signal = monitor::create_signal_monitor();
-        let server = instance.run();
+        let server = instance.wait_until_exit();
 
         tokio::pin!(abort_signal);
         tokio::pin!(server);

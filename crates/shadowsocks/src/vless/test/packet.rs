@@ -3,8 +3,6 @@ use super::*;
 use futures::{future, FutureExt};
 use rand::RngCore;
 
-use crate::transport::{PacketMutWrite, PacketRead};
-
 const BLOCK_SIZE: usize = 1024;
 const TOTAL_SIZE: usize = 1024 * 128;
 
@@ -55,15 +53,13 @@ async fn test_one_connection(
 
     modifiler.update(&mut client_expected);
 
-    let target_addr: ServerAddr = target_addr.into();
     {
-        let target_addr = target_addr.clone();
         tokio::spawn(async move {
             let mut to_send = &mut client_send[..];
             while to_send.len() > 0 {
                 let send_sz = std::cmp::min(BLOCK_SIZE, to_send.len());
 
-                w.write_to_mut(&to_send[..send_sz], &target_addr)
+                w.write_to_mut(&to_send[..send_sz])
                     .await
                     .unwrap_or_else(|err| panic!("客户端发送数据失败 {}", err));
 
@@ -80,7 +76,7 @@ async fn test_one_connection(
     let mut recv_expect = &mut client_expected[..];
 
     while recv.len() > 0 {
-        let (sz, addr) = r.read_from(recv).await.unwrap_or_else(|err| {
+        let sz = r.read_from(recv).await.unwrap_or_else(|err| {
             panic!(
                 "客户端接受数据失败 {}, received={}, left={}",
                 err,
@@ -93,7 +89,6 @@ async fn test_one_connection(
         assert!(sz <= recv.len());
         assert!(sz <= recv_expect.len(), "接收到的数据超过应该收到的最大长度");
         assert_eq!(&recv[..sz], &recv_expect[..sz]);
-        assert_eq!(addr, target_addr);
 
         recv = &mut recv[sz..];
         recv_expect = &mut recv_expect[sz..];

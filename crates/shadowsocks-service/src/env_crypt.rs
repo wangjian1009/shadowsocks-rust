@@ -12,7 +12,7 @@ type Aes256Cbc = Cbc<Aes256, Pkcs7>;
 // }
 
 pub fn decrypt(enc_password: &str) -> Result<String, String> {
-    let key = getkey();
+    let key = getkey()?;
     let iv: [u8; 16] = [
         0xae, 0x80, 0xed, 0xcb, 0x37, 0xc2, 0x70, 0x33, 0x21, 0xb3, 0x31, 0x07, 0xcf, 0x35, 0x88, 0xc3,
     ];
@@ -23,7 +23,7 @@ pub fn decrypt(enc_password: &str) -> Result<String, String> {
             return Err(String::from(format!("{:?}", code)));
         }
     };
-    let decrypt_password = aes256_cbc_decrypt(enc_password.as_ref(), &key, &iv);
+    let decrypt_password = aes256_cbc_decrypt(enc_password.as_ref(), &key, &iv)?;
 
     return match String::from_utf8(decrypt_password) {
         Ok(result) => Ok(result),
@@ -31,7 +31,7 @@ pub fn decrypt(enc_password: &str) -> Result<String, String> {
     };
 }
 
-fn getkey() -> Vec<u8> {
+fn getkey() -> Result<Vec<u8>, String> {
     let iv: [u8; 16] = [1; 16];
     let key: [u8; 32] = [
         0x6E, 0x41, 0x79, 0x76, 0x26, 0x2F, 0x5B, 0x31, 0x26, 0x5D, 0x44, 0x4E, 0x73, 0x48, 0x63, 0x44, 0x30, 0x33,
@@ -60,15 +60,21 @@ fn getkey() -> Vec<u8> {
     aes256_cbc_decrypt(&b, &key, &iv)
 }
 
-fn aes256_cbc_decrypt(encrypted_data: &[u8], key: &[u8], iv: &[u8; 16]) -> Vec<u8> {
-    let cipher = Aes256Cbc::new_from_slices(&key, iv).unwrap();
+fn aes256_cbc_decrypt(encrypted_data: &[u8], key: &[u8], iv: &[u8; 16]) -> Result<Vec<u8>, String> {
+    let cipher =
+        Aes256Cbc::new_from_slices(&key, iv).map_err(|e| format!("aes256_cbc_decrypt: cipher create iv fail {}", e))?;
 
-    let plaintext = cipher.decrypt_vec(encrypted_data).unwrap();
-    plaintext
+    let plaintext = cipher
+        .decrypt_vec(encrypted_data)
+        .map_err(|e| format!("aes256_cbc_decrypt: decrypt fail {}", e))?;
+
+    Ok(plaintext)
 }
 
 #[cfg(test)]
 mod tests {
+    use tokio_test::assert_ok;
+
     use super::*;
 
     #[test]
@@ -103,7 +109,7 @@ mod tests {
         let encrypt_password = aes256_cbc_encrypt(origin_key.as_bytes(), &key, &iv);
 
         assert_eq!(
-            aes256_cbc_decrypt(&encrypt_password, &key, &iv),
+            assert_ok!(aes256_cbc_decrypt(&encrypt_password, &key, &iv)),
             "3,B]6e9Lnm2X(92)/Y_Mx#hjx-F-MvxD".as_bytes()
         );
     }
@@ -111,13 +117,13 @@ mod tests {
     #[test]
     fn getkey_work() {
         assert_eq!(
-            String::from_utf8(getkey()).unwrap(),
+            assert_ok!(String::from_utf8(assert_ok!(getkey()))),
             String::from("3,B]6e9Lnm2X(92)/Y_Mx#hjx-F-MvxD")
         );
     }
 
     fn encrypt_password(origin_password: &str) -> String {
-        let key = getkey();
+        let key = assert_ok!(getkey());
         // let iv = md5(pkg);
         let iv: [u8; 16] = [
             0xae, 0x80, 0xed, 0xcb, 0x37, 0xc2, 0x70, 0x33, 0x21, 0xb3, 0x31, 0x07, 0xcf, 0x35, 0x88, 0xc3,

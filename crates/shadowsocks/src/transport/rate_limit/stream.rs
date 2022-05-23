@@ -9,9 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::net::Destination;
-
-use super::super::StreamConnection;
+use super::super::{DeviceOrGuard, StreamConnection};
 use futures::Future;
 use futures_timer::Delay;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -19,9 +17,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use governor::{
     clock::MonotonicClock,
     state::{InMemoryState, NotKeyed},
-    Jitter,
-    NegativeMultiDecision,
-    Quota,
+    Jitter, NegativeMultiDecision, Quota,
 };
 use nonzero_ext::*;
 
@@ -87,11 +83,6 @@ impl<S> RateLimitedStream<S> {
 
 impl<S: StreamConnection> StreamConnection for RateLimitedStream<S> {
     #[inline]
-    fn local_addr(&self) -> io::Result<Destination> {
-        self.stream.local_addr()
-    }
-
-    #[inline]
     fn check_connected(&self) -> bool {
         self.stream.check_connected()
     }
@@ -112,6 +103,10 @@ impl<S: StreamConnection> StreamConnection for RateLimitedStream<S> {
                 self.limiter_ctx = None;
             }
         }
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        self.stream.physical_device()
     }
 }
 

@@ -126,7 +126,7 @@ impl DnsClientCache {
                 }
                 DnsClientKey::TcpRemote(tcp_l) => {
                     dns_res = DnsClient::connect_tcp_remote(
-                        context.unwrap().context(),
+                        &context.unwrap().context(),
                         svr_cfg.unwrap(),
                         tcp_l,
                         context.unwrap().connect_opts_ref(),

@@ -18,7 +18,7 @@ use crate::{
     config::ServerConfig,
     net::{ConnectOpts, Destination},
     relay::Address,
-    transport::{Connection, Connector, StreamConnection},
+    transport::{Connection, Connector, DeviceOrGuard, StreamConnection},
     vless::{new_error, Config},
 };
 
@@ -48,10 +48,6 @@ pub struct ClientStream<S> {
 }
 
 impl<S: StreamConnection> StreamConnection for ClientStream<S> {
-    fn local_addr(&self) -> io::Result<Destination> {
-        self.stream.local_addr()
-    }
-
     fn check_connected(&self) -> bool {
         self.stream.check_connected()
     }
@@ -59,6 +55,10 @@ impl<S: StreamConnection> StreamConnection for ClientStream<S> {
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, limiter: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
         self.stream.set_rate_limit(limiter);
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        self.stream.physical_device()
     }
 }
 
@@ -136,6 +136,10 @@ impl<S: StreamConnection> ClientStream<S> {
                 Ok(&cfg.clients[(idx % cfg.clients.len() as u16) as usize])
             }
         }
+    }
+
+    pub fn get_ref(&self) -> &S {
+        &self.stream
     }
 }
 

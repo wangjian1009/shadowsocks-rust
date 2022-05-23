@@ -2,7 +2,7 @@
 
 use std::{net::IpAddr, path::PathBuf, process, time::Duration};
 
-use clap::{Command, Arg, ArgGroup, ArgMatches, ErrorKind as ClapErrorKind};
+use clap::{Arg, ArgGroup, ArgMatches, Command, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
 use log::{info, trace};
 use tokio::{self, runtime::Builder};
@@ -15,7 +15,7 @@ use shadowsocks_service::{
     run_manager,
     shadowsocks::{
         config::{ManagerAddr, Mode},
-        crypto::v1::{available_ciphers, CipherKind},
+        crypto::{available_ciphers, CipherKind},
         plugin::PluginConfig,
     },
 };
@@ -24,8 +24,7 @@ use shadowsocks_service::{
 use crate::logging;
 use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
-    monitor,
-    validator,
+    monitor, validator,
 };
 
 /// Defines command line options
@@ -364,7 +363,9 @@ pub fn main(matches: &ArgMatches) {
         #[cfg(all(unix, not(target_os = "android")))]
         match matches.value_of_t::<u64>("NOFILE") {
             Ok(nofile) => config.nofile = Some(nofile),
-            Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {}
+            Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {
+                crate::sys::adjust_nofile();
+            }
             Err(err) => err.exit(),
         }
 
@@ -449,18 +450,23 @@ pub fn main(matches: &ArgMatches) {
 
         info!("shadowsocks manager {} build {}", crate::VERSION, crate::BUILD_TIME);
 
+        let mut worker_count = 1;
         let mut builder = match service_config.runtime.mode {
             RuntimeMode::SingleThread => Builder::new_current_thread(),
             #[cfg(feature = "multi-threaded")]
             RuntimeMode::MultiThread => {
                 let mut builder = Builder::new_multi_thread();
                 if let Some(worker_threads) = service_config.runtime.worker_count {
+                    worker_count = worker_threads;
                     builder.worker_threads(worker_threads);
+                } else {
+                    worker_count = num_cpus::get();
                 }
 
                 builder
             }
         };
+        config.worker_count = worker_count;
 
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
 

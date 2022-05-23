@@ -15,9 +15,8 @@ use webpki::DNSNameRef;
 use crate::net::{ConnectOpts, Destination};
 
 use super::{
-    super::{Connection, Connector, DummyPacket, StreamConnection},
-    get_cipher_suite,
-    new_error,
+    super::{Connection, Connector, DeviceOrGuard, DummyPacket, StreamConnection},
+    get_cipher_suite, new_error,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -34,10 +33,6 @@ pub struct TlsConnector<C: Connector> {
 }
 
 impl<S: StreamConnection> StreamConnection for TokioTlsStream<S> {
-    fn local_addr(&self) -> io::Result<Destination> {
-        self.get_ref().0.local_addr()
-    }
-
     fn check_connected(&self) -> bool {
         self.get_ref().0.check_connected()
     }
@@ -45,6 +40,10 @@ impl<S: StreamConnection> StreamConnection for TokioTlsStream<S> {
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, rate_limit: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
         self.get_mut().0.set_rate_limit(rate_limit);
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        self.get_ref().0.physical_device()
     }
 }
 

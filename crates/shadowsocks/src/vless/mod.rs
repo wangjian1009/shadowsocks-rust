@@ -17,8 +17,8 @@ pub use client_stream::ClientStream;
 
 mod validator;
 
-mod client_packet;
-pub use client_packet::{new_vless_packet_connection, VlessUdpReader, VlessUdpWriter};
+mod packet;
+pub use packet::{new_vless_packet_connection, VlessUdpReader, VlessUdpWriter};
 
 pub mod mux;
 

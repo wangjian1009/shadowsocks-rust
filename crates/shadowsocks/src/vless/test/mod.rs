@@ -13,7 +13,7 @@ use crate::{
     net::{AcceptOpts, ConnectOpts},
     transport::{
         direct::{TcpAcceptor, TcpConnector},
-        Acceptor, Connection, Connector, PacketRead, PacketWrite, StreamConnection,
+        Acceptor, Connection, Connector, StreamConnection,
     },
 };
 
@@ -21,36 +21,36 @@ use crate::test::transfer;
 
 type TcpStream = <TcpConnector as Connector>::TS;
 
-mod mux_stream;
+// mod mux_stream;
 mod packet;
 mod stream;
 
-async fn connect_mux_stream(
-    worker_picker: &mux::WorkerPicker,
-    cfg: &Config,
-    proxy_port: u16,
-    target_addr: Address,
-) -> io::Result<mux::MuxStream> {
-    let svr_cfg = ServerConfig::new(
-        format!("127.0.0.1:{}", proxy_port).parse::<ServerAddr>().unwrap(),
-        ServerProtocol::Vless(cfg.clone()),
-    );
+// async fn connect_mux_stream(
+//     worker_picker: &mux::WorkerPicker,
+//     cfg: &Config,
+//     proxy_port: u16,
+//     target_addr: Address,
+// ) -> io::Result<mux::MuxStream> {
+//     let svr_cfg = ServerConfig::new(
+//         format!("127.0.0.1:{}", proxy_port).parse::<ServerAddr>().unwrap(),
+//         ServerProtocol::Vless(cfg.clone()),
+//     );
 
-    let connector = TcpConnector::new(None);
-    worker_picker
-        .connect_stream(
-            &connector,
-            &svr_cfg,
-            match svr_cfg.protocol() {
-                ServerProtocol::Vless(vless_cfg) => vless_cfg,
-                _ => unreachable!(),
-            },
-            target_addr,
-            &ConnectOpts::default(),
-            |f| f,
-        )
-        .await
-}
+//     let connector = TcpConnector::new(None);
+//     worker_picker
+//         .connect_stream(
+//             &connector,
+//             &svr_cfg,
+//             match svr_cfg.protocol() {
+//                 ServerProtocol::Vless(vless_cfg) => vless_cfg,
+//                 _ => unreachable!(),
+//             },
+//             target_addr,
+//             &ConnectOpts::default(),
+//             |f| f,
+//         )
+//         .await
+// }
 
 async fn connect_stream(cfg: &Config, proxy_port: u16, target_addr: Address) -> io::Result<ClientStream<TcpStream>> {
     let connector = TcpConnector::new(None);
@@ -98,7 +98,7 @@ async fn connect_packet(
     )
     .await?;
 
-    Ok(new_vless_packet_connection(stream, target_addr.into()))
+    Ok(new_vless_packet_connection(stream))
 }
 
 pub enum DataModifiler {
@@ -197,8 +197,8 @@ async fn serve_tcp(
 }
 
 async fn serve_udp(
-    mut r: Box<dyn PacketRead>,
-    mut w: Box<dyn PacketWrite>,
+    mut r: VlessUdpReader<Box<dyn StreamConnection + 'static>>,
+    mut w: VlessUdpWriter<Box<dyn StreamConnection + 'static>>,
     target_addr: Address,
     modifiler: Arc<DataModifiler>,
 ) -> io::Result<()> {
@@ -213,8 +213,7 @@ async fn serve_udp(
 
             loop {
                 match r.read_from(&mut recv_buf).await {
-                    Ok((sz, addr)) => {
-                        assert_eq!(addr, target_addr);
+                    Ok(sz) => {
                         let mut block = Vec::from(&recv_buf[..sz]);
 
                         modifiler.update(&mut block[..]);
@@ -239,7 +238,7 @@ async fn serve_udp(
         let target_addr = target_addr.clone();
         async move {
             while let Some(block) = channel_r.recv().await {
-                match w.write_to_mut(&block[..], &target_addr).await {
+                match w.write_to_mut(&block[..]).await {
                     Err(err) => {
                         log::error!("test server to {}: write error {}", target_addr, err);
                         return Err(err);

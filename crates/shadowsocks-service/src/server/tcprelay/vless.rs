@@ -1,14 +1,9 @@
-use bytes::Bytes;
 use shadowsocks::{
-    relay::{tcprelay::utils_copy::copy_bidirectional, udprelay::MAXIMUM_UDP_PAYLOAD_SIZE},
-    transport::{PacketRead, PacketWrite},
-    vless::{protocol, InboundHandler},
+    relay::tcprelay::utils_copy::copy_bidirectional,
+    vless::{protocol, InboundHandler, VlessUdpReader, VlessUdpWriter},
 };
-use tokio::sync::mpsc;
 
-use crate::net::UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE;
-
-use super::{super::udprelay::UdpAssociationContext, *};
+use super::*;
 
 impl TcpServerClient {
     pub async fn serve_vless<IS>(self, inbound: Arc<InboundHandler>, stream: MonProxyStream<IS>) -> io::Result<()>
@@ -172,46 +167,12 @@ impl TcpServerClient {
 
     async fn serve_vless_udp(
         self: Arc<Self>,
-        mut reader: Box<dyn PacketRead>,
-        writer: Box<dyn PacketWrite>,
-        _address: protocol::Address,
+        reader: VlessUdpReader<Box<dyn StreamConnection + 'static>>,
+        writer: VlessUdpWriter<Box<dyn StreamConnection + 'static>>,
+        address: protocol::Address,
     ) -> io::Result<()> {
-        let (keepalive_tx, mut keepalive_rx) = mpsc::channel(UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE);
-
-        let (_context, sender) =
-            UdpAssociationContext::create(self.context.clone(), Arc::new(writer), self.peer_addr, keepalive_tx);
-
-        let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
-        loop {
-            tokio::select! {
-                peer_addr_opt = keepalive_rx.recv() => {
-                    let _peer_addr = peer_addr_opt.expect("keep-alive channel closed unexpectly");
-                    trace!("vless udp relay {} <- keepalive", self.peer_addr);
-                }
-
-                received = reader.read_from(&mut buffer) => {
-                    let (n, addr) = received?;
-
-                    trace!("vless udp relay {} <- {} received {} bytes", self.peer_addr, addr, n);
-
-                    let data = &buffer[..n];
-
-                    let target_addr = Address::from(addr.clone());
-
-                    if let Err(..) = sender.try_send((target_addr, Bytes::copy_from_slice(data))) {
-                        let err = io::Error::new(ErrorKind::Other, "udp relay channel full");
-                        return Err(err);
-                    }
-
-                    trace!(
-                        "vless udp relay {} <- {} with {} bytes",
-                        self.peer_addr,
-                        addr,
-                        data.len()
-                    );
-                }
-            }
-        }
+        super::super::udprelay::vless::serve_vless_udp(self.context.clone(), &self.peer_addr, address, reader, writer)
+            .await
     }
 
     async fn serve_vless_err<IS>(self: Arc<Self>, mut stream: IS, err: io::Error) -> io::Result<()>

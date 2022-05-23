@@ -6,10 +6,10 @@ use tokio_rustls::{
     TlsAcceptor as TokioTlsAcceptor,
 };
 
-use crate::{net::Destination, ServerAddr};
+use crate::ServerAddr;
 
 use super::{
-    super::{Acceptor, Connection, DummyPacket, StreamConnection},
+    super::{Acceptor, Connection, DeviceOrGuard, DummyPacket, StreamConnection},
     get_cipher_suite, load_cert, load_key, new_error,
 };
 
@@ -26,10 +26,6 @@ pub struct TlsAcceptor<T: Acceptor> {
 }
 
 impl<S: StreamConnection> StreamConnection for TokioTlsStream<S> {
-    fn local_addr(&self) -> io::Result<Destination> {
-        self.get_ref().0.local_addr()
-    }
-
     fn check_connected(&self) -> bool {
         self.get_ref().0.check_connected()
     }
@@ -37,6 +33,10 @@ impl<S: StreamConnection> StreamConnection for TokioTlsStream<S> {
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, rate_limit: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
         self.get_mut().0.set_rate_limit(rate_limit);
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        self.get_ref().0.physical_device()
     }
 }
 

@@ -16,7 +16,7 @@ use crate::{
     config::{ServerConfig, TrojanConfig},
     net::{ConnectOpts, Destination},
     relay::Address,
-    transport::{Connection, Connector, StreamConnection},
+    transport::{Connection, Connector, DeviceOrGuard, StreamConnection},
 };
 
 use super::protocol::RequestHeader;
@@ -36,10 +36,6 @@ pub struct ClientStream<S> {
 }
 
 impl<S: StreamConnection> StreamConnection for ClientStream<S> {
-    fn local_addr(&self) -> io::Result<Destination> {
-        self.stream.local_addr()
-    }
-
     fn check_connected(&self) -> bool {
         self.stream.check_connected()
     }
@@ -47,6 +43,10 @@ impl<S: StreamConnection> StreamConnection for ClientStream<S> {
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, limiter: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
         self.stream.set_rate_limit(limiter);
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        self.stream.physical_device()
     }
 }
 
@@ -148,6 +148,10 @@ impl<S: StreamConnection> ClientStream<S> {
             stream,
             state: ClientStreamWriteState::Connect(RequestHeader::UdpAssociate(svr_trojan_cfg.hash().clone())),
         }
+    }
+
+    pub fn get_ref(&self) -> &S {
+        &self.stream
     }
 }
 

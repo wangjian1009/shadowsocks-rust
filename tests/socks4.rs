@@ -13,11 +13,10 @@ use tokio::{
 use shadowsocks_service::{
     config::{Config, ConfigType, LocalConfig, ProtocolType},
     local::socks::client::Socks4TcpClient,
-    run_local,
-    run_server,
+    run_local, run_server,
     shadowsocks::{
         config::{ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
-        crypto::v1::CipherKind,
+        crypto::CipherKind,
     },
 };
 

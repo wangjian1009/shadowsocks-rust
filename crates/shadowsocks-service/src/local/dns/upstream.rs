@@ -11,11 +11,9 @@ use rand::{thread_rng, Rng};
 use shadowsocks::{
     config::{ServerConfig, ServerProtocol},
     context::SharedContext,
-    create_connector_then,
     net::{ConnectOpts, FlowStat, TcpStream as ShadowTcpStream, UdpSocket as ShadowUdpSocket},
     relay::{udprelay::ProxySocket, Address},
     transport::StreamConnection,
-    ProxyClientStream,
 };
 
 #[cfg(unix)]
@@ -32,13 +30,7 @@ use trust_dns_resolver::proto::{
     op::Message,
 };
 
-#[cfg(feature = "trojan")]
-use shadowsocks::trojan;
-
-#[cfg(feature = "vless")]
-use shadowsocks::vless;
-
-use crate::net::{MonProxySocket, MonProxyStream};
+use crate::{local::net::AutoProxyClientStream, net::MonProxySocket};
 
 /// Collection of various DNS connections
 #[allow(clippy::large_enum_variant)]
@@ -55,7 +47,7 @@ pub enum DnsClient {
         stream: UnixStream,
     },
     TcpRemote {
-        stream: Box<dyn StreamConnection>,
+        stream: AutoProxyClientStream,
     },
     UdpRemote {
         socket: MonProxySocket,
@@ -85,71 +77,22 @@ impl DnsClient {
 
     /// Connect to remote DNS server through proxy in TCP
     pub async fn connect_tcp_remote(
-        context: SharedContext,
+        context: &SharedContext,
         svr_cfg: &ServerConfig,
         ns: &Address,
         connect_opts: &ConnectOpts,
         flow_stat: Arc<FlowStat>,
     ) -> io::Result<DnsClient> {
-        let stream = create_connector_then!(Some(context.clone()), svr_cfg.connector_transport(), |connector| {
-            match svr_cfg.protocol() {
-                shadowsocks::config::ServerProtocol::SS(ss_cfg) => {
-                    let stream = ProxyClientStream::connect_with_opts_map(
-                        context,
-                        &connector,
-                        svr_cfg,
-                        ss_cfg,
-                        ns.clone(),
-                        connect_opts,
-                        |s| MonProxyStream::from_stream(s, flow_stat, None),
-                    )
-                    .await?;
-
-                    io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
-                }
-                #[cfg(feature = "trojan")]
-                shadowsocks::config::ServerProtocol::Trojan(trojan_cfg) => {
-                    let stream = trojan::ClientStream::connect_stream(
-                        &connector,
-                        svr_cfg,
-                        trojan_cfg,
-                        ns.clone(),
-                        connect_opts,
-                        |s| MonProxyStream::from_stream(s, flow_stat, None),
-                    )
-                    .await?;
-
-                    io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
-                }
-                #[cfg(feature = "vless")]
-                shadowsocks::config::ServerProtocol::Vless(vless_cfg) => match vless_cfg.mux.as_ref() {
-                    None => {
-                        let stream = vless::ClientStream::connect(
-                            &connector,
-                            svr_cfg,
-                            vless_cfg,
-                            vless::protocol::RequestCommand::TCP,
-                            Some(ns.clone()),
-                            connect_opts,
-                            |s| MonProxyStream::from_stream(s, flow_stat, None),
-                        )
-                        .await?;
-
-                        io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
-                    }
-                    Some(_strategy) => {
-                        let worker_picker = vless::mux::WorkerPicker::new();
-                        let stream = worker_picker
-                            .connect_stream(&connector, svr_cfg, vless_cfg, ns.clone(), connect_opts, |s| {
-                                MonProxyStream::from_stream(s, flow_stat, None)
-                            })
-                            .await?;
-                        io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
-                    }
-                },
-            }
-        })?;
-
+        let stream = AutoProxyClientStream::connect_proxied_no_score(
+            context.clone(),
+            connect_opts,
+            svr_cfg,
+            ns,
+            Some(flow_stat),
+            #[cfg(feature = "rate-limit")]
+            None,
+        )
+        .await?;
         Ok(DnsClient::TcpRemote { stream })
     }
 
@@ -232,8 +175,8 @@ impl DnsClient {
             DnsClient::TcpLocal { ref stream } => stream.check_connected(),
             DnsClient::UdpLocal { .. } => true,
             #[cfg(unix)]
-            DnsClient::UnixStream { ref stream } => stream.check_connected(),
-            DnsClient::TcpRemote { ref stream } => stream.check_connected(),
+            DnsClient::UnixStream { ref stream } => shadowsocks::net::check_peekable(stream),
+            DnsClient::TcpRemote { ref stream } => stream.transport().check_connected(),
             DnsClient::UdpRemote { .. } => true,
         }
     }

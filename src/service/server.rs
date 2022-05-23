@@ -13,7 +13,7 @@ use shadowsocks_service::{
     run_server,
     shadowsocks::{
         config::{ManagerAddr, Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
-        crypto::v1::{available_ciphers, CipherKind},
+        crypto::{available_ciphers, CipherKind},
         plugin::PluginConfig,
     },
 };
@@ -437,16 +437,16 @@ pub fn main(matches: &ArgMatches) {
 
             #[cfg(feature = "trojan")]
             if protocol.is_none() && matches.is_present("PROTOCOL_TROJAN") {
-                let password = match matches.value_of("TROJAN_PASSWORD") {
-                    Some(pwd) => read_variable_field_value(&pwd).into(),
-                    None => {
+                let password = match matches.value_of_t::<String>("TROJAN_PASSWORD") {
+                    Ok(pwd) => read_variable_field_value(pwd.as_str()).into(),
+                    Err(err) => {
                         // NOTE: svr_addr should have been checked by crate::validator
                         match crate::password::read_server_password(svr_addr) {
                             Ok(pwd) => pwd,
-                            Err(..) => {
-                                eprintln!("missing `password`");
-                                process::exit(crate::EXIT_CODE_LOAD_CONFIG_FAILURE);
-                            }
+                            Err(..) => match crate::password::read_server_password(svr_addr) {
+                                Ok(pwd) => pwd,
+                                Err(..) => err.exit(),
+                            },
                         }
                     }
                 };
@@ -455,24 +455,25 @@ pub fn main(matches: &ArgMatches) {
             }
 
             if protocol.is_none() && matches.is_present("PROTOCOL_SS") {
+                let method = matches.value_of_t_or_exit::<CipherKind>("SS_ENCRYPT_METHOD");
+
                 let password = match matches.value_of_t::<String>("SS_PASSWORD") {
                     Ok(pwd) => read_variable_field_value(&pwd).into(),
                     Err(err) => {
                         // NOTE: svr_addr should have been checked by crate::validator
-                        match crate::password::read_server_password(svr_addr) {
-                            Ok(pwd) => pwd,
-                            Err(..) => err.exit(),
+                        if method.is_none() {
+                            // If method doesn't need a key (none, plain), then we can leave it empty
+                            String::new()
+                        } else {
+                            match crate::password::read_server_password(svr_addr) {
+                                Ok(pwd) => pwd,
+                                Err(..) => err.exit(),
+                            }
                         }
                     }
                 };
 
-                protocol = Some(ServerProtocol::SS(ShadowsocksConfig::new(
-                    password,
-                    match matches.value_of_t::<CipherKind>("SS_ENCRYPT_METHOD") {
-                        Ok(kind) => kind,
-                        Err(err) => err.exit(),
-                    },
-                )));
+                protocol = Some(ServerProtocol::SS(ShadowsocksConfig::new(password, method)));
             };
 
             if protocol.is_none() {
@@ -637,7 +638,9 @@ pub fn main(matches: &ArgMatches) {
         #[cfg(all(unix, not(target_os = "android")))]
         match matches.value_of_t::<u64>("NOFILE") {
             Ok(nofile) => config.nofile = Some(nofile),
-            Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {}
+            Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {
+                crate::sys::adjust_nofile();
+            }
             Err(err) => err.exit(),
         }
 
@@ -723,18 +726,23 @@ pub fn main(matches: &ArgMatches) {
 
         info!("shadowsocks server {} build {}", crate::VERSION, crate::BUILD_TIME);
 
+        let mut worker_count = 1;
         let mut builder = match service_config.runtime.mode {
             RuntimeMode::SingleThread => Builder::new_current_thread(),
             #[cfg(feature = "multi-threaded")]
             RuntimeMode::MultiThread => {
                 let mut builder = Builder::new_multi_thread();
                 if let Some(worker_threads) = service_config.runtime.worker_count {
+                    worker_count = worker_threads;
                     builder.worker_threads(worker_threads);
+                } else {
+                    worker_count = num_cpus::get();
                 }
 
                 builder
             }
         };
+        config.worker_count = worker_count;
 
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
 

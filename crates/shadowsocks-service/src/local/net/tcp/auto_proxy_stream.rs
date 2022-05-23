@@ -9,11 +9,16 @@ use std::{
 
 use pin_project::pin_project;
 use shadowsocks::{
-    config::ShadowsocksConfig,
-    net::{Destination, TcpStream as BaseTcpStream},
+    context::SharedContext,
+    create_connector_then,
+    net::{ConnectOpts, FlowStat},
     relay::{socks5::Address, tcprelay::proxy_stream::ProxyClientStream},
-    transport::{Connector, StreamConnection},
+    transport::{DeviceOrGuard, StreamConnection},
+    ServerConfig,
 };
+
+#[cfg(feature = "rate-limit")]
+use shadowsocks::transport::RateLimiter;
 
 #[cfg(feature = "trojan")]
 use shadowsocks::trojan;
@@ -33,153 +38,174 @@ use super::auto_proxy_io::AutoProxyIo;
 /// Unified stream for bypassed and proxied connections
 #[allow(clippy::large_enum_variant)]
 #[pin_project(project = AutoProxyClientStreamProj)]
-pub enum AutoProxyClientStream<S: StreamConnection> {
-    Proxied(#[pin] ProxyClientStream<MonProxyStream<S>>),
+pub enum AutoProxyClientStream {
+    Proxied(#[pin] ProxyClientStream<Box<dyn StreamConnection>>),
     #[cfg(feature = "trojan")]
-    ProxiedTrojan(#[pin] trojan::ClientStream<MonProxyStream<S>>),
+    ProxiedTrojan(#[pin] trojan::ClientStream<Box<dyn StreamConnection>>),
     #[cfg(feature = "vless")]
-    ProxiedVless(#[pin] vless::ClientStream<MonProxyStream<S>>),
-    Bypassed(#[pin] BaseTcpStream),
+    ProxiedVless(#[pin] vless::ClientStream<Box<dyn StreamConnection>>),
+    Bypassed(#[pin] Box<dyn StreamConnection>),
 }
 
-/// Connect directly to target `addr`
-pub async fn connect_bypassed(
-    context: Arc<ServiceContext>,
-    addr: Address,
-) -> io::Result<AutoProxyClientStream<shadowsocks::net::TcpStream>> {
-    // Connect directly.
-    let stream =
-        shadowsocks::net::TcpStream::connect_remote_with_opts(context.context_ref(), &addr, context.connect_opts_ref())
-            .await?;
-
-    Ok(AutoProxyClientStream::Bypassed(stream))
-}
-
-impl<S: StreamConnection> AutoProxyClientStream<S> {
+impl AutoProxyClientStream {
     /// Connect to target `addr` via shadowsocks' server configured by `svr_cfg`
-    pub async fn connect_proxied<C>(
-        context: Arc<ServiceContext>,
-        connector: Arc<C>,
+    pub async fn connect(
+        context: &Arc<ServiceContext>,
         server: &ServerIdent,
-        ss_cfg: &ShadowsocksConfig,
-        addr: Address,
-    ) -> io::Result<AutoProxyClientStream<S>>
-    where
-        C: Connector + Connector<TS = S>,
-    {
-        let flow_stat = context.flow_stat();
-        let stream = match ProxyClientStream::connect_with_opts_map(
+        addr: &Address,
+    ) -> io::Result<AutoProxyClientStream> {
+        if context.check_target_bypassed(&addr).await {
+            AutoProxyClientStream::connect_bypassed(context, addr).await
+        } else {
+            AutoProxyClientStream::connect_proxied(context, server, addr).await
+        }
+    }
+
+    /// Connect directly to target `addr`
+    pub async fn connect_bypassed(context: &ServiceContext, addr: &Address) -> io::Result<AutoProxyClientStream> {
+        // Connect directly.
+        let stream = shadowsocks::net::TcpStream::connect_remote_with_opts(
+            context.context_ref(),
+            addr,
+            context.connect_opts_ref(),
+        )
+        .await?;
+
+        Ok(AutoProxyClientStream::Bypassed(Box::new(stream)))
+    }
+
+    /// Connect via server to target `addr`
+    pub async fn connect_proxied(
+        context: &Arc<ServiceContext>,
+        server: &ServerIdent,
+        addr: &Address,
+    ) -> io::Result<AutoProxyClientStream> {
+        match Self::connect_proxied_no_score(
             context.context(),
-            connector.as_ref(),
+            context.connect_opts_ref(),
             server.server_config(),
-            ss_cfg,
             addr,
-            context.connect_opts_ref(),
-            |#[allow(unused_mut)] mut stream| {
-                #[cfg(feature = "rate-limit")]
-                stream.set_rate_limit(context.rate_limiter());
-                MonProxyStream::from_stream(stream, flow_stat, None)
-            },
+            Some(context.flow_stat()),
+            #[cfg(feature = "rate-limit")]
+            context.rate_limiter(),
         )
         .await
         {
-            Ok(s) => s,
+            Ok(s) => Ok(s),
             Err(err) => {
                 server.tcp_score().report_failure().await;
                 return Err(err);
             }
-        };
-        Ok(AutoProxyClientStream::Proxied(stream))
+        }
     }
 
-    /// Connect to target `addr` via troan' server configured by `svr_cfg`
-    #[cfg(feature = "trojan")]
-    pub async fn connect_proxied_trojan<C>(
-        context: Arc<ServiceContext>,
-        connector: Arc<C>,
-        server: &ServerIdent,
-        trojan_cfg: &shadowsocks::config::TrojanConfig,
-        addr: Address,
-    ) -> io::Result<AutoProxyClientStream<S>>
-    where
-        C: Connector + Connector<TS = S>,
-    {
-        let flow_stat = context.flow_stat();
-        let stream = match trojan::ClientStream::connect_stream(
-            connector.as_ref(),
-            server.server_config(),
-            trojan_cfg,
-            addr,
-            context.connect_opts_ref(),
-            |mut stream| {
-                #[cfg(feature = "rate-limit")]
-                stream.set_rate_limit(context.rate_limiter());
-                MonProxyStream::from_stream(stream, flow_stat, None)
-            },
-        )
-        .await
-        {
-            Ok(s) => s,
-            Err(err) => {
-                server.tcp_score().report_failure().await;
-                return Err(err);
+    pub async fn connect_proxied_no_score(
+        context: SharedContext,
+        connect_opts: &ConnectOpts,
+        svr_cfg: &ServerConfig,
+        addr: &Address,
+        flow_stat: Option<Arc<FlowStat>>,
+        #[cfg(feature = "rate-limit")] rate_limit: Option<Arc<RateLimiter>>,
+    ) -> io::Result<AutoProxyClientStream> {
+        create_connector_then!(Some(context.clone()), svr_cfg.connector_transport(), |connector| {
+            let connector = Arc::new(connector);
+            match svr_cfg.protocol() {
+                shadowsocks::config::ServerProtocol::SS(ss_cfg) => {
+                    let stream = ProxyClientStream::connect_with_opts_map(
+                        context,
+                        connector.as_ref(),
+                        svr_cfg,
+                        ss_cfg,
+                        addr,
+                        connect_opts,
+                        |#[allow(unused_mut)] mut stream| {
+                            #[cfg(feature = "rate-limit")]
+                            stream.set_rate_limit(rate_limit);
+
+                            if let Some(flow_stat) = flow_stat {
+                                Box::new(MonProxyStream::from_stream(stream, flow_stat, None))
+                                    as Box<dyn StreamConnection>
+                            } else {
+                                Box::new(stream) as Box<dyn StreamConnection>
+                            }
+                        },
+                    )
+                    .await?;
+                    Ok(AutoProxyClientStream::Proxied(stream))
+                }
+                #[cfg(feature = "trojan")]
+                shadowsocks::config::ServerProtocol::Trojan(trojan_cfg) => {
+                    let stream = trojan::ClientStream::connect_stream(
+                        connector.as_ref(),
+                        svr_cfg,
+                        trojan_cfg,
+                        addr.clone(),
+                        connect_opts,
+                        |mut stream| {
+                            #[cfg(feature = "rate-limit")]
+                            stream.set_rate_limit(rate_limit);
+
+                            if let Some(flow_stat) = flow_stat {
+                                Box::new(MonProxyStream::from_stream(stream, flow_stat, None))
+                                    as Box<dyn StreamConnection>
+                            } else {
+                                Box::new(stream) as Box<dyn StreamConnection>
+                            }
+                        },
+                    )
+                    .await?;
+                    Ok(AutoProxyClientStream::ProxiedTrojan(stream))
+                }
+                #[cfg(feature = "vless")]
+                shadowsocks::config::ServerProtocol::Vless(vless_cfg) => {
+                    let stream = vless::ClientStream::connect(
+                        connector.as_ref(),
+                        svr_cfg,
+                        vless_cfg,
+                        vless::protocol::RequestCommand::TCP,
+                        Some(addr.clone()),
+                        connect_opts,
+                        |mut stream| {
+                            #[cfg(feature = "rate-limit")]
+                            stream.set_rate_limit(rate_limit);
+
+                            if let Some(flow_stat) = flow_stat {
+                                Box::new(MonProxyStream::from_stream(stream, flow_stat, None))
+                                    as Box<dyn StreamConnection>
+                            } else {
+                                Box::new(stream) as Box<dyn StreamConnection>
+                            }
+                        },
+                    )
+                    .await?;
+                    Ok(AutoProxyClientStream::ProxiedVless(stream))
+                }
             }
-        };
-        Ok(AutoProxyClientStream::ProxiedTrojan(stream))
+        })
     }
 
-    /// Connect to target `addr` via troan' server configured by `svr_cfg`
-    #[cfg(feature = "vless")]
-    pub async fn connect_proxied_vless<C>(
-        context: Arc<ServiceContext>,
-        connector: Arc<C>,
-        server: &ServerIdent,
-        vless_cfg: &shadowsocks::config::VlessConfig,
-        addr: Address,
-    ) -> io::Result<AutoProxyClientStream<S>>
-    where
-        C: Connector + Connector<TS = S>,
-    {
-        let flow_stat = context.flow_stat();
-        let stream = match vless::ClientStream::connect(
-            connector.as_ref(),
-            server.server_config(),
-            vless_cfg,
-            vless::protocol::RequestCommand::TCP,
-            Some(addr),
-            context.connect_opts_ref(),
-            |mut stream| {
-                #[cfg(feature = "rate-limit")]
-                stream.set_rate_limit(context.rate_limiter());
-                MonProxyStream::from_stream(stream, flow_stat, None)
-            },
-        )
-        .await
-        {
-            Ok(s) => s,
-            Err(err) => {
-                server.tcp_score().report_failure().await;
-                return Err(err);
-            }
-        };
-        Ok(AutoProxyClientStream::ProxiedVless(stream))
-    }
-}
-
-impl<S: StreamConnection> AutoProxyIo for AutoProxyClientStream<S> {
-    fn is_proxied(&self) -> bool {
+    pub fn transport(&self) -> &Box<dyn StreamConnection> {
         match *self {
-            Self::Proxied(..) => true,
+            Self::Proxied(ref s) => s.get_ref(),
             #[cfg(feature = "trojan")]
-            Self::ProxiedTrojan(..) => true,
+            Self::ProxiedTrojan(ref s) => s.get_ref(),
             #[cfg(feature = "vless")]
-            Self::ProxiedVless(..) => true,
-            Self::Bypassed(..) => false,
+            Self::ProxiedVless(ref s) => s.get_ref(),
+            Self::Bypassed(ref s) => s,
         }
     }
 }
 
-impl<S: StreamConnection> AsyncRead for AutoProxyClientStream<S> {
+impl AutoProxyIo for AutoProxyClientStream {
+    fn is_proxied(&self) -> bool {
+        match *self {
+            Self::Bypassed(..) => false,
+            _ => true,
+        }
+    }
+}
+
+impl AsyncRead for AutoProxyClientStream {
     fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         match self.project() {
             AutoProxyClientStreamProj::Proxied(s) => s.poll_read(cx, buf),
@@ -192,7 +218,7 @@ impl<S: StreamConnection> AsyncRead for AutoProxyClientStream<S> {
     }
 }
 
-impl<S: StreamConnection> AsyncWrite for AutoProxyClientStream<S> {
+impl AsyncWrite for AutoProxyClientStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         match self.project() {
             AutoProxyClientStreamProj::Proxied(s) => s.poll_write(cx, buf),
@@ -242,24 +268,13 @@ impl<S: StreamConnection> AsyncWrite for AutoProxyClientStream<S> {
     }
 }
 
-impl<S: StreamConnection> From<ProxyClientStream<MonProxyStream<S>>> for AutoProxyClientStream<S> {
-    fn from(s: ProxyClientStream<MonProxyStream<S>>) -> Self {
-        AutoProxyClientStream::Proxied(s)
-    }
-}
+// impl From<ProxyClientStream<MonProxyStream<S>>> for AutoProxyClientStream {
+//     fn from(s: ProxyClientStream<MonProxyStream<S>>) -> Self {
+//         AutoProxyClientStream::Proxied(s)
+//     }
+// }
 
-impl<S: StreamConnection> StreamConnection for AutoProxyClientStream<S> {
-    fn local_addr(&self) -> io::Result<Destination> {
-        match *self {
-            AutoProxyClientStream::Proxied(ref s) => s.local_addr(),
-            #[cfg(feature = "trojan")]
-            AutoProxyClientStream::ProxiedTrojan(ref s) => s.local_addr(),
-            #[cfg(feature = "vless")]
-            AutoProxyClientStream::ProxiedVless(ref s) => s.local_addr(),
-            AutoProxyClientStream::Bypassed(ref s) => <BaseTcpStream as StreamConnection>::local_addr(s),
-        }
-    }
-
+impl StreamConnection for AutoProxyClientStream {
     fn check_connected(&self) -> bool {
         match *self {
             AutoProxyClientStream::Proxied(ref s) => s.check_connected(),
@@ -288,62 +303,15 @@ impl<S: StreamConnection> StreamConnection for AutoProxyClientStream<S> {
             AutoProxyClientStream::Bypassed(ref _s) => {}
         }
     }
-}
 
-#[macro_export]
-macro_rules! connect_server_then {
-    ($context:expr, $server:expr, $addr:expr, |$stream:ident| $body:block) => {{
-        create_connector_then!(
-            Some($context.context()),
-            $server.server_config().connector_transport(),
-            |connector| {
-                let connector = Arc::new(connector);
-                match $server.server_config().protocol() {
-                    shadowsocks::config::ServerProtocol::SS(cfg) => {
-                        let $stream =
-                            AutoProxyClientStream::connect_proxied($context.clone(), connector, $server, cfg, $addr)
-                                .await;
-                        $body
-                    }
-                    #[cfg(feature = "trojan")]
-                    shadowsocks::config::ServerProtocol::Trojan(cfg) => {
-                        let $stream = AutoProxyClientStream::connect_proxied_trojan(
-                            $context.clone(),
-                            connector,
-                            $server,
-                            cfg,
-                            $addr,
-                        )
-                        .await;
-                        $body
-                    }
-                    #[cfg(feature = "vless")]
-                    shadowsocks::config::ServerProtocol::Vless(cfg) => {
-                        let $stream = AutoProxyClientStream::connect_proxied_vless(
-                            $context.clone(),
-                            connector,
-                            $server,
-                            cfg,
-                            $addr,
-                        )
-                        .await;
-                        $body
-                    }
-                }
-            }
-        )
-    }};
-}
-
-#[macro_export]
-macro_rules! auto_proxy_then {
-    ($context:expr, $server:expr, $addr:expr, |$stream:ident| $body:block) => {{
-        let _dup_addr = $addr.clone();
-        if $context.check_target_bypassed(&_dup_addr).await {
-            let $stream = crate::local::net::connect_bypassed($context.clone(), _dup_addr).await;
-            $body
-        } else {
-            connect_server_then!($context, $server, _dup_addr, |$stream| { $body })
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        match *self {
+            AutoProxyClientStream::Proxied(ref s) => s.physical_device(),
+            #[cfg(feature = "trojan")]
+            AutoProxyClientStream::ProxiedTrojan(ref s) => s.physical_device(),
+            #[cfg(feature = "vless")]
+            AutoProxyClientStream::ProxiedVless(ref s) => s.physical_device(),
+            AutoProxyClientStream::Bypassed(ref s) => s.physical_device(),
         }
-    }};
+    }
 }

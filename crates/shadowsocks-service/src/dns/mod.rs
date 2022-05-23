@@ -1,9 +1,9 @@
 //! DNS resolvers
 
 use log::trace;
+use shadowsocks::{dns_resolver::DnsResolver, net::ConnectOpts};
 
 use crate::config::DnsConfig;
-use shadowsocks::{dns_resolver::DnsResolver, net::ConnectOpts};
 
 #[allow(unused_variables, dead_code)]
 pub async fn build_dns_resolver(dns: DnsConfig, ipv6_first: bool, connect_opts: &ConnectOpts) -> Option<DnsResolver> {

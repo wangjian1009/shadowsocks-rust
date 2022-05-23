@@ -6,12 +6,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::{
-    net::{Destination, FlowStat},
-    ServerAddr,
-};
+use crate::{net::FlowStat, ServerAddr};
 
-use super::{PacketMutWrite, PacketRead, PacketWrite, StreamConnection};
+use super::{DeviceOrGuard, PacketMutWrite, PacketRead, PacketWrite, StreamConnection};
 
 #[cfg(feature = "rate-limit")]
 use super::RateLimiter;
@@ -71,11 +68,6 @@ impl<T: PacketRead> PacketRead for MonTraffic<T> {
 #[async_trait]
 impl<T: StreamConnection> StreamConnection for MonTraffic<T> {
     #[inline]
-    fn local_addr(&self) -> io::Result<Destination> {
-        self.s.local_addr()
-    }
-
-    #[inline]
     fn check_connected(&self) -> bool {
         self.s.check_connected()
     }
@@ -83,6 +75,10 @@ impl<T: StreamConnection> StreamConnection for MonTraffic<T> {
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, rate_limit: Option<Arc<RateLimiter>>) {
         self.s.set_rate_limit(rate_limit)
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        self.s.physical_device()
     }
 }
 

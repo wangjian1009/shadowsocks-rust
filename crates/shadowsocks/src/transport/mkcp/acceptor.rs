@@ -15,13 +15,13 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{net::Destination, ServerAddr};
+use crate::ServerAddr;
 
 #[cfg(feature = "rate-limit")]
 use crate::transport::RateLimiter;
 
 use super::{
-    super::{Acceptor, Connection, DummyPacket, PacketRead, PacketWrite, StreamConnection},
+    super::{Acceptor, Connection, DeviceOrGuard, DummyPacket, PacketRead, PacketWrite, StreamConnection},
     MkcpConfig, StatisticStat,
 };
 
@@ -305,13 +305,6 @@ where
     PW: PacketWrite + 'static,
 {
     #[inline]
-    fn local_addr(&self) -> io::Result<Destination> {
-        Ok(Destination::Udp(ServerAddr::SocketAddr(
-            self.context.local_addr.clone(),
-        )))
-    }
-
-    #[inline]
     fn check_connected(&self) -> bool {
         true
     }
@@ -320,6 +313,10 @@ where
     #[inline]
     fn set_rate_limit(&mut self, _rate_limit: Option<Arc<RateLimiter>>) {
         log::debug!("#{}: set_rate_limit: ignore", 1)
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        unimplemented!()
     }
 }
 

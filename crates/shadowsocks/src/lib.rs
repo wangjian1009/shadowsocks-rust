@@ -21,7 +21,10 @@ extern crate mockall;
 pub use self::{
     config::{ManagerAddr, ServerAddr, ServerConfig},
     manager::{ManagerClient, ManagerListener},
-    relay::{tcprelay::proxy_stream::ProxyClientStream, udprelay::proxy_socket::ProxySocket},
+    relay::{
+        tcprelay::{ProxyClientStream, ProxyListener},
+        udprelay::proxy_socket::ProxySocket,
+    },
 };
 
 pub use shadowsocks_crypto as crypto;

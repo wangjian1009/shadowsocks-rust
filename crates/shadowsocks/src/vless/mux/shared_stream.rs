@@ -7,7 +7,7 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::{net::Destination, transport::StreamConnection};
+use crate::transport::{DeviceGuard, DeviceOrGuard, StreamConnection};
 
 #[cfg(feature = "rate-limit")]
 use crate::transport::RateLimiter;
@@ -28,11 +28,17 @@ impl SharedStream {
     }
 }
 
-impl StreamConnection for SharedStream {
-    fn local_addr(&self) -> io::Result<Destination> {
-        self.inner.lock().local_addr()
-    }
+struct DeviceLockGuard<'a> {
+    lock_guard: spin::MutexGuard<'a, Box<dyn StreamConnection + 'static>>,
+}
 
+impl<'a> DeviceGuard for DeviceLockGuard<'a> {
+    fn device(&self) -> DeviceOrGuard<'_> {
+        self.lock_guard.physical_device()
+    }
+}
+
+impl StreamConnection for SharedStream {
     fn check_connected(&self) -> bool {
         self.inner.lock().check_connected()
     }
@@ -40,6 +46,12 @@ impl StreamConnection for SharedStream {
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, rate_limit: Option<Arc<RateLimiter>>) {
         self.inner.lock().set_rate_limit(rate_limit);
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        DeviceOrGuard::Guard(Box::new(DeviceLockGuard {
+            lock_guard: self.inner.lock(),
+        }))
     }
 }
 

@@ -7,30 +7,21 @@ use std::{
 };
 
 use log::{debug, error, trace, warn};
-use shadowsocks::{config::Mode, create_connector_then};
+use shadowsocks::config::Mode;
 use tokio::{
     io::{AsyncWriteExt, BufReader},
     net::TcpStream,
 };
 
-use crate::{
-    auto_proxy_then,
-    connect_server_then,
-    local::{
-        context::ServiceContext,
-        loadbalancing::PingBalancer,
-        net::AutoProxyClientStream,
-        utils::establish_tcp_tunnel,
-    },
+use crate::local::{
+    context::ServiceContext,
+    loadbalancing::PingBalancer,
+    net::AutoProxyClientStream,
+    utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed},
 };
 
 use crate::local::socks::socks4::{
-    Address,
-    Command,
-    Error as Socks4Error,
-    HandshakeRequest,
-    HandshakeResponse,
-    ResultCode,
+    Address, Command, Error as Socks4Error, HandshakeRequest, HandshakeResponse, ResultCode,
 };
 
 pub struct Socks4TcpHandler {
@@ -99,58 +90,66 @@ impl Socks4TcpHandler {
             return Ok(());
         }
 
-        let server = self.balancer.best_tcp_server();
-        let svr_cfg = server.server_config();
-        let target_addr: shadowsocks::relay::socks5::Address = target_addr.into();
+        let target_addr = target_addr.into();
+        let mut server_opt = None;
+        let server_result = if self.balancer.is_empty() {
+            AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &target_addr).await
+        } else {
+            let server = self.balancer.best_tcp_server();
 
-        auto_proxy_then!(self.context, server.as_ref(), target_addr, |remote| {
-            let mut remote = match remote {
-                Ok(remote) => {
-                    // Tell the client that we are ready
-                    let handshake_rsp = HandshakeResponse::new(ResultCode::RequestGranted);
-                    handshake_rsp.write_to(&mut stream).await?;
+            let r = AutoProxyClientStream::connect(&self.context, &server, &target_addr).await;
+            server_opt = Some(server);
 
-                    trace!("sent header: {:?}", handshake_rsp);
+            r
+        };
 
-                    remote
-                }
-                Err(err) => {
-                    let result_code = match err.kind() {
-                        ErrorKind::ConnectionRefused => ResultCode::RequestRejectedCannotConnect,
-                        ErrorKind::ConnectionAborted => ResultCode::RequestRejectedCannotConnect,
-                        _ => ResultCode::RequestRejectedOrFailed,
-                    };
+        let mut remote = match server_result {
+            Ok(remote) => {
+                // Tell the client that we are ready
+                let handshake_rsp = HandshakeResponse::new(ResultCode::RequestGranted);
+                handshake_rsp.write_to(&mut stream).await?;
 
-                    let handshake_rsp = HandshakeResponse::new(result_code);
-                    handshake_rsp.write_to(&mut stream).await?;
+                trace!("sent header: {:?}", handshake_rsp);
 
-                    return Err(err);
-                }
-            };
-
-            // NOTE: Transfer all buffered data before unwrap, or these data will be lost
-            let buffer = stream.buffer();
-            if !buffer.is_empty() {
-                remote.write_all(buffer).await?;
+                remote
             }
+            Err(err) => {
+                let result_code = match err.kind() {
+                    ErrorKind::ConnectionRefused => ResultCode::RequestRejectedCannotConnect,
+                    ErrorKind::ConnectionAborted => ResultCode::RequestRejectedCannotConnect,
+                    _ => ResultCode::RequestRejectedOrFailed,
+                };
 
-            // UNWRAP.
-            #[allow(unused_mut)]
-            let mut stream = stream.into_inner();
+                let handshake_rsp = HandshakeResponse::new(result_code);
+                handshake_rsp.write_to(&mut stream).await?;
 
-            #[cfg(feature = "rate-limit")]
-            let mut stream =
-                shadowsocks::transport::RateLimitedStream::from_stream(stream, self.context.rate_limiter());
+                return Err(err);
+            }
+        };
 
-            establish_tcp_tunnel(
-                self.context.as_ref(),
-                svr_cfg,
-                &mut stream,
-                &mut remote,
-                peer_addr,
-                &target_addr,
-            )
-            .await
-        })
+        // NOTE: Transfer all buffered data before unwrap, or these data will be lost
+        let buffer = stream.buffer();
+        if !buffer.is_empty() {
+            remote.write_all(buffer).await?;
+        }
+
+        // UNWRAP.
+        let mut stream = stream.into_inner();
+
+        match server_opt {
+            Some(server) => {
+                let svr_cfg = server.server_config();
+                establish_tcp_tunnel(
+                    &self.context,
+                    svr_cfg,
+                    &mut stream,
+                    &mut remote,
+                    peer_addr,
+                    &target_addr,
+                )
+                .await
+            }
+            None => establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, &target_addr, &None).await,
+        }
     }
 }

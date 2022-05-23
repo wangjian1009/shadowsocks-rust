@@ -13,7 +13,7 @@ use shadowsocks_service::{
     run_local, run_server,
     shadowsocks::{
         config::{Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
-        crypto::v1::CipherKind,
+        crypto::CipherKind,
         net::util::generate_port,
         relay::socks5::Address,
     },

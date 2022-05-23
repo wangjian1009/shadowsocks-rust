@@ -7,6 +7,7 @@ use std::{
 };
 
 use bytes::{BufMut, BytesMut};
+use cfg_if::cfg_if;
 use futures::ready;
 use log::trace;
 use once_cell::sync::Lazy;
@@ -16,12 +17,18 @@ use tokio::{
     time,
 };
 
+#[cfg(feature = "aead-cipher-2022")]
+use crate::relay::get_aead_2022_padding_size;
 use crate::{
     config::{ServerConfig, ShadowsocksConfig},
     context::SharedContext,
+    crypto::CipherKind,
     net::{ConnectOpts, Destination},
-    relay::{socks5::Address, tcprelay::crypto_io::CryptoStream},
-    transport::{Connection, Connector, StreamConnection},
+    relay::{
+        socks5::Address,
+        tcprelay::crypto_io::{CryptoRead, CryptoStream, CryptoWrite, StreamType},
+    },
+    transport::{Connection, Connector, DeviceOrGuard, StreamConnection},
 };
 
 enum ProxyClientStreamWriteState {
@@ -30,22 +37,25 @@ enum ProxyClientStreamWriteState {
     Connected,
 }
 
+enum ProxyClientStreamReadState {
+    #[cfg(feature = "aead-cipher-2022")]
+    CheckRequestNonce,
+    Established,
+}
+
 /// A stream for sending / receiving data stream from remote server via shadowsocks' proxy server
 #[pin_project]
 pub struct ProxyClientStream<S> {
     #[pin]
     stream: CryptoStream<S>,
-    state: ProxyClientStreamWriteState,
+    writer_state: ProxyClientStreamWriteState,
+    reader_state: ProxyClientStreamReadState,
     context: SharedContext,
 }
 
 static DEFAULT_CONNECT_OPTS: Lazy<ConnectOpts> = Lazy::new(Default::default);
 
 impl<S: StreamConnection> StreamConnection for ProxyClientStream<S> {
-    fn local_addr(&self) -> io::Result<Destination> {
-        self.stream.get_ref().local_addr()
-    }
-
     fn check_connected(&self) -> bool {
         self.stream.get_ref().check_connected()
     }
@@ -53,6 +63,10 @@ impl<S: StreamConnection> StreamConnection for ProxyClientStream<S> {
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, limiter: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
         self.stream.get_mut().set_rate_limit(limiter);
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        self.stream.get_ref().physical_device()
     }
 }
 
@@ -63,7 +77,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         connector: &C,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
-        addr: Address,
+        addr: &Address,
     ) -> io::Result<ProxyClientStream<S>>
     where
         C: Connector + Connector<TS = S>,
@@ -77,7 +91,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         connector: &C,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
-        addr: Address,
+        addr: &Address,
         opts: &ConnectOpts,
     ) -> io::Result<ProxyClientStream<S>>
     where
@@ -92,7 +106,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         connector: &C,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
-        addr: Address,
+        addr: &Address,
         map_fn: F,
     ) -> io::Result<ProxyClientStream<S>>
     where
@@ -117,7 +131,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         connector: &C,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
-        addr: Address,
+        addr: &Address,
         opts: &ConnectOpts,
         map_fn: F,
     ) -> io::Result<ProxyClientStream<S>>
@@ -162,17 +176,39 @@ impl<S: StreamConnection> ProxyClientStream<S> {
     /// Create a `ProxyClientStream` with a connected `stream` to a shadowsocks' server
     ///
     /// NOTE: `stream` must be connected to the server with the same configuration as `svr_cfg`, otherwise strange errors would occurs
-    pub fn from_stream(
+    pub fn from_stream<A>(
         context: SharedContext,
         stream: S,
         svr_ss_cfg: &ShadowsocksConfig,
-        addr: Address,
-    ) -> ProxyClientStream<S> {
-        let stream = CryptoStream::from_stream(&context, stream, svr_ss_cfg.method(), svr_ss_cfg.key());
+        addr: A,
+    ) -> ProxyClientStream<S>
+    where
+        A: Into<Address>,
+    {
+        let addr = addr.into();
+        let stream = CryptoStream::from_stream(
+            &context,
+            stream,
+            StreamType::Client,
+            svr_ss_cfg.method(),
+            svr_ss_cfg.key(),
+        );
+
+        #[cfg(not(feature = "aead-cipher-2022"))]
+        let reader_state = ProxyClientStreamReadState::Established;
+
+        #[cfg(feature = "aead-cipher-2022")]
+        let reader_state = if svr_ss_cfg.method().is_aead_2022() {
+            // AEAD 2022 has a respond header
+            ProxyClientStreamReadState::CheckRequestNonce
+        } else {
+            ProxyClientStreamReadState::Established
+        };
 
         ProxyClientStream {
             stream,
-            state: ProxyClientStreamWriteState::Connect(addr),
+            writer_state: ProxyClientStreamWriteState::Connect(addr),
+            reader_state,
             context,
         }
     }
@@ -199,9 +235,91 @@ where
 {
     #[inline]
     fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        #[allow(unused_mut)]
         let mut this = self.project();
-        this.stream.poll_read_decrypted(cx, this.context, buf)
+
+        #[allow(clippy::never_loop)]
+        loop {
+            match this.reader_state {
+                ProxyClientStreamReadState::Established => {
+                    return this.stream.poll_read_decrypted(cx, this.context, buf);
+                }
+                #[cfg(feature = "aead-cipher-2022")]
+                ProxyClientStreamReadState::CheckRequestNonce => {
+                    ready!(this.stream.as_mut().poll_read_decrypted(cx, this.context, buf))?;
+
+                    // REQUEST_NONCE should be in the respond packet (header) of AEAD-2022.
+                    //
+                    // If received_request_nonce() is None, then:
+                    // 1. method.salt_len() == 0, no checking required.
+                    // 2. TCP stream read() returns EOF before receiving the header, no checking required.
+                    //
+                    // poll_read_decrypted will wait until the first non-zero size data chunk.
+                    let (data_chunk_count, _) = this.stream.current_data_chunk_remaining();
+                    if data_chunk_count > 0 {
+                        // data_chunk_count > 0, so the reader received at least 1 data chunk.
+
+                        let sent_nonce = this.stream.sent_nonce();
+                        let sent_nonce = if sent_nonce.is_empty() { None } else { Some(sent_nonce) };
+                        if sent_nonce != this.stream.received_request_nonce() {
+                            return Err(io::Error::new(
+                                ErrorKind::Other,
+                                "received TCP response header with unmatched salt",
+                            ))
+                            .into();
+                        }
+
+                        *(this.reader_state) = ProxyClientStreamReadState::Established;
+                    }
+
+                    return Ok(()).into();
+                }
+            }
+        }
     }
+}
+
+#[inline]
+fn make_first_packet_buffer(method: CipherKind, addr: &Address, buf: &[u8]) -> BytesMut {
+    // Target Address should be sent with the first packet together,
+    // which would prevent from being detected.
+
+    let addr_length = addr.serialized_len();
+    let mut buffer = BytesMut::new();
+
+    cfg_if! {
+        if #[cfg(feature = "aead-cipher-2022")] {
+            let padding_size = get_aead_2022_padding_size(buf);
+            let header_length = if method.is_aead_2022() {
+                addr_length + 2 + padding_size + buf.len()
+            } else {
+                addr_length + buf.len()
+            };
+        } else {
+            let _ = method;
+            let header_length = addr_length + buf.len();
+        }
+    }
+
+    buffer.reserve(header_length);
+
+    // STREAM / AEAD / AEAD2022 protocol, append the Address before payload
+    addr.write_to_buf(&mut buffer);
+
+    #[cfg(feature = "aead-cipher-2022")]
+    if method.is_aead_2022() {
+        buffer.put_u16(padding_size as u16);
+
+        if padding_size > 0 {
+            unsafe {
+                buffer.advance_mut(padding_size);
+            }
+        }
+    }
+
+    buffer.put_slice(buf);
+
+    buffer
 }
 
 impl<S> AsyncWrite for ProxyClientStream<S>
@@ -209,26 +327,19 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
-        let mut this = self.project();
+        let this = self.project();
 
         loop {
-            match this.state {
+            match this.writer_state {
                 ProxyClientStreamWriteState::Connect(ref addr) => {
-                    // Target Address should be sent with the first packet together,
-                    // which would prevent from being detected by connection features.
-
-                    let addr_length = addr.serialized_len();
-
-                    let mut buffer = BytesMut::with_capacity(addr_length + buf.len());
-                    addr.write_to_buf(&mut buffer);
-                    buffer.put_slice(buf);
+                    let buffer = make_first_packet_buffer(this.stream.method(), addr, buf);
 
                     // Save the concatenated buffer before it is written successfully.
                     // APIs require buffer to be kept alive before Poll::Ready
                     //
                     // Proactor APIs like IOCP on Windows, pointers of buffers have to be kept alive
                     // before IO completion.
-                    *(this.state) = ProxyClientStreamWriteState::Connecting(buffer);
+                    *(this.writer_state) = ProxyClientStreamWriteState::Connecting(buffer);
                 }
                 ProxyClientStreamWriteState::Connecting(ref buffer) => {
                     let n = ready!(this.stream.poll_write_encrypted(cx, buffer))?;
@@ -236,7 +347,7 @@ where
                     // In general, poll_write_encrypted should perform like write_all.
                     debug_assert!(n == buffer.len());
 
-                    *(this.state) = ProxyClientStreamWriteState::Connected;
+                    *(this.writer_state) = ProxyClientStreamWriteState::Connected;
 
                     // NOTE:
                     // poll_write will return Ok(0) if buf.len() == 0

@@ -12,7 +12,6 @@ use std::{
 use byte_string::ByteStr;
 use ipnet::IpNet;
 use log::{debug, error, info, trace, warn};
-use shadowsocks::config::Mode;
 use shadowsocks::{config::Mode, transport::Connector};
 use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
 use tokio::{io::AsyncReadExt, sync::mpsc, time};

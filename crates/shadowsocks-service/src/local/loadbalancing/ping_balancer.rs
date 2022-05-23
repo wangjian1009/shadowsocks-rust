@@ -19,11 +19,10 @@ use futures::future;
 use log::{debug, error, info, trace, warn};
 use shadowsocks::{
     config::{Mode, ServerProtocol, ShadowsocksConfig},
-    create_connector_then,
     plugin::{Plugin, PluginMode},
     relay::{
         socks5::Address,
-        udprelay::{proxy_socket::ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
+        udprelay::{options::UdpSocketControlData, proxy_socket::ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
     },
     ServerConfig,
 };
@@ -35,10 +34,7 @@ use tokio::{
     time,
 };
 
-use crate::{
-    connect_server_then,
-    local::{context::ServiceContext, net::AutoProxyClientStream},
-};
+use crate::local::{context::ServiceContext, net::AutoProxyClientStream};
 
 use super::{
     server_data::ServerIdent,
@@ -107,6 +103,11 @@ impl PingBalancerBuilder {
     }
 
     fn find_best_idx(servers: &[Arc<ServerIdent>], mode: Mode) -> (usize, usize) {
+        if servers.is_empty() {
+            trace!("init without any TCP and UDP servers");
+            return (0, 0);
+        }
+
         let mut best_tcp_idx = 0;
         let mut best_udp_idx = 0;
 
@@ -160,8 +161,6 @@ impl PingBalancerBuilder {
     }
 
     pub async fn build(self) -> io::Result<PingBalancer> {
-        assert!(!self.servers.is_empty(), "build PingBalancer without any servers");
-
         if let Some(intv) = self.check_best_interval {
             if intv > self.check_interval {
                 return Err(io::Error::new(
@@ -218,11 +217,18 @@ struct PingBalancerContext {
 
 impl PingBalancerContext {
     fn best_tcp_server(&self) -> Arc<ServerIdent> {
+        assert!(!self.is_empty(), "no available server");
         self.servers[self.best_tcp_idx.load(Ordering::Relaxed)].clone()
     }
 
     fn best_udp_server(&self) -> Arc<ServerIdent> {
+        assert!(!self.is_empty(), "no available server");
         self.servers[self.best_udp_idx.load(Ordering::Relaxed)].clone()
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.servers.is_empty()
     }
 }
 
@@ -331,8 +337,9 @@ impl PingBalancerContext {
     }
 
     async fn init_score(&self) {
-        assert!(!self.servers.is_empty(), "check PingBalancer without any servers");
-
+        if self.servers.is_empty() {
+            return;
+        }
         self.check_once(true).await;
     }
 
@@ -345,6 +352,10 @@ impl PingBalancerContext {
     }
 
     fn probing_required(&self) -> bool {
+        if self.servers.is_empty() {
+            return false;
+        }
+
         let mut tcp_count = 0;
         let mut udp_count = 0;
 
@@ -362,8 +373,6 @@ impl PingBalancerContext {
     }
 
     async fn checker_task(self: Arc<Self>) {
-        assert!(!self.servers.is_empty(), "check PingBalancer without any servers");
-
         if !self.probing_required() {
             self.checker_task_dummy().await
         } else {
@@ -379,6 +388,9 @@ impl PingBalancerContext {
     /// Check each servers' score and update the best server's index
     async fn check_once(&self, first_run: bool) {
         let servers = &self.servers;
+        if servers.is_empty() {
+            return;
+        }
 
         let mut vfut_tcp = Vec::with_capacity(servers.len());
         let mut vfut_udp = Vec::with_capacity(servers.len());
@@ -499,6 +511,9 @@ impl PingBalancerContext {
     /// Check the best server only
     async fn check_best_server(&self) {
         let servers = &self.servers;
+        if servers.is_empty() {
+            return;
+        }
 
         let mut vfut = Vec::new();
 
@@ -692,6 +707,13 @@ impl PingBalancer {
         context.best_udp_server()
     }
 
+    /// Check if there is no available server
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        let context = self.inner.context.load();
+        context.is_empty()
+    }
+
     /// Get the server list
     pub fn servers(&self) -> PingServerIter<'_> {
         let context = self.inner.context.load();
@@ -790,34 +812,30 @@ impl PingChecker {
 
         let addr = Address::DomainNameAddress("clients3.google.com".to_owned(), 80);
 
-        connect_server_then!(self.context, &self.server, addr, |stream| {
-            let mut stream = stream?;
+        let stream = AutoProxyClientStream::connect_proxied(&self.context, &self.server, &addr).await?;
 
-            stream.write_all(GET_BODY).await?;
+        let mut reader = BufReader::new(stream);
 
-            let mut reader = BufReader::new(stream);
+        let mut buf = Vec::new();
+        reader.read_until(b'\n', &mut buf).await?;
 
-            let mut buf = Vec::new();
-            reader.read_until(b'\n', &mut buf).await?;
+        static EXPECTED_HTTP_STATUS_LINE: &[u8] = b"HTTP/1.1 204 No Content\r\n";
+        if buf != EXPECTED_HTTP_STATUS_LINE {
+            use std::io::{Error, ErrorKind};
 
-            static EXPECTED_HTTP_STATUS_LINE: &[u8] = b"HTTP/1.1 204 No Content\r\n";
-            if buf != EXPECTED_HTTP_STATUS_LINE {
-                use std::io::{Error, ErrorKind};
+            debug!(
+                "unexpected response from http://clients3.google.com/generate_204, {:?}",
+                ByteStr::new(&buf)
+            );
 
-                debug!(
-                    "unexpected response from http://clients3.google.com/generate_204, {:?}",
-                    ByteStr::new(&buf)
-                );
+            let err = Error::new(
+                ErrorKind::InvalidData,
+                "unexpected response from http://clients3.google.com/generate_204",
+            );
+            return Err(err);
+        }
 
-                let err = Error::new(
-                    ErrorKind::InvalidData,
-                    "unexpected response from http://clients3.google.com/generate_204",
-                );
-                return Err(err);
-            }
-
-            Ok(())
-        })
+        Ok(())
     }
 
     /// Detect TCP connectivity with Firefox's http://detectportal.firefox.com/success.txt
@@ -827,37 +845,34 @@ impl PingChecker {
 
         let addr = Address::DomainNameAddress("detectportal.firefox.com".to_owned(), 80);
 
-        connect_server_then!(self.context, &self.server, addr, |stream| {
-            let mut stream = stream?;
+        let mut stream = AutoProxyClientStream::connect_proxied(&self.context, &self.server, &addr).await?;
+        stream.write_all(GET_BODY).await?;
 
-            stream.write_all(GET_BODY).await?;
+        let mut reader = BufReader::new(stream);
 
-            let mut reader = BufReader::new(stream);
+        let mut buf = Vec::new();
+        reader.read_until(b'\n', &mut buf).await?;
 
-            let mut buf = Vec::new();
-            reader.read_until(b'\n', &mut buf).await?;
+        static EXPECTED_HTTP_STATUS_LINE: &[u8] = b"HTTP/1.1 200 OK\r\n";
+        if buf != EXPECTED_HTTP_STATUS_LINE {
+            use std::io::{Error, ErrorKind};
 
-            static EXPECTED_HTTP_STATUS_LINE: &[u8] = b"HTTP/1.1 200 OK\r\n";
-            if buf != EXPECTED_HTTP_STATUS_LINE {
-                use std::io::{Error, ErrorKind};
+            debug!(
+                "unexpected response from http://detectportal.firefox.com/success.txt, {:?}",
+                ByteStr::new(&buf)
+            );
 
-                debug!(
-                    "unexpected response from http://detectportal.firefox.com/success.txt, {:?}",
-                    ByteStr::new(&buf)
-                );
+            let err = Error::new(
+                ErrorKind::InvalidData,
+                "unexpected response from http://detectportal.firefox.com/success.txt",
+            );
+            return Err(err);
+        }
 
-                let err = Error::new(
-                    ErrorKind::InvalidData,
-                    "unexpected response from http://detectportal.firefox.com/success.txt",
-                );
-                return Err(err);
-            }
-
-            Ok(())
-        })
+        Ok(())
     }
 
-    async fn check_request_udp(&self, ss_cfg: &ShadowsocksConfig) -> io::Result<()> {
+    async fn check_request_udp(&self, cfg: &ShadowsocksConfig) -> io::Result<()> {
         // TransactionID: 0x1234
         // Flags: 0x0100 RD
         // Questions: 0x0001
@@ -876,11 +891,17 @@ impl PingChecker {
         let client = ProxySocket::connect_with_opts(
             self.context.context(),
             self.server.server_config(),
-            &ss_cfg,
+            cfg,
             self.context.connect_opts_ref(),
         )
         .await?;
-        client.send(&addr, DNS_QUERY).await?;
+
+        let control = UdpSocketControlData {
+            client_session_id: rand::random::<u64>(),
+            server_session_id: 0,
+            packet_id: 1,
+        };
+        client.send_with_ctrl(&addr, &control, DNS_QUERY).await?;
 
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         let (n, ..) = client.recv(&mut buffer).await?;

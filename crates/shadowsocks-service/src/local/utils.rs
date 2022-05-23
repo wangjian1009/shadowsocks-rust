@@ -3,6 +3,7 @@
 use std::{
     io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::Arc,
     time::Duration,
 };
 
@@ -13,9 +14,11 @@ use shadowsocks::{
         socks5::Address,
         tcprelay::{utils::copy_encrypted_bidirectional, utils_copy::copy_bidirectional},
     },
+    timeout::Sleep,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    sync::Mutex,
     time,
 };
 
@@ -52,8 +55,7 @@ where
             svr_cfg.addr(),
         );
     } else {
-        debug!("established tcp tunnel {} <-> {} bypassed", peer_addr, target_addr);
-        return establish_tcp_tunnel_bypassed(plain, shadow, peer_addr, target_addr).await;
+        return establish_tcp_tunnel_bypassed(&mut plain, shadow, peer_addr, target_addr, &None).await;
     }
 
     #[cfg(feature = "sniffer")]
@@ -153,17 +155,20 @@ where
     Ok(())
 }
 
-async fn establish_tcp_tunnel_bypassed<P, S>(
-    mut plain: P,
+pub(crate) async fn establish_tcp_tunnel_bypassed<P, S>(
+    plain: &mut P,
     shadow: &mut S,
     peer_addr: SocketAddr,
     target_addr: &Address,
+    idle_timeout: &Option<Arc<Mutex<Sleep>>>,
 ) -> io::Result<()>
 where
     P: AsyncRead + AsyncWrite + Unpin,
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    match copy_bidirectional(&mut plain, shadow, &None).await {
+    debug!("established tcp tunnel {} <-> {} bypassed", peer_addr, target_addr);
+
+    match copy_bidirectional(plain, shadow, idle_timeout).await {
         Ok((rn, wn)) => {
             trace!(
                 "tcp tunnel {} <-> {} (bypassed) closed, L2R {} bytes, R2L {} bytes",

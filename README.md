@@ -7,9 +7,10 @@
 
 [![crates.io](https://img.shields.io/crates/v/shadowsocks-rust.svg)](https://crates.io/crates/shadowsocks-rust)
 [![Release](https://img.shields.io/github/release/shadowsocks/shadowsocks-rust.svg)](https://github.com/shadowsocks/shadowsocks-rust/releases)
-[![archlinuxcn shadowsocks-rust-git](https://img.shields.io/badge/dynamic/json?label=archlinuxcn-git&query=%24.latest.pkgver&url=https%3A%2F%2Fbuild.archlinuxcn.org%2Fapi%2Fpackages%2Fshadowsocks-rust-git)](https://build.archlinuxcn.org/)
-[![archlinuxcn shadowsocks-rust-opt-git](https://img.shields.io/badge/dynamic/json?label=archlinuxcn-opt-git&query=%24.latest.pkgver&url=https%3A%2F%2Fbuild.archlinuxcn.org%2Fapi%2Fpackages%2Fshadowsocks-rust-git)](https://build.archlinuxcn.org/)
+[![archlinuxcn shadowsocks-rust-git](https://img.shields.io/badge/dynamic/json?label=archlinuxcn-git&query=%24.version&url=https%3A%2F%2Fbuild.archlinuxcn.org%2Fapi%2Fv2%2Fpackages%2Fshadowsocks-rust-git)](https://build.archlinuxcn.org/)
+[![archlinuxcn shadowsocks-rust-opt-git](https://img.shields.io/badge/dynamic/json?label=archlinuxcn-opt-git&query=%24.version&url=https%3A%2F%2Fbuild.archlinuxcn.org%2Fapi%2Fv2%2Fpackages%2Fshadowsocks-rust-opt-git)](https://build.archlinuxcn.org/)
 [![aur shadowsocks-rust](https://img.shields.io/aur/version/shadowsocks-rust)](https://aur.archlinux.org/packages/shadowsocks-rust)
+[![NixOS](https://img.shields.io/badge/NixOS-shadowsocks--rust-blue?logo=nixos)](https://github.com/NixOS/nixpkgs/tree/master/pkgs/tools/networking/shadowsocks-rust)
 
 [![Get it from the Snap Store](https://snapcraft.io/static/images/badges/en/snap-store-black.svg)](https://snapcraft.io/shadowsocks-rust)
 
@@ -54,6 +55,10 @@ Related Projects:
 - `stream-cipher` - Enable deprecated stream ciphers. WARN: stream ciphers are UNSAFE!
 
 - `aead-cipher-extra` - Enable non-standard AEAD ciphers
+
+- `aead-cipher-2022` - Enable AEAD-2022 ciphers ([SIP022](https://github.com/shadowsocks/shadowsocks-org/issues/196))
+
+- `aead-cipher-2022-extra` - Enable AEAD-2022 extra ciphers (non-standard ciphers)
 
 #### Memory Allocators
 
@@ -464,7 +469,10 @@ Example configuration:
             "local_port": 1080,
             // OPTIONAL. Setting the `mode` for this specific local server instance.
             // If not set, it will derive from the outer `mode`
-            "mode": "tcp_and_udp"
+            "mode": "tcp_and_udp",
+            // OPTIONAL. Authentication configuration file
+            // Configuration file document could be found in the next section.
+            "socks5_auth_config_path": "/path/to/auth.json"
         },
         {
             // SOCKS5, SOCKS4/4a local server
@@ -529,7 +537,7 @@ Example configuration:
     ],
 
     // Server configuration
-    // listen on [::] for dual stack support
+    // listen on :: for dual stack support, no need add [] around.
     "server": "::",
     // Change to use your custom port number
     "server_port": 8388,
@@ -659,12 +667,35 @@ Example configuration:
 }
 ```
 
+### SOCKS5 Authentication Configuration
+
+The configuration file is set by `socks5_auth_config_path` in `locals`.
+
+```jsonc
+{
+    // Password/Username Authentication (RFC1929)
+    "password": {
+        "users": [
+            {
+                "user_name": "USERNAME in UTF-8",
+                "password": "PASSWORD in UTF-8"
+            }
+        ]
+    }
+}
+```
+
 ### Environment Variables
 
 - `SS_SERVER_PASSWORD`: A default password for servers that created from command line argument (`--server-addr`)
 - `SS_SYSTEM_DNS_RESOLVER_FORCE_BUILTIN`: `"system"` DNS resolver force use system's builtin (`getaddrinfo` in *NIX)
 
 ## Supported Ciphers
+
+### AEAD 2022 Ciphers
+
+- `2022-blake3-aes-128-gcm`, `2022-blake3-aes-256-gcm`
+- `2022-blake3-chacha20-poly1305`, `2022-blake3-chacha8-poly1305`
 
 ### AEAD Ciphers
 
@@ -774,6 +805,7 @@ It supports the following features:
 - [x] [SIP004](https://github.com/shadowsocks/shadowsocks-org/issues/30) AEAD ciphers
 - [x] [SIP003](https://github.com/shadowsocks/shadowsocks-org/issues/28) Plugins
 - [x] [SIP002](https://github.com/shadowsocks/shadowsocks-org/issues/27) Extension ss URLs
+- [x] [SIP022](https://github.com/shadowsocks/shadowsocks-org/issues/196) AEAD 2022 ciphers
 - [x] HTTP Proxy Supports ([RFC 7230](http://tools.ietf.org/html/rfc7230) and [CONNECT](https://tools.ietf.org/html/draft-luotonen-web-proxy-tunneling-01))
 - [x] Defend against replay attacks, [shadowsocks/shadowsocks-org#44](https://github.com/shadowsocks/shadowsocks-org/issues/44)
 - [x] Manager APIs, supporting [Manage Multiple Users](https://github.com/shadowsocks/shadowsocks/wiki/Manage-Multiple-Users)
@@ -815,3 +847,7 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+## Stargazers over time
+
+[![Stargazers over time](https://starchart.cc/shadowsocks/shadowsocks-rust.svg)](https://starchart.cc/shadowsocks/shadowsocks-rust)

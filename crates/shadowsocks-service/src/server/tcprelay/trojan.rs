@@ -1,15 +1,5 @@
 use super::*;
-use bytes::Bytes;
-use shadowsocks::{
-    relay::{tcprelay::utils_copy::copy_bidirectional, udprelay::MAXIMUM_UDP_PAYLOAD_SIZE},
-    transport::{MutPacketWriter, PacketRead},
-    trojan::{new_trojan_packet_connection, protocol},
-};
-
-use super::super::udprelay::UdpAssociationContext;
-use tokio::sync::mpsc;
-
-use crate::net::UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE;
+use shadowsocks::{relay::tcprelay::utils_copy::copy_bidirectional, trojan::protocol};
 
 impl TcpServerClient {
     pub async fn serve_trojan<IS>(self, valid_hash: &[u8], mut stream: MonProxyStream<IS>) -> io::Result<()>
@@ -65,7 +55,9 @@ impl TcpServerClient {
 
         match request {
             protocol::RequestHeader::TcpConnect(_, addr) => self.serve_trojan_tcp(addr, stream).await,
-            protocol::RequestHeader::UdpAssociate(_) => self.serve_trojan_udp(stream).await,
+            protocol::RequestHeader::UdpAssociate(_) => {
+                super::super::udprelay::trojan::serve_trojan_udp(self.context, self.peer_addr, stream).await
+            }
         }
     }
 
@@ -194,53 +186,5 @@ impl TcpServerClient {
         }
 
         Ok(())
-    }
-
-    async fn serve_trojan_udp<IS>(self, stream: MonProxyStream<IS>) -> io::Result<()>
-    where
-        IS: StreamConnection + 'static,
-    {
-        let (mut reader, writer) = new_trojan_packet_connection(stream);
-
-        let (keepalive_tx, mut keepalive_rx) = mpsc::channel(UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE);
-
-        let (_context, sender) = UdpAssociationContext::create(
-            self.context.clone(),
-            Arc::new(Box::new(MutPacketWriter::new(writer, 1024))),
-            self.peer_addr,
-            keepalive_tx,
-        );
-
-        let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
-        loop {
-            tokio::select! {
-                peer_addr_opt = keepalive_rx.recv() => {
-                    let _peer_addr = peer_addr_opt.expect("keep-alive channel closed unexpectly");
-                    trace!("vless udp relay {} <- keepalive", self.peer_addr);
-                }
-
-                received = reader.read_from(&mut buffer) => {
-                    let (n, addr) = received?;
-
-                    trace!("trojan udp relay {} <- {} received {} bytes", self.peer_addr, addr, n);
-
-                    let data = &buffer[..n];
-
-                    let target_addr = Address::from(addr.clone());
-
-                    if let Err(..) = sender.try_send((target_addr, Bytes::copy_from_slice(data))) {
-                        let err = io::Error::new(ErrorKind::Other, "udp relay channel full");
-                        return Err(err);
-                    }
-
-                    trace!(
-                        "trojan udp relay {} <- {} with {} bytes",
-                        self.peer_addr,
-                        addr,
-                        data.len()
-                    );
-                }
-            }
-        }
     }
 }

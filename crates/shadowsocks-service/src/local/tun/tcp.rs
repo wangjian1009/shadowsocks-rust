@@ -18,8 +18,7 @@ use ipnet::IpNet;
 use log::{debug, error, trace};
 use log::{error, trace};
 use lru_time_cache::LruCache;
-use shadowsocks::{net::TcpListener, relay::socks5::Address, transport::Connector};
-use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address};
+use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address, transport::Connector};
 use smoltcp::{
     iface::{Interface, InterfaceBuilder, Routes, SocketHandle},
     phy::{DeviceCapabilities, Medium},
@@ -33,7 +32,6 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     sync::mpsc,
 };
-use tokio::{net::TcpStream, sync::Mutex, task::JoinHandle, time};
 
 use crate::{
     auto_proxy_then,
@@ -41,7 +39,7 @@ use crate::{
         context::ServiceContext,
         loadbalancing::PingBalancer,
         net::AutoProxyClientStream,
-        utils::{establish_tcp_tunnel, to_ipv4_mapped},
+        utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed, to_ipv4_mapped},
     },
 };
 
@@ -487,6 +485,11 @@ async fn establish_client_tcp_redir<'a, C: Connector>(
     peer_addr: SocketAddr,
     addr: &Address,
 ) -> io::Result<()> {
+    if balancer.is_empty() {
+        let mut remote = AutoProxyClientStream::connect_bypassed(context, addr).await?;
+        return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, addr).await;
+    }
+
     let server = balancer.best_tcp_server();
     let svr_cfg = server.server_config();
 

@@ -12,17 +12,9 @@ use futures::{future::BoxFuture, FutureExt};
 use hyper::Uri;
 use log::error;
 use pin_project::pin_project;
-use shadowsocks::{create_connector_then, transport::StreamConnection};
 use tower::Service;
 
-use crate::{
-    connect_server_then,
-    local::{
-        context::ServiceContext,
-        loadbalancing::ServerIdent,
-        net::{connect_bypassed, AutoProxyClientStream},
-    },
-};
+use crate::local::{context::ServiceContext, loadbalancing::ServerIdent, net::AutoProxyClientStream};
 
 use super::{http_stream::ProxyHttpStream, utils::host_addr};
 
@@ -62,13 +54,9 @@ impl Service<Uri> for Connector {
                     }
                     Some(addr) => {
                         let s = match server {
-                            Some(ser) => connect_server_then!(context, ser.as_ref(), addr, |s| {
-                                io::Result::Ok(Box::new(s?) as Box<dyn StreamConnection>)
-                            }),
-                            None => io::Result::Ok(
-                                Box::new(connect_bypassed(context, addr).await?) as Box<dyn StreamConnection>
-                            ),
-                        }?;
+                            Some(ser) => AutoProxyClientStream::connect_proxied(&context, ser.as_ref(), &addr).await?,
+                            None => AutoProxyClientStream::connect_bypassed(context.as_ref(), &addr).await?,
+                        };
 
                         if is_https {
                             let host = dst.host().unwrap().trim_start_matches('[').trim_start_matches(']');

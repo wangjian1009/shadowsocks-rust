@@ -2,11 +2,15 @@ use bytes::BytesMut;
 use std::{collections::HashMap, future::Future, io, net::SocketAddr, time::Duration};
 use tokio::{io::AsyncWriteExt, time};
 
-use crate::transport::{self, PacketRead, PacketWrite, StreamConnection};
+use crate::transport::StreamConnection;
 
 use super::{
-    client_packet::new_vless_packet_connection, encoding, mux, new_error, protocol, protocol::Fallback,
-    validator::Validator, Config,
+    encoding, mux, new_error,
+    packet::{new_vless_packet_connection, VlessUdpReader, VlessUdpWriter},
+    protocol,
+    protocol::Fallback,
+    validator::Validator,
+    Config,
 };
 
 pub struct InboundHandler {
@@ -78,7 +82,11 @@ impl InboundHandler {
         PS: (Fn(Box<dyn StreamConnection + 'static>, protocol::Address) -> FutPS) + Send + Sync + Clone + 'static,
         // 处理Packet
         FutPU: Future<Output = io::Result<()>>,
-        PU: (Fn(Box<dyn PacketRead + 'static>, Box<dyn PacketWrite + 'static>, protocol::Address) -> FutPU)
+        PU: (Fn(
+                VlessUdpReader<Box<dyn StreamConnection + 'static>>,
+                VlessUdpWriter<Box<dyn StreamConnection + 'static>>,
+                protocol::Address,
+            ) -> FutPU)
             + Send
             + Clone
             + 'static,
@@ -139,9 +147,9 @@ impl InboundHandler {
             }
             protocol::RequestCommand::UDP => {
                 if let Some(address) = request.address {
-                    let (reader, writer) = new_vless_packet_connection(stream, address.clone().into());
-                    let writer = transport::MutPacketWriter::new(writer, 1024);
-                    serve_udp(Box::new(reader), Box::new(writer), address).await
+                    let stream = Box::new(stream) as Box<dyn StreamConnection + 'static>;
+                    let (reader, writer) = new_vless_packet_connection(stream);
+                    serve_udp(reader, writer, address).await
                 } else {
                     Err(new_error(format!("udp rquest no target address")))
                 }

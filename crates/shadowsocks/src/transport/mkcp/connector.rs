@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     net::{ConnectOpts, Destination},
-    transport::{PacketRead, PacketWrite},
+    transport::{DeviceOrGuard, PacketRead, PacketWrite},
     ServerAddr,
 };
 
@@ -246,11 +246,6 @@ where
     PW: PacketWrite + 'static,
 {
     #[inline]
-    fn local_addr(&self) -> io::Result<Destination> {
-        Ok(Destination::Udp(self.inner.meta().local_addr.clone()))
-    }
-
-    #[inline]
     fn check_connected(&self) -> bool {
         true
     }
@@ -262,6 +257,10 @@ where
             "#{}: rate-limit: ignore rate limit for kcp connection",
             self.inner.meta()
         );
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        unreachable!()
     }
 }
 

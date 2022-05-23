@@ -14,9 +14,9 @@ use tokio::{
 };
 
 use shadowsocks::{
-    net::{Destination, FlowStat},
+    net::FlowStat,
     timeout::Sleep,
-    transport::StreamConnection,
+    transport::{DeviceOrGuard, StreamConnection},
 };
 
 /// Monitored `ProxyStream`
@@ -30,11 +30,6 @@ pub struct MonProxyStream<S> {
 
 impl<S: StreamConnection> StreamConnection for MonProxyStream<S> {
     #[inline]
-    fn local_addr(&self) -> io::Result<Destination> {
-        self.stream.local_addr()
-    }
-
-    #[inline]
     fn check_connected(&self) -> bool {
         self.stream.check_connected()
     }
@@ -43,6 +38,10 @@ impl<S: StreamConnection> StreamConnection for MonProxyStream<S> {
     #[inline]
     fn set_rate_limit(&mut self, limiter: Option<std::sync::Arc<shadowsocks::transport::RateLimiter>>) {
         self.stream.set_rate_limit(limiter);
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        self.stream.physical_device()
     }
 }
 
@@ -75,6 +74,11 @@ impl<S> MonProxyStream<S> {
             None => None,
             Some(idle_timeout) => Some(idle_timeout.clone()),
         }
+    }
+
+    #[inline]
+    pub fn into_inner(self) -> S {
+        self.stream
     }
 }
 

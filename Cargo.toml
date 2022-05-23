@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks-rust"
-version = "1.14.1"
+version = "1.15.0-alpha.4"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -54,7 +54,7 @@ lto = "fat"
 codegen-units = 1
 incremental = false
 panic = "abort"
-# strip = true
+strip = true
 
 [features]
 default = [
@@ -85,6 +85,7 @@ default = [
     "transport-skcp",
     "trojan",
     "vless",
+    "aead-cipher-2022",
 ]
 
 # Enable local server
@@ -113,7 +114,7 @@ server-mock = ["shadowsocks-service/server-mock"]
 # Enable manager server
 manager = ["shadowsocks-service/manager"]
 # Enable utility
-utility = []
+utility = ["qrcode"]
 # Enable service
 service = ["local", "server", "manager"]
 
@@ -171,10 +172,15 @@ aead-cipher-extra = ["shadowsocks-service/aead-cipher-extra"]
 # Enable host dns
 host-dns = ["trust-dns-resolver", "rand", "local-dns"]
 
+# Enable AEAD 2022
+aead-cipher-2022 = ["shadowsocks-service/aead-cipher-2022"]
+# Enable AEAD 2022 with extra ciphers
+aead-cipher-2022-extra = ["shadowsocks-service/aead-cipher-2022-extra"]
+
 # Enable rate limit
 rate-limit = ["shadowsocks-service/rate-limit", "governor"]
 
-# Enable detection against replay attack
+# Enable detection against replay attack (Stream / AEAD)
 security-replay-attack-detect = ["shadowsocks-service/security-replay-attack-detect"]
 replay-attack-detect = ["security-replay-attack-detect"] # Backward compatibility. DO NOT USE.
 # Enable IV printable prefix
@@ -194,7 +200,7 @@ thiserror = "1.0"
 
 clap = { version = "3.1", features = ["wrap_help", "suggestions"] }
 cfg-if = "1"
-qrcode = { version = "0.12", default-features = false }
+qrcode = { version = "0.12", default-features = false, optional = true }
 exitcode = "1"
 bytes = "1.0"
 byteorder = "1.3"
@@ -206,9 +212,11 @@ directories = "4.0"
 xdg = "2.4"
 rpassword = "5.0.1"
 spin = { version = "0.9", features = ["std"], optional = true }
+libc = { version = "0.2", features = ["extra_traits"] }
 
 futures = "0.3"
 tokio = { version = "1", features = ["rt", "signal"] }
+num_cpus = "1.13"
 
 governor = { version = "0.3.2", optional = true }
 
@@ -222,7 +230,7 @@ rpmalloc = { version = "0.2", optional = true }
 
 serde_json = { version = "1.0", optional = true }
 
-shadowsocks-service = { version = "1.14.1", path = "./crates/shadowsocks-service", default-features = false }
+shadowsocks-service = { version = "1.15.0", path = "./crates/shadowsocks-service", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.4"
@@ -238,3 +246,4 @@ byteorder = "1.3"
 env_logger = "0.9"
 byte_string = "1.0"
 tokio = { version = "1", features = ["net", "time", "macros", "io-util"] }
+tokio-test = "*"

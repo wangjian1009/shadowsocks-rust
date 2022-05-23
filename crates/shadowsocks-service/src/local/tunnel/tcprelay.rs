@@ -3,32 +3,15 @@
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use log::{error, info, trace};
-use shadowsocks::{
-    create_connector_then,
-    lookup_then,
-    net::TcpListener as ShadowTcpListener,
-    relay::socks5::Address,
-    ServerAddr,
-};
+use shadowsocks::{lookup_then, net::TcpListener as ShadowTcpListener, relay::socks5::Address, ServerAddr};
 use tokio::{net::TcpStream, time};
 
-use crate::{
-    auto_proxy_then,
-    connect_server_then,
-    local::{
-        context::ServiceContext,
-        loadbalancing::PingBalancer,
-        net::AutoProxyClientStream,
-        utils::establish_tcp_tunnel,
-    },
+use crate::local::{
+    context::ServiceContext,
+    loadbalancing::PingBalancer,
+    net::AutoProxyClientStream,
+    utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed},
 };
-
-use cfg_if::cfg_if;
-cfg_if! {
-    if #[cfg(feature = "rate-limit")] {
-        use shadowsocks::transport::StreamConnection;
-    }
-}
 
 pub async fn run_tcp_tunnel(
     context: Arc<ServiceContext>,
@@ -78,6 +61,13 @@ async fn handle_tcp_client(
     peer_addr: SocketAddr,
     forward_addr: Address,
 ) -> io::Result<()> {
+    if balancer.is_empty() {
+        trace!("establishing tcp tunnel {} <-> {} direct", peer_addr, forward_addr);
+
+        let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), &forward_addr).await?;
+        return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, &forward_addr, &None).await;
+    }
+
     let server = balancer.best_tcp_server();
     let svr_cfg = server.server_config();
     trace!(
@@ -91,20 +81,14 @@ async fn handle_tcp_client(
     #[cfg(feature = "rate-limit")]
     let mut stream = shadowsocks::transport::RateLimitedStream::from_stream(stream, context.rate_limiter());
 
-    auto_proxy_then!(context.clone(), server.as_ref(), forward_addr, |remote| {
-        let mut remote = remote?;
-
-        #[cfg(feature = "rate-limit")]
-        stream.set_rate_limit(context.rate_limiter());
-
-        establish_tcp_tunnel(
-            context.as_ref(),
-            svr_cfg,
-            &mut stream,
-            &mut remote,
-            peer_addr,
-            &forward_addr,
-        )
-        .await
-    })
+    let mut remote = AutoProxyClientStream::connect_proxied(&context, &server, &forward_addr).await?;
+    establish_tcp_tunnel(
+        context.as_ref(),
+        svr_cfg,
+        &mut stream,
+        &mut remote,
+        peer_addr,
+        &forward_addr,
+    )
+    .await
 }

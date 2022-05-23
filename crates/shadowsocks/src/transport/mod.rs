@@ -15,11 +15,13 @@ pub use common::{
     header::{HeaderConfig, HeaderPolicy},
 };
 
+mod device;
 pub mod direct;
 mod dummy_packet;
 mod mon_traffic;
 mod mut_packet;
 
+pub use device::{Device, DeviceGuard, DeviceOrGuard};
 pub use dummy_packet::DummyPacket;
 pub use mon_traffic::MonTraffic;
 pub use mut_packet::MutPacketWriter;
@@ -54,11 +56,20 @@ pub mod skcp;
 
 /// Stream traits
 pub trait StreamConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {
-    fn local_addr(&self) -> io::Result<Destination>;
     fn check_connected(&self) -> bool;
 
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, rate_limit: Option<Arc<RateLimiter>>);
+
+    fn physical_device(&self) -> DeviceOrGuard<'_>;
+
+    fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
+        self.physical_device().apply(|f| match f {
+            Device::Tcp(s) => s.local_addr(),
+            Device::Udp(s) => s.local_addr(),
+            Device::TofTcp(s) => s.local_addr(),
+        })
+    }
 }
 
 /// Packet traits
@@ -125,10 +136,6 @@ pub trait Acceptor: Send + Sync + 'static {
 }
 
 impl StreamConnection for Box<dyn StreamConnection> {
-    fn local_addr(&self) -> io::Result<Destination> {
-        self.as_ref().local_addr()
-    }
-
     fn check_connected(&self) -> bool {
         self.as_ref().check_connected()
     }
@@ -136,5 +143,9 @@ impl StreamConnection for Box<dyn StreamConnection> {
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, rate_limit: Option<Arc<RateLimiter>>) {
         self.as_mut().set_rate_limit(rate_limit)
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        self.as_ref().physical_device()
     }
 }

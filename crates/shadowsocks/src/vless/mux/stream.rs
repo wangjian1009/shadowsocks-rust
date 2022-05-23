@@ -11,7 +11,10 @@ use tokio::{
     sync::{mpsc, OwnedMutexGuard},
 };
 
-use crate::{net, transport::StreamConnection, vless::new_error};
+use crate::{
+    transport::{DeviceOrGuard, StreamConnection},
+    vless::new_error,
+};
 
 use super::{
     frame::{encode_frame, encode_frame_and_data_len, FrameMetadata, FrameOption, SessionStatus},
@@ -75,17 +78,16 @@ impl MuxStream {
 }
 
 impl StreamConnection for MuxStream {
-    fn local_addr(&self) -> io::Result<net::Destination> {
-        // self.session.context().base_stream().local_addr()
-        unreachable!()
-    }
-
     fn check_connected(&self) -> bool {
         unreachable!()
     }
 
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, _rate_limit: Option<Arc<crate::transport::RateLimiter>>) {
+        unreachable!()
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
         unreachable!()
     }
 }

@@ -45,6 +45,7 @@ pub struct Server {
     udp_capacity: Option<usize>,
     manager_addr: Option<ManagerAddr>,
     accept_opts: AcceptOpts,
+    worker_count: usize,
 }
 
 impl Server {
@@ -62,6 +63,7 @@ impl Server {
             udp_capacity: None,
             manager_addr: None,
             accept_opts: AcceptOpts::default(),
+            worker_count: 1,
         }
     }
 
@@ -136,6 +138,14 @@ impl Server {
     /// Set manager's address to report `stat`
     pub fn set_manager_addr(&mut self, manager_addr: ManagerAddr) {
         self.manager_addr = Some(manager_addr);
+    }
+
+    /// Set runtime worker count
+    ///
+    /// Should be replaced with tokio's metric API when it is stablized.
+    /// https://github.com/tokio-rs/tokio/issues/4073
+    pub fn set_worker_count(&mut self, worker_count: usize) {
+        self.worker_count = worker_count;
     }
 
     /// Get server's configuration
@@ -236,12 +246,14 @@ impl Server {
     }
 
     async fn run_udp_server(&self, cfg: &ShadowsocksConfig) -> io::Result<()> {
-        let server = UdpServer::new(
+        let mut server = UdpServer::new(
             self.context.clone(),
+            cfg.method(),
             self.udp_expiry_duration,
             self.udp_capacity,
             self.accept_opts.clone(),
         );
+        server.set_worker_count(self.worker_count);
         server.run(&self.svr_cfg, cfg).await
     }
 

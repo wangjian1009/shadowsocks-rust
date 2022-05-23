@@ -151,7 +151,7 @@ impl<PW: PacketWrite> MkcpPacketWriter<PW> {
 
             let mut plain_in = Vec::with_capacity(seg.byte_size());
             seg.write_to_buf(&mut plain_in);
-            let cipher_len = security.seal(&nonce, &plain_in[..], &mut b[..seg_size], None)?;
+            let cipher_len = security.seal(&nonce, &plain_in[..], b, None)?;
             output_len += cipher_len;
         } else {
             seg.write_to(&mut Cursor::new(b)).await?;

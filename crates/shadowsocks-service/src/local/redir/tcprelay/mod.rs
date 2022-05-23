@@ -8,28 +8,20 @@ use std::{
 };
 
 use log::{debug, error, info, trace};
-use shadowsocks::{
-    create_connector_then,
-    lookup_then,
-    net::TcpListener as ShadowTcpListener,
-    relay::socks5::Address,
-    ServerAddr,
-};
+use shadowsocks::{lookup_then, net::TcpListener as ShadowTcpListener, relay::socks5::Address, ServerAddr};
 use tokio::{
     net::{TcpListener, TcpStream},
     time,
 };
 
 use crate::{
-    auto_proxy_then,
     config::RedirType,
-    connect_server_then,
     local::{
         context::ServiceContext,
         loadbalancing::PingBalancer,
         net::AutoProxyClientStream,
         redir::redir_ext::{TcpListenerRedirExt, TcpStreamRedirExt},
-        utils::{establish_tcp_tunnel, to_ipv4_mapped},
+        utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed, to_ipv4_mapped},
     },
 };
 
@@ -39,27 +31,27 @@ mod sys;
 ///
 /// This method must be called after handshaking with client (for example, socks5 handshaking)
 async fn establish_client_tcp_redir<'a>(
-    context: Arc<ServiceContext>,
+    context: &Arc<ServiceContext>,
     balancer: PingBalancer,
     #[allow(unused_mut)] mut stream: TcpStream,
     peer_addr: SocketAddr,
     addr: &Address,
 ) -> io::Result<()> {
+    if balancer.is_empty() {
+        let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), addr).await?;
+        return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, addr, &None).await;
+    }
+
     let server = balancer.best_tcp_server();
     let svr_cfg = server.server_config();
 
-    auto_proxy_then!(context, server.as_ref(), addr, |remote| {
-        let mut remote = remote?;
+    let mut remote = AutoProxyClientStream::connect(context, &server, addr).await?;
 
-        #[cfg(feature = "rate-limit")]
-        let mut stream = shadowsocks::transport::RateLimitedStream::from_stream(stream, context.rate_limiter());
-
-        establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
-    })
+    establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, &addr).await
 }
 
 async fn handle_redir_client(
-    context: Arc<ServiceContext>,
+    context: &Arc<ServiceContext>,
     balancer: PingBalancer,
     s: TcpStream,
     peer_addr: SocketAddr,
@@ -128,7 +120,7 @@ pub async fn run_tcp_redir(
                 }
             };
 
-            if let Err(err) = handle_redir_client(context, balancer, socket, peer_addr, dst_addr).await {
+            if let Err(err) = handle_redir_client(&context, balancer, socket, peer_addr, dst_addr).await {
                 debug!("TCP redirect client, error: {:?}", err);
             }
         });

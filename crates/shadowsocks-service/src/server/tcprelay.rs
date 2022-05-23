@@ -11,7 +11,7 @@ use std::{
 use log::{debug, error, info, trace, warn};
 use shadowsocks::{
     config::ServerProtocol,
-    crypto::v1::CipherKind,
+    crypto::CipherKind,
     net::{AcceptOpts, Destination},
     relay::{
         socks5::{Address, Error as Socks5Error},
@@ -20,7 +20,7 @@ use shadowsocks::{
     timeout::Sleep,
     transport::{
         direct::{TcpAcceptor, TcpConnector},
-        Acceptor, Connection, Connector, StreamConnection,
+        Acceptor, Connection, Connector, Device, StreamConnection,
     },
     ServerAddr, ServerConfig,
 };
@@ -32,7 +32,10 @@ use tokio::{
 
 use crate::net::{utils::ignore_until_end, MonProxyStream};
 
-use super::{connection::ConnectionInfo, context::ServiceContext};
+use super::{
+    connection::{ConnectionInfo, ConnectionStat},
+    context::ServiceContext,
+};
 
 #[cfg(feature = "rate-limit")]
 use shadowsocks::transport::RateLimiter;
@@ -283,6 +286,11 @@ impl TcpServer {
                 }
             };
 
+            if self.context.check_client_blocked(&peer_addr) {
+                warn!("access denied from {} by ACL rules", peer_addr);
+                continue;
+            }
+
             let client = TcpServerClient {
                 context: self.context.clone(),
                 connector: self.connector.clone(),
@@ -308,7 +316,7 @@ impl TcpServer {
                     );
                     let method = ss_cfg.method();
                     tokio::spawn(async move {
-                        if let Err(err) = client.serve(method, local_stream).await {
+                        if let Err(err) = client.serve_ss(method, local_stream, connection_stat.clone()).await {
                             debug!("tcp server stream aborted with error: {}", err);
                         }
 
@@ -381,28 +389,35 @@ struct TcpServerClient {
 }
 
 impl TcpServerClient {
-    async fn serve<IS>(self, method: CipherKind, mut stream: ProxyServerStream<MonProxyStream<IS>>) -> io::Result<()>
+    async fn serve_ss<IS>(
+        self,
+        method: CipherKind,
+        mut stream: ProxyServerStream<IS>,
+        connection_stat: Arc<ConnectionStat>,
+    ) -> io::Result<()>
     where
-        IS: StreamConnection,
+        IS: StreamConnection + 'static,
     {
-        let connection_stat = self.context.connection_stat();
-
-        let mut request_timeout = None;
-        if let Some(base_timeout) = self.request_recv_timeout {
-            request_timeout = Some(base_timeout + Duration::from_secs(rand::random::<u64>() % base_timeout.as_secs()));
-        }
-
-        let target_addr = match match request_timeout {
-            None => Address::read_from(&mut stream).await,
-            Some(d) => match time::timeout(d, Address::read_from(&mut stream)).await {
-                Ok(r) => r,
-                Err(..) => Err(Socks5Error::IoError(ErrorKind::TimedOut.into())),
-            },
-        } {
+        // let target_addr = match Address::read_from(&mut self.stream).await {
+        let target_addr = match timeout_fut(self.timeout, stream.handshake()).await {
             Ok(a) => a,
-            Err(Socks5Error::IoError(ref err)) if err.kind() == ErrorKind::UnexpectedEof => {
+            // Err(Socks5Error::IoError(ref err)) if err.kind() == ErrorKind::UnexpectedEof => {
+            //     debug!(
+            //         "handshake failed, received EOF before a complete target Address, peer: {}",
+            //         self.peer_addr
+            //     );
+            //     return Ok(());
+            // }
+            Err(err) if err.kind() == ErrorKind::UnexpectedEof => {
                 debug!(
                     "handshake failed, received EOF before a complete target Address, peer: {}",
+                    self.peer_addr
+                );
+                return Ok(());
+            }
+            Err(err) if err.kind() == ErrorKind::TimedOut => {
+                debug!(
+                    "handshake failed, timeout before a complete target Address, peer: {}",
                     self.peer_addr
                 );
                 return Ok(());
@@ -410,11 +425,25 @@ impl TcpServerClient {
             Err(err) => {
                 // https://github.com/shadowsocks/shadowsocks-rust/issues/292
                 //
-                // Keep connection open.
+                // Keep connection open. Except AEAD-2022
                 warn!(
                     "handshake failed, maybe wrong method or key, or under replay attacks. peer: {}, error: {}",
                     self.peer_addr, err
                 );
+
+                #[cfg(feature = "aead-cipher-2022")]
+                if method.is_aead_2022() {
+                    // Set SO_LINGER(0) for misbehave clients, which will eventually receive RST. (ECONNRESET)
+                    // This will also prevent the socket entering TIME_WAIT state.
+                    stream.into_inner().physical_device().apply(|stream| match stream {
+                        Device::Tcp(stream) => {
+                            let _ = stream.set_linger(Some(Duration::ZERO));
+                        }
+                        _ => {}
+                    });
+
+                    return Ok(());
+                }
 
                 // Unwrap and get the plain stream.
                 // Otherwise it will keep reporting decryption error before reaching EOF.

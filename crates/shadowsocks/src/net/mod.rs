@@ -21,6 +21,9 @@ pub mod tcp;
 pub mod udp;
 pub mod util;
 
+#[cfg(any(unix, windows))]
+pub use util::check_peekable;
+
 /// Address family `AF_INET`, `AF_INET6`
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AddrFamily {

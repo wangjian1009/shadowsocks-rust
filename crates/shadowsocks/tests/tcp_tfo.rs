@@ -15,17 +15,14 @@ use log::debug;
 use shadowsocks::{
     config::{ServerProtocol, ServerType, ShadowsocksConfig},
     context::Context,
-    crypto::v1::CipherKind,
+    crypto::CipherKind,
     net::{AcceptOpts, ConnectOpts},
     relay::{
         socks5::Address,
         tcprelay::utils::{copy_from_encrypted, copy_to_encrypted},
     },
-    transport::{
-        direct::{TcpAcceptor, TcpConnector},
-        Acceptor, Connection,
-    },
-    ProxyClientStream, ServerConfig,
+    transport::direct::TcpConnector,
+    ProxyClientStream, ProxyListener, ServerConfig,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -48,22 +45,20 @@ async fn tcp_tunnel_tfo() {
         let mut accept_opts = AcceptOpts::default();
         accept_opts.tcp.fastopen = true;
 
-        let mut listener = TcpAcceptor::bind_server_with_opts(context.as_ref(), svr_cfg.external_addr(), accept_opts)
+        let svr_ss_cfg = match svr_cfg.protocol() {
+            ServerProtocol::SS(c) => c,
+            _ => unreachable!(),
+        };
+
+        let listener = ProxyListener::bind_with_opts(context, &svr_cfg, svr_ss_cfg, accept_opts)
             .await
             .unwrap();
 
-        while let Ok((stream, peer_addr)) = listener.accept().await {
-            let mut stream = match stream {
-                Connection::Stream(stream) => stream,
-                Connection::Packet { .. } => unreachable!(),
-            };
-
-            let peer_addr = peer_addr.unwrap();
-
+        while let Ok((mut stream, peer_addr)) = listener.accept().await {
             debug!("accepted {}", peer_addr);
 
             tokio::spawn(async move {
-                let addr = Address::read_from(&mut stream).await.unwrap();
+                let addr = stream.handshake().await.unwrap();
                 let remote = match addr {
                     Address::SocketAddress(a) => TcpStream::connect(a).await.unwrap(),
                     Address::DomainNameAddress(name, port) => TcpStream::connect((name.as_str(), port)).await.unwrap(),
@@ -100,7 +95,7 @@ async fn tcp_tunnel_tfo() {
         } else {
             unreachable!();
         },
-        ("www.example.com".to_owned(), 80).into(),
+        &("www.example.com".to_owned(), 80).into(),
         &connect_opts,
     )
     .await

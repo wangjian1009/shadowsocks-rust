@@ -9,16 +9,17 @@ use std::{
 use futures::{future, ready};
 use kcp::{Error as KcpError, KcpResult};
 use log::trace;
+
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{
-    net::{ConnectOpts, Destination, UdpSocket},
-    ServerAddr,
+    net::{ConnectOpts, UdpSocket},
+    transport::DeviceOrGuard,
 };
 
 use super::{config::KcpConfig, session::KcpSession, skcp::KcpSocket};
 
-use super::super::StreamConnection;
+use super::super::{Device, DeviceGuard, StreamConnection};
 
 #[cfg(feature = "rate-limit")]
 use super::super::rate_limit::RateLimiter;
@@ -172,17 +173,29 @@ impl AsyncWrite for KcpStream {
     }
 }
 
-impl StreamConnection for KcpStream {
-    fn local_addr(&self) -> io::Result<Destination> {
-        Ok(Destination::Tcp(ServerAddr::SocketAddr(
-            self.session.kcp_socket().lock().udp_socket().local_addr()?,
-        )))
-    }
+struct KcpStreamDeviceGuard<'a> {
+    guard: spin::MutexGuard<'a, KcpSocket>,
+}
 
+impl<'a> DeviceGuard for KcpStreamDeviceGuard<'a> {
+    fn device(&self) -> DeviceOrGuard {
+        DeviceOrGuard::Device(Device::Udp(self.guard.udp_socket().as_ref()))
+    }
+}
+
+impl StreamConnection for KcpStream {
     fn check_connected(&self) -> bool {
         !self.session.closed()
     }
 
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, _rate_limit: Option<Arc<RateLimiter>>) {}
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        let guard = KcpStreamDeviceGuard {
+            guard: self.session.kcp_socket().lock(),
+        };
+
+        DeviceOrGuard::Guard(Box::new(guard))
+    }
 }

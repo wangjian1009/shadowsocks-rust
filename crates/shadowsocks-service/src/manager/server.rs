@@ -8,7 +8,7 @@ use log::{error, info, trace};
 use shadowsocks::{
     config::{Mode, ServerConfig, ServerProtocol, ServerType, ShadowsocksConfig},
     context::{Context, SharedContext},
-    crypto::v1::CipherKind,
+    crypto::CipherKind,
     dns_resolver::DnsResolver,
     manager::protocol::{
         self, AddRequest, AddResponse, ErrorResponse, ListResponse, ManagerRequest, PingResponse, RemoveRequest,
@@ -72,6 +72,7 @@ pub struct Manager {
     acl: Option<Arc<AccessControl>>,
     ipv6_first: bool,
     security: SecurityConfig,
+    worker_count: usize,
 }
 
 impl Manager {
@@ -93,6 +94,7 @@ impl Manager {
             acl: None,
             ipv6_first: false,
             security: SecurityConfig::default(),
+            worker_count: 1,
         }
     }
 
@@ -140,6 +142,14 @@ impl Manager {
     /// Set security config
     pub fn set_security_config(&mut self, security: SecurityConfig) {
         self.security = security;
+    }
+
+    /// Set runtime worker count
+    ///
+    /// Should be replaced with tokio's metric API when it is stablized.
+    /// https://github.com/tokio-rs/tokio/issues/4073
+    pub fn set_worker_count(&mut self, worker_count: usize) {
+        self.worker_count = worker_count;
     }
 
     /// Start serving
@@ -224,6 +234,8 @@ impl Manager {
         }
 
         server.set_security_config(&self.security);
+
+        server.set_worker_count(self.worker_count);
 
         let server_port = server.config().addr().port();
 
@@ -356,16 +368,21 @@ impl Manager {
         let manager_addr = self.svr_cfg.addr.to_string();
 
         // Start server process
-        let child_result = Command::new(&self.svr_cfg.server_program)
+        let mut child_command = Command::new(&self.svr_cfg.server_program);
+        child_command
             .arg("-c")
             .arg(&config_file_path)
             .arg("--daemonize")
             .arg("--daemonize-pid")
             .arg(&pid_path)
             .arg("--manager-addr")
-            .arg(&manager_addr)
-            .kill_on_drop(false)
-            .spawn();
+            .arg(&manager_addr);
+
+        if let Some(ref acl) = self.acl {
+            child_command.arg("--acl").arg(acl.file_path().to_str().expect("acl"));
+        }
+
+        let child_result = child_command.kill_on_drop(false).spawn();
 
         if let Err(err) = child_result {
             error!(

@@ -69,16 +69,17 @@ use shadowsocks::{
         ManagerAddr, Mode, ReplayAttackPolicy, ServerAddr, ServerConfig, ServerProtocol, ServerWeight,
         ShadowsocksConfig,
     },
-    crypto::v1::CipherKind,
+    crypto::CipherKind,
     plugin::PluginConfig,
 };
-
 #[cfg(feature = "trust-dns")]
 use trust_dns_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 
 use crate::acl::AccessControl;
 #[cfg(feature = "local-dns")]
 use crate::local::dns::NameServerAddr;
+#[cfg(feature = "local")]
+use crate::local::socks::config::Socks5AuthConfig;
 
 #[cfg(feature = "rate-limit")]
 use shadowsocks::transport::BoundWidth;
@@ -263,6 +264,11 @@ struct SSLocalExtConfig {
     #[cfg(feature = "local-tun")]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_interface_address: Option<String>,
+
+    /// SOCKS5
+    #[cfg(feature = "local")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    socks5_auth_config_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -275,7 +281,8 @@ struct SSServerExtConfig {
     #[serde(alias = "port")]
     server_port: u16,
 
-    password: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
     method: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -840,6 +847,10 @@ pub struct LocalConfig {
 
     /// Set `IPV6_V6ONLY` for listener socket
     pub ipv6_only: bool,
+
+    /// SOCKS5 Authentication configuration
+    #[cfg(feature = "local")]
+    pub socks5_auth: Socks5AuthConfig,
 }
 
 impl LocalConfig {
@@ -876,6 +887,9 @@ impl LocalConfig {
             tun_device_fd_from_path: None,
 
             ipv6_only: false,
+
+            #[cfg(feature = "local")]
+            socks5_auth: Socks5AuthConfig::default(),
         }
     }
 
@@ -1000,7 +1014,6 @@ pub struct BalancerConfig {
 pub struct Config {
     /// Remote ShadowSocks server configurations
     pub server: Vec<ServerConfig>,
-
     /// Local server configuration
     pub local: Vec<LocalConfig>,
 
@@ -1108,6 +1121,11 @@ pub struct Config {
     /// Configuration file path, the actual path of the configuration.
     /// This is normally for auto-reloading if implementation supports.
     pub config_path: Option<PathBuf>,
+
+    #[doc(hidden)]
+    /// Workers in runtime
+    /// It should be replaced with metrics APIs: https://github.com/tokio-rs/tokio/issues/4073
+    pub worker_count: usize,
 }
 
 /// Configuration parsing error kind
@@ -1177,7 +1195,6 @@ impl Config {
     pub fn new(config_type: ConfigType) -> Config {
         Config {
             server: Vec::new(),
-
             local: Vec::new(),
 
             dns: DnsConfig::default(),
@@ -1239,6 +1256,8 @@ impl Config {
             balancer: BalancerConfig::default(),
 
             config_path: None,
+
+            worker_count: 1,
         }
     }
 
@@ -1481,6 +1500,11 @@ impl Config {
                             local_config.tun_interface_name = Some(tun_interface_name);
                         }
 
+                        #[cfg(feature = "local")]
+                        if let Some(socks5_auth_config_path) = local.socks5_auth_config_path {
+                            local_config.socks5_auth = Socks5AuthConfig::load_from_file(&socks5_auth_config_path)?;
+                        }
+
                         nconfig.local.push(local_config);
                     }
                 }
@@ -1509,69 +1533,82 @@ impl Config {
             }
 
             nconfig.server.push(nsvr);
-        } else {
-            // Standard config
-            // Server
-            match (config.server, config.server_port, config.password, &config.method) {
-                (Some(address), Some(port), Some(pwd), Some(m)) => {
-                    let addr = match address.parse::<Ipv4Addr>() {
-                        Ok(v4) => ServerAddr::SocketAddr(SocketAddr::V4(SocketAddrV4::new(v4, port))),
-                        Err(..) => match address.parse::<Ipv6Addr>() {
-                            Ok(v6) => ServerAddr::SocketAddr(SocketAddr::V6(SocketAddrV6::new(v6, port, 0, 0))),
-                            Err(..) => ServerAddr::DomainName(address, port),
-                        },
-                    };
+        }
 
-                    let method = match m.parse::<CipherKind>() {
-                        Ok(m) => m,
-                        Err(..) => {
+        // Standard config
+        // Server
+        match (config.server, config.server_port, config.password, &config.method) {
+            (Some(address), Some(port), pwd_opt, Some(m)) => {
+                let addr = match address.parse::<Ipv4Addr>() {
+                    Ok(v4) => ServerAddr::SocketAddr(SocketAddr::V4(SocketAddrV4::new(v4, port))),
+                    Err(..) => match address.parse::<Ipv6Addr>() {
+                        Ok(v6) => ServerAddr::SocketAddr(SocketAddr::V6(SocketAddrV6::new(v6, port, 0, 0))),
+                        Err(..) => ServerAddr::DomainName(address, port),
+                    },
+                };
+
+                let method = match m.parse::<CipherKind>() {
+                    Ok(m) => m,
+                    Err(..) => {
+                        let err = Error::new(
+                            ErrorKind::Invalid,
+                            "unsupported method",
+                            Some(format!("`{}` is not a supported method", m)),
+                        );
+                        return Err(err);
+                    }
+                };
+
+                // Only "password" support getting from environment variable.
+                let password = match pwd_opt {
+                    Some(ref pwd) => read_variable_field_value(pwd),
+                    None => {
+                        if method.is_none() {
+                            String::new().into()
+                        } else {
                             let err = Error::new(
-                                ErrorKind::Invalid,
-                                "unsupported method",
-                                Some(format!("`{}` is not a supported method", m)),
+                                ErrorKind::MissingField,
+                                "`password` is required",
+                                Some(format!("`password` is required for method {}", method)),
                             );
                             return Err(err);
                         }
-                    };
-
-                    // Only "password" support getting from environment variable.
-                    let password = read_variable_field_value(&pwd);
-
-                    let mut nsvr =
-                        ServerConfig::new(addr, ServerProtocol::SS(ShadowsocksConfig::new(password, method)));
-                    nsvr.set_mode(global_mode);
-
-                    if let Some(ref p) = config.plugin {
-                        // SIP008 allows "plugin" to be an empty string
-                        // Empty string implies "no plugin"
-                        if !p.is_empty() {
-                            let plugin = PluginConfig {
-                                plugin: p.clone(),
-                                plugin_opts: config.plugin_opts.clone(),
-                                plugin_args: config.plugin_args.clone().unwrap_or_default(),
-                            };
-                            nsvr.set_plugin(plugin);
-                        }
                     }
+                };
 
-                    if let Some(timeout) = config.timeout.map(Duration::from_secs) {
-                        nsvr.set_timeout(timeout);
+                let mut nsvr = ServerConfig::new(addr, ServerProtocol::SS(ShadowsocksConfig::new(password, method)));
+                nsvr.set_mode(global_mode);
+
+                if let Some(ref p) = config.plugin {
+                    // SIP008 allows "plugin" to be an empty string
+                    // Empty string implies "no plugin"
+                    if !p.is_empty() {
+                        let plugin = PluginConfig {
+                            plugin: p.clone(),
+                            plugin_opts: config.plugin_opts.clone(),
+                            plugin_args: config.plugin_args.clone().unwrap_or_default(),
+                        };
+                        nsvr.set_plugin(plugin);
                     }
+                }
 
-                    nconfig.server.push(nsvr);
+                if let Some(timeout) = config.timeout.map(Duration::from_secs) {
+                    nsvr.set_timeout(timeout);
                 }
-                (None, None, None, Some(_)) if config_type.is_manager() => {
-                    // Set the default method for manager
-                }
-                (None, None, None, None) => (),
-                _ => {
-                    let err = Error::new(
-                        ErrorKind::Malformed,
-                        "`server`, `server_port`, `method`, `password` must be provided together",
-                        None,
-                    );
-                    return Err(err);
-                }
+
+                nconfig.server.push(nsvr);
+            }
+            (None, None, None, Some(_)) if config_type.is_manager() => {
+                // Set the default method for manager
+            }
+            (None, None, None, None) => (),
+            _ => {
+                let err = Error::new(
+                    ErrorKind::Malformed,
+                    "`server`, `server_port`, `method`, `password` must be provided together",
+                    None,
+                );
+                return Err(err);
             }
         }
 
@@ -1607,7 +1644,21 @@ impl Config {
                 };
 
                 // Only "password" support getting from environment variable.
-                let password = read_variable_field_value(&svr.password);
+                let password = match svr.password {
+                    Some(ref pwd) => read_variable_field_value(pwd),
+                    None => {
+                        if method.is_none() {
+                            String::new().into()
+                        } else {
+                            let err = Error::new(
+                                ErrorKind::MissingField,
+                                "`password` is required",
+                                Some(format!("`password` is required for method {}", method)),
+                            );
+                            return Err(err);
+                        }
+                    }
+                };
 
                 let mut nsvr = ServerConfig::new(addr, ServerProtocol::SS(ShadowsocksConfig::new(password, method)));
 
@@ -1972,12 +2023,15 @@ impl Config {
             }
 
             if c.password.is_some() {
-                c.password = match crate::decrypt(c.password.as_ref().unwrap().as_str()) {
+                match crate::decrypt(c.password.as_ref().unwrap().as_str()) {
                     Ok(v) => {
                         log::info!("env-crypt: password {} => {}", c.password.as_ref().unwrap(), v);
-                        Some(v)
+                        c.password = Some(v)
                     }
-                    Err(e) => return Err(Error::new(ErrorKind::CryptError, "decrypt password error", Some(e))),
+                    Err(e) => {
+                        log::warn!("env-crypt: ignore decrypt password, error={}", e);
+                        // return Err(Error::new(ErrorKind::CryptError, "decrypt password error", Some(e)))
+                    }
                 };
             }
         }
@@ -2025,15 +2079,6 @@ impl Config {
 
             for local_config in &self.local {
                 local_config.check_integrity()?;
-            }
-
-            if self.server.is_empty() {
-                let err = Error::new(
-                    ErrorKind::MissingField,
-                    "missing `servers` for client configuration",
-                    None,
-                );
-                return Err(err);
             }
 
             // Balancer related checks
@@ -2235,6 +2280,9 @@ impl fmt::Display for Config {
                         tun_interface_name: local.tun_interface_name.clone(),
                         #[cfg(feature = "local-tun")]
                         tun_interface_address: local.tun_interface_address.as_ref().map(ToString::to_string),
+
+                        #[cfg(feature = "local")]
+                        socks5_auth_config_path: None,
                     };
                     jlocals.push(jlocal);
                 }
@@ -2261,7 +2309,11 @@ impl fmt::Display for Config {
                 match svr.protocol() {
                     ServerProtocol::SS(cfg) => {
                         jconf.method = Some(cfg.method().to_string());
-                        jconf.password = Some(cfg.password().to_string());
+                        jconf.password = if cfg.method().is_none() {
+                            None
+                        } else {
+                            Some(cfg.password().to_string())
+                        };
                     }
                     #[cfg(feature = "trojan")]
                     ServerProtocol::Trojan(_cfg) => {}
@@ -2296,7 +2348,13 @@ impl fmt::Display for Config {
                             ServerAddr::DomainName(.., port) => port,
                         },
                         password: match svr.protocol() {
-                            ServerProtocol::SS(cfg) => cfg.password().to_string(),
+                            ServerProtocol::SS(cfg) => {
+                                if cfg.method().is_none() {
+                                    None
+                                } else {
+                                    Some(cfg.password().to_string())
+                                }
+                            }
                             #[cfg(feature = "trojan")]
                             ServerProtocol::Trojan(..) => unreachable!(),
                             #[cfg(feature = "vless")]

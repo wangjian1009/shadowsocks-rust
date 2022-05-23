@@ -13,9 +13,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::net::Destination;
-
-use super::StreamConnection;
+use super::{DeviceOrGuard, StreamConnection};
 pub use acceptor::{WebSocketAcceptor, WebSocketAcceptorConfig};
 pub use connector::{WebSocketConnector, WebSocketConnectorConfig};
 
@@ -29,10 +27,6 @@ pub struct BinaryWsStream<T: StreamConnection> {
 }
 
 impl<T: StreamConnection> StreamConnection for BinaryWsStream<T> {
-    fn local_addr(&self) -> io::Result<Destination> {
-        self.inner.get_ref().local_addr()
-    }
-
     fn check_connected(&self) -> bool {
         self.inner.get_ref().check_connected()
     }
@@ -40,6 +34,10 @@ impl<T: StreamConnection> StreamConnection for BinaryWsStream<T> {
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, rate_limit: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
         self.inner.get_mut().set_rate_limit(rate_limit);
+    }
+
+    fn physical_device(&self) -> DeviceOrGuard<'_> {
+        self.inner.get_ref().physical_device()
     }
 }
 

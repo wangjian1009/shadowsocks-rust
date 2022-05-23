@@ -1,11 +1,19 @@
 //! Shadowsocks server
 
-use std::{io, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    io::{self, ErrorKind},
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use cfg_if::cfg_if;
-use futures::{future, FutureExt};
+use futures::{future, ready};
 use log::trace;
 use shadowsocks::net::{AcceptOpts, ConnectOpts};
+use tokio::task::JoinHandle;
 
 use crate::{
     config::{Config, ConfigType},
@@ -147,6 +155,10 @@ pub async fn run(config: Config) -> io::Result<()> {
             server.set_ipv6_first(config.ipv6_first);
         }
 
+        if config.worker_count >= 1 {
+            server.set_worker_count(config.worker_count);
+        }
+
         server.set_security_config(&config.security);
 
         servers.push(server);
@@ -167,16 +179,52 @@ pub async fn run(config: Config) -> io::Result<()> {
         maintain_svr = Some(maintain::MaintainServer::new(server_infos));
     }
 
+    #[cfg(feature = "server-maintain")]
+    if maintain_svr.is_none() && servers.len() == 1 {
+        let server = servers.pop().unwrap();
+        return server.run().await;
+    }
+
+    #[cfg(not(efeature = "server-maintain"))]
+    if servers.len() == 1 {
+        let server = servers.pop().unwrap();
+        return server.run().await;
+    }
+
     let mut vfut = Vec::with_capacity(servers.len());
+
     for server in servers {
-        vfut.push(server.run().boxed());
+        vfut.push(ServerHandle(tokio::spawn(async move { server.run().await })));
     }
 
     #[cfg(feature = "server-maintain")]
     if let Some(maintain_svr) = maintain_svr {
-        vfut.push(maintain_svr.run(config.maintain_addr.unwrap()).boxed());
+        vfut.push(ServerHandle(tokio::spawn(async move {
+            maintain_svr.run(config.maintain_addr.unwrap()).await
+        })));
     }
 
     let (res, ..) = future::select_all(vfut).await;
     res
+}
+
+struct ServerHandle(JoinHandle<io::Result<()>>);
+
+impl Drop for ServerHandle {
+    #[inline]
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl Future for ServerHandle {
+    type Output = io::Result<()>;
+
+    #[inline]
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match ready!(Pin::new(&mut self.0).poll(cx)) {
+            Ok(res) => res.into(),
+            Err(err) => Err(io::Error::new(ErrorKind::Other, err)).into(),
+        }
+    }
 }
