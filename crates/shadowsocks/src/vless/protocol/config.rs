@@ -14,7 +14,6 @@ pub struct Fallback {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub clients: Vec<User>,
-    pub decryption: Option<String>,
     pub fallbacks: Option<Vec<Fallback>>,
     pub mux: Option<ClientStrategy>,
 }
@@ -23,7 +22,6 @@ impl Config {
     pub fn new() -> Self {
         Self {
             clients: Vec::new(),
-            decryption: None,
             fallbacks: None,
             mux: None,
         }

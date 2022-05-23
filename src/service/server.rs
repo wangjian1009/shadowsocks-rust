@@ -522,7 +522,7 @@ pub fn main(matches: &ArgMatches) {
                     plugin_args: Vec::new(),
                 };
 
-                sc.set_plugin(plugin);
+                sc.must_be_ss_mut(|c| c.set_plugin(plugin));
             }
 
             // For historical reason, servers that are created from command-line have to be tcp_only.

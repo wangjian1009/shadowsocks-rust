@@ -17,7 +17,7 @@ pub fn read_server_password(server_name: &str) -> io::Result<String> {
 
     // read from TTY
     let tty_prompt = format!("({}) Password: ", server_name);
-    if let Ok(pwd) = rpassword::prompt_password_stdout(&tty_prompt) {
+    if let Ok(pwd) = rpassword::prompt_password(&tty_prompt) {
         debug!("got server {} password from tty prompt", server_name);
         return Ok(pwd);
     }

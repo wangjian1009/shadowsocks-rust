@@ -432,9 +432,9 @@ impl Manager {
                 plugin_opts: req.plugin_opts.clone(),
                 plugin_args: Vec::new(),
             };
-            svr_cfg.set_plugin(p);
+            svr_cfg.must_be_ss_mut(|c| c.set_plugin(p));
         } else if let Some(ref plugin) = self.svr_cfg.plugin {
-            svr_cfg.set_plugin(plugin.clone());
+            svr_cfg.must_be_ss_mut(|c| c.set_plugin(plugin.clone()));
         }
 
         let mode = match req.mode {

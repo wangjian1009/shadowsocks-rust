@@ -1588,7 +1588,7 @@ impl Config {
                             plugin_opts: config.plugin_opts.clone(),
                             plugin_args: config.plugin_args.clone().unwrap_or_default(),
                         };
-                        nsvr.set_plugin(plugin);
+                        nsvr.must_be_ss_mut(|cfg| cfg.set_plugin(plugin));
                     }
                 }
 
@@ -1687,7 +1687,7 @@ impl Config {
                             plugin_opts: svr.plugin_opts,
                             plugin_args: svr.plugin_args.unwrap_or_default(),
                         };
-                        nsvr.set_plugin(plugin);
+                        nsvr.must_be_ss_mut(|c| c.set_plugin(plugin));
                     }
                 }
 
@@ -1700,7 +1700,7 @@ impl Config {
                 }
 
                 if let Some(id) = svr.id {
-                    nsvr.set_id(id);
+                    nsvr.must_be_ss_mut(|c| c.set_id(id));
                 }
 
                 if svr.tcp_weight.is_some() || svr.udp_weight.is_some() {
@@ -2058,7 +2058,7 @@ impl Config {
     /// Check if there are any plugin are enabled with servers
     pub fn has_server_plugins(&self) -> bool {
         for server in &self.server {
-            if server.plugin().is_some() {
+            if server.if_ss(|c| c.plugin().is_some()).unwrap_or(false) {
                 return true;
             }
         }
@@ -2117,7 +2117,7 @@ impl Config {
 
         for server in &self.server {
             // Plugin shouldn't be an empty string
-            if let Some(plugin) = server.plugin() {
+            if let Some(plugin) = server.if_ss(|c| c.plugin()).unwrap_or(None) {
                 if plugin.plugin.trim().is_empty() {
                     let err = Error::new(ErrorKind::Malformed, "`plugin` shouldn't be an empty string", None);
                     return Err(err);
@@ -2321,14 +2321,16 @@ impl fmt::Display for Config {
                     ServerProtocol::Vless(_cfg) => {}
                 }
 
-                jconf.plugin = svr.plugin().map(|p| p.plugin.to_string());
-                jconf.plugin_opts = svr.plugin().and_then(|p| p.plugin_opts.clone());
-                jconf.plugin_args = svr.plugin().and_then(|p| {
-                    if p.plugin_args.is_empty() {
-                        None
-                    } else {
-                        Some(p.plugin_args.clone())
-                    }
+                svr.if_ss(|svr| {
+                    jconf.plugin = svr.plugin().map(|p| p.plugin.to_string());
+                    jconf.plugin_opts = svr.plugin().and_then(|p| p.plugin_opts.clone());
+                    jconf.plugin_args = svr.plugin().and_then(|p| {
+                        if p.plugin_args.is_empty() {
+                            None
+                        } else {
+                            Some(p.plugin_args.clone())
+                        }
+                    });
                 });
                 jconf.timeout = svr.timeout().map(|t| t.as_secs());
                 jconf.mode = Some(svr.mode().to_string());
@@ -2368,18 +2370,24 @@ impl fmt::Display for Config {
                             ServerProtocol::Vless(..) => unreachable!(),
                         },
                         disabled: None,
-                        plugin: svr.plugin().map(|p| p.plugin.to_string()),
-                        plugin_opts: svr.plugin().and_then(|p| p.plugin_opts.clone()),
-                        plugin_args: svr.plugin().and_then(|p| {
-                            if p.plugin_args.is_empty() {
-                                None
-                            } else {
-                                Some(p.plugin_args.clone())
-                            }
-                        }),
+                        plugin: svr.if_ss(|c| c.plugin().map(|p| p.plugin.to_string())).unwrap_or(None),
+                        plugin_opts: svr
+                            .if_ss(|c| c.plugin().and_then(|p| p.plugin_opts.clone()))
+                            .unwrap_or(None),
+                        plugin_args: svr
+                            .if_ss(|c| {
+                                c.plugin().and_then(|p| {
+                                    if p.plugin_args.is_empty() {
+                                        None
+                                    } else {
+                                        Some(p.plugin_args.clone())
+                                    }
+                                })
+                            })
+                            .unwrap_or(None),
                         timeout: svr.timeout().map(|t| t.as_secs()),
                         remarks: svr.remarks().map(ToOwned::to_owned),
-                        id: svr.id().map(ToOwned::to_owned),
+                        id: svr.if_ss(|c| c.id().map(ToOwned::to_owned)).unwrap_or(None),
                         mode: Some(svr.mode().to_string()),
                         tcp_weight: if (svr.weight().tcp_weight() - 1.0).abs() > f32::EPSILON {
                             Some(svr.weight().tcp_weight())

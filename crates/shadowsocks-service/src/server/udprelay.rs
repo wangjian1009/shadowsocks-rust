@@ -3,7 +3,7 @@
 use std::{
     cell::RefCell,
     io::{self, ErrorKind},
-    net::SocketAddr,
+    net::{SocketAddr, SocketAddrV6},
     sync::Arc,
     time::Duration,
 };
@@ -17,7 +17,7 @@ use shadowsocks::{
     config::ShadowsocksConfig,
     crypto::{CipherCategory, CipherKind},
     lookup_then,
-    net::{AcceptOpts, UdpSocket as OutboundUdpSocket},
+    net::{AcceptOpts, AddrFamily, UdpSocket as OutboundUdpSocket},
     relay::{
         socks5::Address,
         udprelay::{options::UdpSocketControlData, ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
@@ -662,25 +662,59 @@ impl UdpAssociationContext {
         }
     }
 
-    async fn send_received_outbound_packet(&mut self, target_addr: SocketAddr, data: &[u8]) -> io::Result<()> {
-        let socket = match target_addr {
-            SocketAddr::V4(..) => match self.outbound_ipv4_socket {
+    async fn send_received_outbound_packet(&mut self, mut target_addr: SocketAddr, data: &[u8]) -> io::Result<()> {
+        const UDP_SOCKET_SUPPORT_DUAL_STACK: bool = cfg!(any(
+            target_os = "linux",
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "watchos",
+            target_os = "tvos",
+            target_os = "freebsd",
+            // target_os = "dragonfly",
+            // target_os = "netbsd",
+            target_os = "windows",
+        ));
+
+        let socket = if UDP_SOCKET_SUPPORT_DUAL_STACK {
+            match self.outbound_ipv6_socket {
                 Some(ref mut socket) => socket,
                 None => {
                     let socket =
-                        OutboundUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref()).await?;
-                    self.outbound_ipv4_socket.insert(socket)
-                }
-            },
-            SocketAddr::V6(..) => match self.outbound_ipv6_socket {
-                Some(ref mut socket) => socket,
-                None => {
-                    let socket =
-                        OutboundUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref()).await?;
+                        OutboundUdpSocket::connect_any_with_opts(AddrFamily::Ipv6, self.context.connect_opts_ref())
+                            .await?;
                     self.outbound_ipv6_socket.insert(socket)
                 }
-            },
+            }
+        } else {
+            match target_addr {
+                SocketAddr::V4(..) => match self.outbound_ipv4_socket {
+                    Some(ref mut socket) => socket,
+                    None => {
+                        let socket =
+                            OutboundUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref())
+                                .await?;
+                        self.outbound_ipv4_socket.insert(socket)
+                    }
+                },
+                SocketAddr::V6(..) => match self.outbound_ipv6_socket {
+                    Some(ref mut socket) => socket,
+                    None => {
+                        let socket =
+                            OutboundUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref())
+                                .await?;
+                        self.outbound_ipv6_socket.insert(socket)
+                    }
+                },
+            }
         };
+
+        if UDP_SOCKET_SUPPORT_DUAL_STACK {
+            if let SocketAddr::V4(saddr) = target_addr {
+                let mapped_ip = saddr.ip().to_ipv6_mapped();
+                target_addr = SocketAddr::V6(SocketAddrV6::new(mapped_ip, saddr.port(), 0, 0));
+            }
+        }
 
         let n = socket.send_to(data, target_addr).await?;
         if n != data.len() {
@@ -734,6 +768,10 @@ impl UdpAssociationContext {
                 self.server_packet_id = match self.server_packet_id.checked_add(1) {
                     Some(i) => i,
                     None => {
+                        // FIXME: server_packet_id overflowed. There is no way to recover from this error.
+                        //
+                        // Application clients may open a new session when it couldn't receive proper respond.
+
                         warn!(
                             "udp failed to send back {} bytes to client {}, from target {}, server packet id overflowed",
                             data.len(),

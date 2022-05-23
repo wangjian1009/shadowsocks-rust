@@ -44,16 +44,17 @@ fn parse_vless_wss() {
         .add_user(0, "9af5ce16-8020-4530-85ba-290ef2290d1c", None)
         .unwrap();
 
-    vless_config.decryption = Some("194-test".to_owned());
-
     let mut expect_config = ServerConfig::new(
         "194.233.85.194:443".parse::<ServerAddr>().unwrap(),
         ServerProtocol::Vless(vless_config),
     );
+
+    expect_config.set_remarks("194-test");
+
     expect_config.set_connector_transport(Some(TransportConnectorConfig::Wss(
         WebSocketConnectorConfig {
             path: "/eaps2021sg".to_owned(),
-            host: DEFAULT_SNI.to_owned(),
+            host: crate::config::transport::DEFAULT_SNI.to_owned(),
         },
         TlsConnectorConfig {
             sni: "proxy0101.com".to_owned(),
@@ -80,12 +81,12 @@ fn parse_vless_mkcp() {
         .add_user(0, "c93b0258-6847-42c8-92ac-7b8ac8e390ad", None)
         .unwrap();
 
-    vless_config.decryption = Some("68-us".to_owned());
-
     let mut expect_config = ServerConfig::new(
         "104.237.56.68:7777".parse::<ServerAddr>().unwrap(),
         ServerProtocol::Vless(vless_config),
     );
+
+    expect_config.set_remarks("68-us");
 
     let mut mkcp_config = MkcpConfig::default();
     mkcp_config.header_config = Some(HeaderConfig::Wechat);
@@ -113,12 +114,12 @@ fn parse_vless_skcp() {
         .add_user(0, "c93b0258-6847-42c8-92ac-7b8ac8e390ad", None)
         .unwrap();
 
-    vless_config.decryption = Some("68-us".to_owned());
-
     let mut expect_config = ServerConfig::new(
         "104.237.56.68:7777".parse::<ServerAddr>().unwrap(),
         ServerProtocol::Vless(vless_config),
     );
+
+    expect_config.set_remarks("68-us");
 
     let mut skcp_config = SkcpConfig::default();
     skcp_config.header_config = Some(HeaderConfig::Wechat);
@@ -143,7 +144,7 @@ fn rebuild_vless_wss() {
     config.set_connector_transport(Some(TransportConnectorConfig::Wss(
         WebSocketConnectorConfig {
             path: "/eaps2021sg".to_owned(),
-            host: DEFAULT_SNI.to_owned(),
+            host: crate::config::transport::DEFAULT_SNI.to_owned(),
         },
         TlsConnectorConfig {
             sni: "proxy0101.com".to_owned(),

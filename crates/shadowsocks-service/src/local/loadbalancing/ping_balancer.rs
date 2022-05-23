@@ -250,10 +250,15 @@ impl PingBalancerContext {
                 let server = Arc::get_mut(server).unwrap();
                 let svr_cfg = server.server_config_mut();
 
-                if let Some(p) = svr_cfg.plugin() {
+                let mut plutin = None;
+
+                if let Some(p) = svr_cfg.if_ss(|c| c.plugin()).unwrap_or(None) {
                     // Start Plugin Process
-                    let plugin = Plugin::start(p, svr_cfg.addr(), PluginMode::Client)?;
-                    svr_cfg.set_plugin_addr(plugin.local_addr().into());
+                    plutin = Some(Plugin::start(p, svr_cfg.addr(), PluginMode::Client)?);
+                }
+
+                if let Some(plugin) = plutin {
+                    svr_cfg.must_be_ss_mut(|c| c.set_plugin_addr(plugin.local_addr().into()));
                     plugins.push(plugin);
                 }
             }

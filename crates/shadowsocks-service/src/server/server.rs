@@ -189,9 +189,15 @@ impl Server {
         let connector = Arc::new(TcpConnector::new(Some(self.context.context())));
 
         if self.svr_cfg.mode().enable_tcp() {
-            if let Some(plugin_cfg) = self.svr_cfg.plugin() {
-                let plugin = Plugin::start(plugin_cfg, self.svr_cfg.addr(), PluginMode::Server)?;
-                self.svr_cfg.set_plugin_addr(plugin.local_addr().into());
+            let mut plugin = None;
+
+            if let Some(plugin_cfg) = self.svr_cfg.if_ss(|c| c.plugin()).unwrap_or(None) {
+                plugin = Some(Plugin::start(plugin_cfg, self.svr_cfg.addr(), PluginMode::Server)?);
+            };
+
+            if let Some(plugin) = plugin {
+                self.svr_cfg
+                    .must_be_ss_mut(|c| c.set_plugin_addr(plugin.local_addr().into()));
                 vfut.push(
                     async move {
                         match plugin.join().await {

@@ -1,8 +1,183 @@
+use super::*;
+
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::{fmt, str::FromStr};
 
-use crate::transport;
+#[cfg(feature = "transport-ws")]
+use crate::transport::websocket::{WebSocketAcceptorConfig, WebSocketConnectorConfig};
+
+#[cfg(feature = "transport-ws")]
+pub const DEFAULT_SNI: &str = "www.google.com";
+
+#[cfg(feature = "transport-tls")]
+use crate::transport::tls::{TlsAcceptorConfig, TlsConnectorConfig};
+
+#[cfg(any(feature = "transport-mkcp", feature = "transport-skcp"))]
+use crate::transport::{HeaderConfig, SecurityConfig};
+
+#[cfg(feature = "transport-mkcp")]
+use crate::transport::mkcp::MkcpConfig;
+
+#[cfg(feature = "transport-skcp")]
+use crate::transport::skcp::{KcpNoDelayConfig, SkcpConfig};
+
+impl ServerConfig {
+    /// 接受客户端的传输配置
+    pub fn set_acceptor_transport(&mut self, transport: Option<TransportAcceptorConfig>) {
+        self.acceptor_transport = transport;
+    }
+
+    pub fn acceptor_transport(&self) -> Option<&TransportAcceptorConfig> {
+        self.acceptor_transport.as_ref()
+    }
+
+    pub fn acceptor_transport_tag(&self) -> &str {
+        match self.acceptor_transport.as_ref() {
+            None => "()",
+            Some(transport) => match transport {
+                #[cfg(feature = "transport-ws")]
+                &TransportAcceptorConfig::Ws(..) => "(ws)",
+                #[cfg(feature = "transport-tls")]
+                &TransportAcceptorConfig::Tls(..) => "(tls)",
+                #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+                &TransportAcceptorConfig::Wss(..) => "(wss)",
+                #[cfg(feature = "transport-mkcp")]
+                &TransportAcceptorConfig::Mkcp(..) => "(mkcp)",
+                #[cfg(feature = "transport-skcp")]
+                &TransportAcceptorConfig::Skcp(..) => "(skcp)",
+            },
+        }
+    }
+
+    /// 连接服务器的传输配置
+    pub fn set_connector_transport(&mut self, transport: Option<TransportConnectorConfig>) {
+        self.connector_transport = transport;
+    }
+
+    pub fn connector_transport(&self) -> Option<&TransportConnectorConfig> {
+        self.connector_transport.as_ref()
+    }
+
+    pub fn connector_transport_tag(&self) -> &str {
+        match self.connector_transport.as_ref() {
+            None => "()",
+            Some(transport) => match transport {
+                #[cfg(feature = "transport-ws")]
+                &TransportConnectorConfig::Ws(..) => "(ws)",
+                #[cfg(feature = "transport-tls")]
+                &TransportConnectorConfig::Tls(..) => "(tls)",
+                #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+                &TransportConnectorConfig::Wss(..) => "(wss)",
+                #[cfg(feature = "transport-mkcp")]
+                &TransportConnectorConfig::Mkcp(..) => "(mkcp)",
+                #[cfg(feature = "transport-skcp")]
+                &TransportConnectorConfig::Skcp(..) => "(skcp)",
+            },
+        }
+    }
+
+    pub(crate) fn to_url_transport(params: &mut Vec<(&str, String)>, transport: &TransportConnectorConfig) {
+        match transport {
+            #[cfg(feature = "transport-ws")]
+            TransportConnectorConfig::Ws(ws_config) => {
+                params.push(("type", "ws".to_owned()));
+                params.push(("path", ws_config.path.to_owned()));
+                params.push(("host", ws_config.host.to_owned()));
+            }
+            #[cfg(feature = "transport-tls")]
+            TransportConnectorConfig::Tls(_tls_config) => {}
+            #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+            TransportConnectorConfig::Wss(ws_config, tls_config) => {
+                params.push(("type", "ws".to_owned()));
+                params.push(("path", ws_config.path.to_owned()));
+                params.push(("host", ws_config.host.to_owned()));
+                params.push(("security", "tls".to_owned()));
+                params.push(("sni", tls_config.sni.to_owned()));
+            }
+            #[cfg(feature = "transport-mkcp")]
+            TransportConnectorConfig::Mkcp(_mkcp_config) => {
+                params.push(("type", "kcp".to_owned()));
+            }
+            #[cfg(feature = "transport-skcp")]
+            TransportConnectorConfig::Skcp(skcp_config) => {
+                params.push(("type", "skcp".to_owned()));
+                params.push(("mtu", skcp_config.mtu.to_string()));
+                params.push(("nodelay", skcp_config.nodelay.nodelay.to_string()));
+                params.push(("interval", skcp_config.nodelay.interval.to_string()));
+                params.push(("resend", skcp_config.nodelay.resend.to_string()));
+                params.push(("nc", skcp_config.nodelay.nc.to_string()));
+                params.push(("wnd-size-send", skcp_config.wnd_size.0.to_string()));
+                params.push(("wnd-size-recv", skcp_config.wnd_size.1.to_string()));
+                params.push(("session-expire", skcp_config.session_expire.as_secs().to_string()));
+                params.push(("flush-write", skcp_config.flush_write.to_string()));
+                params.push(("flush-acks-input", skcp_config.flush_acks_input.to_string()));
+                params.push(("stream", skcp_config.stream.to_string()));
+            }
+        }
+    }
+
+    #[cfg(feature = "transport-ws")]
+    pub(crate) fn from_url_ws(params: &Vec<(String, String)>) -> Result<WebSocketConnectorConfig, UrlParseError> {
+        Ok(WebSocketConnectorConfig {
+            path: match Self::from_url_get_arg(params, "path") {
+                None => "/".to_owned(),
+                Some(path) => path.clone(),
+            },
+            host: match Self::from_url_get_arg(params, "host") {
+                None => transport::DEFAULT_SNI.to_owned(),
+                Some(path) => path.clone(),
+            },
+        })
+    }
+
+    #[cfg(feature = "transport-mkcp")]
+    pub(crate) fn from_url_mkcp(params: &Vec<(String, String)>) -> Result<MkcpConfig, UrlParseError> {
+        let mut mkcp_config = MkcpConfig::default();
+
+        if let Some(header_type) = Self::from_url_get_arg(params, "headerType") {
+            mkcp_config.header_config = Some(header_type.parse::<HeaderConfig>().map_err(|_e| {
+                error!("url to config: mkcp: not support header type {}", header_type);
+                UrlParseError::InvalidQueryString
+            })?);
+        }
+
+        if let Some(seed) = Self::from_url_get_arg(params, "seed") {
+            mkcp_config.seed = Some(seed.clone());
+        }
+
+        Ok(mkcp_config)
+    }
+
+    #[cfg(feature = "transport-skcp")]
+    pub(crate) fn from_url_skcp(params: &Vec<(String, String)>) -> Result<SkcpConfig, UrlParseError> {
+        let params = params.into_iter().map(|e| (e.0.as_str(), e.1.as_str())).collect();
+        match transport::build_skcp_config(&Some(params)) {
+            Ok(c) => Ok(c),
+            Err(e) => {
+                error!("url to config: skcp: {}", e);
+                Err(UrlParseError::InvalidQueryString)
+            }
+        }
+    }
+
+    #[cfg(feature = "transport-tls")]
+    pub(crate) fn from_url_tls(params: &Vec<(String, String)>) -> Result<TlsConnectorConfig, UrlParseError> {
+        let tls_config = TlsConnectorConfig {
+            sni: match Self::from_url_get_arg(params, "sni") {
+                None => {
+                    error!("url to config: tls: sni not configured");
+                    return Err(UrlParseError::InvalidQueryString);
+                }
+                Some(sni) => sni.clone(),
+            },
+            cipher: None,
+            cert: None,
+        };
+
+        Ok(tls_config)
+    }
+}
 
 #[cfg(feature = "transport")]
 pub const fn available_transports() -> &'static [&'static str] {
@@ -20,24 +195,6 @@ pub const fn available_transports() -> &'static [&'static str] {
         "skcp",
     ]
 }
-
-#[cfg(feature = "transport-ws")]
-use transport::websocket::{WebSocketAcceptorConfig, WebSocketConnectorConfig};
-
-#[cfg(feature = "transport-ws")]
-use super::DEFAULT_SNI;
-
-#[cfg(feature = "transport-tls")]
-use transport::tls::{TlsAcceptorConfig, TlsConnectorConfig};
-
-#[cfg(any(feature = "transport-mkcp", feature = "transport-skcp"))]
-use transport::{HeaderConfig, SecurityConfig};
-
-#[cfg(feature = "transport-mkcp")]
-use transport::mkcp::MkcpConfig;
-
-#[cfg(feature = "transport-skcp")]
-use transport::skcp::{KcpNoDelayConfig, SkcpConfig};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransportConnectorConfig {

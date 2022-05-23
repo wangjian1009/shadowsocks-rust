@@ -13,12 +13,8 @@ use std::{
     time::Duration,
 };
 
-use etherparse::TcpHeader;
-use ipnet::IpNet;
-use log::{debug, error, trace};
 use log::{error, trace};
-use lru_time_cache::LruCache;
-use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address, transport::Connector};
+use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address};
 use smoltcp::{
     iface::{Interface, InterfaceBuilder, Routes, SocketHandle},
     phy::{DeviceCapabilities, Medium},

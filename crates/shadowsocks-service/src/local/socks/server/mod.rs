@@ -29,6 +29,12 @@ pub struct Socks {
     socks5_auth: Arc<Socks5AuthConfig>,
 }
 
+impl Default for Socks {
+    fn default() -> Self {
+        Socks::new()
+    }
+}
+
 impl Socks {
     /// Create a new SOCKS server with default configuration
     pub fn new() -> Socks {
