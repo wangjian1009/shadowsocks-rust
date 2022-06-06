@@ -416,7 +416,7 @@ impl ServerConfig {
                     format!("{}:{}", config.method(), percent_encoding::utf8_percent_encode(config.password(), percent_encoding::NON_ALPHANUMERIC))
                 };
             } else {
-                let mut user_info = format!("{}:{}", self.method(), self.password());
+                let mut user_info = format!("{}:{}", config.method(), config.password());
                 user_info = encode_config(&user_info, URL_SAFE_NO_PAD)
             }
         }

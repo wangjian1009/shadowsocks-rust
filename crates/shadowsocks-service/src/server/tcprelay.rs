@@ -20,7 +20,7 @@ use shadowsocks::{
     timeout::Sleep,
     transport::{
         direct::{TcpAcceptor, TcpConnector},
-        Acceptor, Connection, Connector, Device, StreamConnection,
+        Acceptor, Connection, Connector, StreamConnection,
     },
     ServerAddr, ServerConfig,
 };
@@ -436,7 +436,7 @@ impl TcpServerClient {
                     // Set SO_LINGER(0) for misbehave clients, which will eventually receive RST. (ECONNRESET)
                     // This will also prevent the socket entering TIME_WAIT state.
                     stream.into_inner().physical_device().apply(|stream| match stream {
-                        Device::Tcp(stream) => {
+                        shadowsocks::transport::Device::Tcp(stream) => {
                             let _ = stream.set_linger(Some(Duration::ZERO));
                         }
                         _ => {}
