@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks-rust"
-version = "1.15.0-alpha.4"
+version = "1.15.0-alpha.5"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -224,8 +224,8 @@ ipnet = { version = "2.3", optional = true }
 
 mimalloc = { version = "0.1", default-features = false, optional = true }
 tcmalloc = { version = "0.3", optional = true }
-jemallocator = { version = "0.3", optional = true }
-snmalloc-rs = { version = "0.2", optional = true }
+jemallocator = { version = "0.5", optional = true }
+snmalloc-rs = { version = "0.3", optional = true }
 rpmalloc = { version = "0.2", optional = true }
 
 serde_json = { version = "1.0", optional = true }

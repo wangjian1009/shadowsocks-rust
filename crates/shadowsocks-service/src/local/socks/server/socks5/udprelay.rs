@@ -22,11 +22,13 @@ use shadowsocks::{
 };
 use tokio::{net::UdpSocket, time};
 
-use crate::local::{
-    context::ServiceContext,
-    loadbalancing::PingBalancer,
-    net::{UdpAssociationManager, UdpInboundWrite},
-    utils::to_ipv4_mapped,
+use crate::{
+    local::{
+        context::ServiceContext,
+        loadbalancing::PingBalancer,
+        net::{UdpAssociationManager, UdpInboundWrite},
+    },
+    net::utils::to_ipv4_mapped,
 };
 
 #[derive(Clone)]
