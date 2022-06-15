@@ -26,57 +26,7 @@ impl ServerConfig {
             };
 
             #[cfg(feature = "transport")]
-            {
-                if let Some(transport_type) = Self::from_url_get_arg(&query, "type") {
-                    match transport_type.as_str() {
-                        #[cfg(feature = "transport-ws")]
-                        "ws" => {
-                            if let Some(security) = Self::from_url_get_arg(&query, "security") {
-                                match security.as_str() {
-                                    #[cfg(feature = "transport-tls")]
-                                    "tls" => {
-                                        config.set_connector_transport(Some(TransportConnectorConfig::Wss(
-                                            Self::from_url_ws(&query)?,
-                                            Self::from_url_tls(&query)?,
-                                        )));
-                                    }
-                                    _ => {
-                                        error!("url to config: vless: not support security {}", security);
-                                        return Err(UrlParseError::InvalidQueryString);
-                                    }
-                                }
-                            } else {
-                                config.set_connector_transport(Some(TransportConnectorConfig::Ws(Self::from_url_ws(
-                                    &query,
-                                )?)));
-                            }
-                        }
-                        #[cfg(feature = "transport-mkcp")]
-                        "kcp" | "mkcp" => {
-                            config.set_connector_transport(Some(TransportConnectorConfig::Mkcp(Self::from_url_mkcp(
-                                &query,
-                            )?)));
-                        }
-                        #[cfg(feature = "transport-skcp")]
-                        "skcp" => {
-                            config.set_connector_transport(Some(TransportConnectorConfig::Skcp(Self::from_url_skcp(
-                                &query,
-                            )?)));
-                        }
-                        #[cfg(feature = "transport-tls")]
-                        "tls" => {
-                            config.set_connector_transport(Some(TransportConnectorConfig::Tls(Self::from_url_tls(
-                                &query,
-                            )?)));
-                        }
-                        _ => {
-                            error!("url to config: vless: not support transport type {}", transport_type);
-                            return Err(UrlParseError::InvalidQueryString);
-                        }
-                    }
-                    // parsed.qu
-                }
-            }
+            config.set_connector_transport(Self::from_url_transport_connector(&query)?)
         }
 
         Ok(config)

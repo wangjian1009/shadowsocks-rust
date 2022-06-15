@@ -77,6 +77,46 @@ impl ServerConfig {
         }
     }
 
+    pub(crate) fn from_url_transport_connector(
+        query: &Vec<(String, String)>,
+    ) -> Result<Option<TransportConnectorConfig>, UrlParseError> {
+        let transport_type = match Self::from_url_get_arg(&query, "type") {
+            Some(transport_type) => transport_type,
+            None => return Ok(None),
+        };
+
+        match transport_type.as_str() {
+            #[cfg(feature = "transport-ws")]
+            "ws" => {
+                if let Some(security) = Self::from_url_get_arg(&query, "security") {
+                    match security.as_str() {
+                        #[cfg(feature = "transport-tls")]
+                        "tls" => Ok(Some(TransportConnectorConfig::Wss(
+                            Self::from_url_ws(&query)?,
+                            Self::from_url_tls(&query)?,
+                        ))),
+                        _ => {
+                            error!("url to config: vless: not support security {}", security);
+                            Err(UrlParseError::InvalidQueryString)
+                        }
+                    }
+                } else {
+                    Ok(Some(TransportConnectorConfig::Ws(Self::from_url_ws(&query)?)))
+                }
+            }
+            #[cfg(feature = "transport-mkcp")]
+            "kcp" | "mkcp" => Ok(Some(TransportConnectorConfig::Mkcp(Self::from_url_mkcp(&query)?))),
+            #[cfg(feature = "transport-skcp")]
+            "skcp" => Ok(Some(TransportConnectorConfig::Skcp(Self::from_url_skcp(&query)?))),
+            #[cfg(feature = "transport-tls")]
+            "tls" => Ok(Some(TransportConnectorConfig::Tls(Self::from_url_tls(&query)?))),
+            _ => {
+                error!("url to config: vless: not support transport type {}", transport_type);
+                Err(UrlParseError::InvalidQueryString)
+            }
+        }
+    }
+
     pub(crate) fn to_url_transport(params: &mut Vec<(&str, String)>, transport: &TransportConnectorConfig) {
         match transport {
             #[cfg(feature = "transport-ws")]
@@ -118,7 +158,7 @@ impl ServerConfig {
     }
 
     #[cfg(feature = "transport-ws")]
-    pub(crate) fn from_url_ws(params: &Vec<(String, String)>) -> Result<WebSocketConnectorConfig, UrlParseError> {
+    fn from_url_ws(params: &Vec<(String, String)>) -> Result<WebSocketConnectorConfig, UrlParseError> {
         Ok(WebSocketConnectorConfig {
             path: match Self::from_url_get_arg(params, "path") {
                 None => "/".to_owned(),
@@ -132,7 +172,7 @@ impl ServerConfig {
     }
 
     #[cfg(feature = "transport-mkcp")]
-    pub(crate) fn from_url_mkcp(params: &Vec<(String, String)>) -> Result<MkcpConfig, UrlParseError> {
+    fn from_url_mkcp(params: &Vec<(String, String)>) -> Result<MkcpConfig, UrlParseError> {
         let mut mkcp_config = MkcpConfig::default();
 
         if let Some(header_type) = Self::from_url_get_arg(params, "headerType") {
@@ -150,7 +190,7 @@ impl ServerConfig {
     }
 
     #[cfg(feature = "transport-skcp")]
-    pub(crate) fn from_url_skcp(params: &Vec<(String, String)>) -> Result<SkcpConfig, UrlParseError> {
+    fn from_url_skcp(params: &Vec<(String, String)>) -> Result<SkcpConfig, UrlParseError> {
         let params = params.into_iter().map(|e| (e.0.as_str(), e.1.as_str())).collect();
         match transport::build_skcp_config(&Some(params)) {
             Ok(c) => Ok(c),
@@ -162,7 +202,7 @@ impl ServerConfig {
     }
 
     #[cfg(feature = "transport-tls")]
-    pub(crate) fn from_url_tls(params: &Vec<(String, String)>) -> Result<TlsConnectorConfig, UrlParseError> {
+    fn from_url_tls(params: &Vec<(String, String)>) -> Result<TlsConnectorConfig, UrlParseError> {
         let tls_config = TlsConnectorConfig {
             sni: match Self::from_url_get_arg(params, "sni") {
                 None => {

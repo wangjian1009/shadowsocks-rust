@@ -465,6 +465,7 @@ impl ServerConfig {
                 return Self::from_url_vless(&parsed);
             }
 
+            log::error!("not supported protocol {}", parsed.scheme());
             return Err(UrlParseError::InvalidScheme);
         }
 
