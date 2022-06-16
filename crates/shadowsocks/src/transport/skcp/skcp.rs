@@ -6,7 +6,6 @@ use std::{
 };
 
 use futures::future;
-use kcp::{Error as KcpError, Kcp, KcpResult};
 
 use crate::net::UdpSocket;
 
@@ -15,6 +14,7 @@ use super::super::{HeaderPolicy, Security};
 use super::{
     config::KcpConfig,
     io::{DecorateOutput, UdpOutput},
+    kcp::{Error as KcpError, Kcp, KcpResult},
     utils::now_millis,
 };
 
@@ -283,7 +283,6 @@ impl KcpSocket {
 #[cfg(test)]
 mod test {
 
-    use kcp::Error as KcpError;
     use std::net::SocketAddr;
     use std::sync::Arc;
     use tokio::{
@@ -291,7 +290,9 @@ mod test {
         time::{self, Instant},
     };
 
+    use super::super::kcp;
     use super::KcpConfig;
+    use super::KcpError;
     use super::KcpSocket;
     use super::UdpSocket;
 

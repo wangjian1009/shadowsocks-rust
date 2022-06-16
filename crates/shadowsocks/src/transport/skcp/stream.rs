@@ -7,7 +7,6 @@ use std::{
 };
 
 use futures::{future, ready};
-use kcp::{Error as KcpError, KcpResult};
 use log::trace;
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -17,6 +16,7 @@ use crate::{
     transport::DeviceOrGuard,
 };
 
+use super::kcp::{Error as KcpError, KcpResult};
 use super::{config::KcpConfig, session::KcpSession, skcp::KcpSocket};
 
 use super::super::{Device, DeviceGuard, StreamConnection};

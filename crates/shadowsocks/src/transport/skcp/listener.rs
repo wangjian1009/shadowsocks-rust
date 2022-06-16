@@ -7,7 +7,6 @@ use std::{
 };
 
 use byte_string::ByteStr;
-use kcp::KcpResult;
 use log::{debug, error, trace};
 use tokio::{sync::mpsc, task::JoinHandle, time};
 
@@ -17,9 +16,9 @@ use crate::{
     ServerAddr,
 };
 
-use super::{config::KcpConfig, io::InputDecorate, session::KcpSessionManager, stream::KcpStream};
-
 use super::super::{Acceptor, Connection, DummyPacket};
+use super::kcp::{self, KcpResult};
+use super::{config::KcpConfig, io::InputDecorate, session::KcpSessionManager, stream::KcpStream};
 
 pub struct KcpListener {
     udp: Arc<UdpSocket>,

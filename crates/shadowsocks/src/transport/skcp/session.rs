@@ -10,7 +10,6 @@ use std::{
 };
 
 use byte_string::ByteStr;
-use kcp::KcpResult;
 use log::{error, trace};
 use spin::Mutex as SpinMutex;
 use tokio::{
@@ -21,7 +20,7 @@ use tokio::{
 use crate::net::UdpSocket;
 
 use super::super::{HeaderPolicy, Security};
-
+use super::kcp::{self, KcpResult};
 use super::{config::KcpConfig, io::InputDecorate, skcp::KcpSocket};
 
 pub struct KcpSession {

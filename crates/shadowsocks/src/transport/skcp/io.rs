@@ -1,4 +1,3 @@
-use kcp::KcpResult;
 use rand::RngCore;
 use std::{
     io::{self, ErrorKind, Write},
@@ -10,6 +9,7 @@ use tokio::sync::mpsc;
 use crate::net::UdpSocket;
 
 use super::super::{HeaderPolicy, Security};
+use super::kcp::KcpResult;
 
 #[inline]
 pub fn calc_overhead(header: &Option<Arc<HeaderPolicy>>, security: &Option<Arc<Security>>) -> usize {

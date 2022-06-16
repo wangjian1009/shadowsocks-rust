@@ -59,7 +59,7 @@ transport = []
 transport-ws = ["transport", "tokio-tungstenite"]
 transport-tls = ["transport", "tokio-rustls", "webpki"]
 transport-mkcp = ["transport", "arc-swap", "sha2", "aes-gcm", "rand"]
-transport-skcp = ["transport", "kcp"]
+transport-skcp = ["transport"]
 flow-stat = []
 
 trojan = ["sha2", "rand"]
@@ -102,7 +102,6 @@ tokio-tfo = "0.2.0"
 tokio-tungstenite = { version = "0.14", optional = true }
 tokio-rustls = { version = "0.22", optional = true, features = ["dangerous_configuration"] }
 webpki = { version = "0.21", optional = true }
-kcp = { version = "0.4.13", optional = true }
 
 governor = { version = "0.3.2", optional = true }
 nonzero_ext = { version = "0.2", optional = true }
