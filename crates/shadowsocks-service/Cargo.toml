@@ -67,7 +67,6 @@ full = [
 
 # Enable local server
 local = []
-
 # Enable remote server
 server = []
 server-maintain = ["hyper", "csv"]
@@ -87,7 +86,7 @@ sniffer-http = ["sniffer"]
 sniffer-tls = ["sniffer"]
 
 # env-crypt
-env-crypt = ["aes", "block-modes", "base64"]
+env-crypt = ["aes", "block-modes"]
 
 # enable transport
 transport = []
@@ -199,10 +198,10 @@ smoltcp = { version = "0.8", optional = true, default-features = false, features
 
 serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
+base64 = "0.13"
 
 aes = { version = "0.7", optional = true }
 block-modes = { version = "0.8", optional = true }
-base64 = { version = "0.13.0", optional = true }
 
 governor = { version = "0.3.2", optional = true }
 nonzero_ext = { version = "0.2", optional = true }

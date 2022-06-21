@@ -6,13 +6,13 @@ use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 
 use log::{error, info, trace};
 use shadowsocks::{
-    config::{Mode, ServerConfig, ServerProtocol, ServerType, ShadowsocksConfig},
+    config::{Mode, ServerConfig, ServerType, ServerUser, ServerUserManager},
     context::{Context, SharedContext},
     crypto::CipherKind,
     dns_resolver::DnsResolver,
     manager::protocol::{
         self, AddRequest, AddResponse, ErrorResponse, ListResponse, ManagerRequest, PingResponse, RemoveRequest,
-        RemoveResponse, StatRequest,
+        RemoveResponse, ServerUserConfig, StatRequest,
     },
     net::{AcceptOpts, ConnectOpts, FlowStat},
     plugin::PluginConfig,
@@ -452,6 +452,31 @@ impl Manager {
 
         svr_cfg.set_mode(mode.unwrap_or(self.svr_cfg.mode));
 
+        if let Some(ref users) = req.users {
+            let mut user_manager = ServerUserManager::new();
+
+            for user in users.iter() {
+                let key = match base64::decode_config(&user.password, base64::STANDARD) {
+                    Ok(key) => key,
+                    Err(..) => {
+                        error!(
+                            "users[].password must be encoded with base64, but found: {}",
+                            user.password
+                        );
+
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "users[].password must be encoded with base64",
+                        ));
+                    }
+                };
+
+                user_manager.add_user(ServerUser::new(&user.name, key));
+            }
+
+            svr_cfg.set_user_manager(user_manager);
+        }
+
         self.add_server(svr_cfg).await;
 
         Ok(AddResponse("ok".to_owned()))
@@ -482,6 +507,20 @@ impl Manager {
                 unreachable!()
             };
 
+            let mut users = None;
+            if let Some(user_manager) = server.svr_cfg.user_manager() {
+                let mut vu = Vec::with_capacity(user_manager.user_count());
+
+                for user in user_manager.users_iter() {
+                    vu.push(ServerUserConfig {
+                        name: user.name().to_owned(),
+                        password: base64::encode(user.key()),
+                    });
+                }
+
+                users = Some(vu);
+            }
+
             let sc = protocol::ServerConfig {
                 server_port: svr_cfg.addr().port(),
                 password: ss_cfg.password().to_owned(),
@@ -490,6 +529,7 @@ impl Manager {
                 plugin: None,
                 plugin_opts: None,
                 mode: None,
+                users,
             };
             servers.push(sc);
         }

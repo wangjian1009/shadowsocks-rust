@@ -9,6 +9,7 @@ documentation = "https://docs.rs/shadowsocks-rust"
 keywords = ["shadowsocks", "proxy", "socks", "socks5", "firewall"]
 license = "MIT"
 edition = "2021"
+rust-version = "1.61"
 
 [badges]
 maintenance = { status = "passively-maintained" }
@@ -193,7 +194,7 @@ neon = ["shadowsocks-service/neon"]
 
 [dependencies]
 log = "0.4"
-log4rs = { version = "1.0", optional = true }
+log4rs = { version = "1.1.1", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
 thiserror = "1.0"
@@ -201,6 +202,7 @@ thiserror = "1.0"
 clap = { version = "3.1", features = ["wrap_help", "suggestions"] }
 cfg-if = "1"
 qrcode = { version = "0.12", default-features = false, optional = true }
+sysexits = "0.3"
 exitcode = "1"
 bytes = "1.0"
 byteorder = "1.3"

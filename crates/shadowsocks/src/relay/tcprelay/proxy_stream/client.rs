@@ -186,12 +186,14 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         A: Into<Address>,
     {
         let addr = addr.into();
-        let stream = CryptoStream::from_stream(
+        let stream = CryptoStream::from_stream_with_identity(
             &context,
             stream,
             StreamType::Client,
             svr_ss_cfg.method(),
             svr_ss_cfg.key(),
+            svr_ss_cfg.identity_keys(),
+            None,
         );
 
         #[cfg(not(feature = "aead-cipher-2022"))]

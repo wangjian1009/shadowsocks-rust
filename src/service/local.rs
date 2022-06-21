@@ -1,6 +1,6 @@
 //! Local server launchers
 
-use std::{net::IpAddr, path::PathBuf, process, time::Duration};
+use std::{net::IpAddr, path::PathBuf, process::ExitCode, time::Duration};
 
 use clap::{Arg, ArgGroup, ArgMatches, Command, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
@@ -303,11 +303,23 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
 
     #[cfg(feature = "local-flow-stat")]
     {
+        #[cfg(unix)]
+        {
+            app = app.arg(
+                Arg::new("STAT_PATH")
+                    .long("stat-path")
+                    .takes_value(true)
+                    .conflicts_with("STAT_ADDR")
+                    .help("Specify socket path (unix domain socket) for sending traffic statistic"),
+            );
+        }
+
         app = app.arg(
-            Arg::new("STAT_PATH")
-                .long("stat-path")
+            Arg::new("STAT_ADDR")
+                .long("stat-addr")
                 .takes_value(true)
-                .help("Specify socket path (unix domain socket) for sending traffic statistic"),
+                .validator(validator::validate_socket_addr)
+                .help("Specify socket address IP:PORT (TCP) for sending traffic statistic"),
         );
     }
 
@@ -439,7 +451,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
 }
 
 /// Program entrance `main`
-pub fn main(matches: &ArgMatches) {
+pub fn main(matches: &ArgMatches) -> ExitCode {
     let (config, runtime) = {
         let config_path_opt = matches.value_of("CONFIG").map(PathBuf::from).or_else(|| {
             if !matches.is_present("SERVER_CONFIG") {
@@ -460,7 +472,7 @@ pub fn main(matches: &ArgMatches) {
                 Ok(c) => c,
                 Err(err) => {
                     eprintln!("loading config {:?}, {}", config_path, err);
-                    process::exit(crate::EXIT_CODE_LOAD_CONFIG_FAILURE);
+                    return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
                 }
             },
             None => ServiceConfig::default(),
@@ -484,7 +496,7 @@ pub fn main(matches: &ArgMatches) {
                 Ok(cfg) => cfg,
                 Err(err) => {
                     eprintln!("loading config {:?}, {}", cpath, err);
-                    process::exit(crate::EXIT_CODE_LOAD_CONFIG_FAILURE);
+                    return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
                 }
             },
             None => Config::new(ConfigType::Local),
@@ -601,8 +613,18 @@ pub fn main(matches: &ArgMatches) {
 
         #[cfg(feature = "local-flow-stat")]
         {
+            use shadowsocks_service::config::LocalFlowStatAddress;
+            use std::net::SocketAddr;
+
+            #[cfg(unix)]
             if let Some(stat_path) = matches.value_of("STAT_PATH") {
-                config.stat_path = Some(From::from(stat_path));
+                config.local_stat_addr = Some(LocalFlowStatAddress::UnixStreamPath(From::from(stat_path)));
+            }
+
+            match matches.value_of_t::<SocketAddr>("STAT_ADDR") {
+                Ok(stat_addr) => config.local_stat_addr = Some(LocalFlowStatAddress::TcpStreamAddr(stat_addr)),
+                Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {}
+                Err(err) => err.exit(),
             }
         }
 
@@ -842,7 +864,7 @@ pub fn main(matches: &ArgMatches) {
                 Ok(acl) => acl,
                 Err(err) => {
                     eprintln!("loading ACL \"{}\", {}", acl_file, err);
-                    process::exit(crate::EXIT_CODE_LOAD_ACL_FAILURE);
+                    return crate::EXIT_CODE_LOAD_ACL_FAILURE.into();
                 }
             };
             config.acl = Some(acl);
@@ -902,7 +924,7 @@ pub fn main(matches: &ArgMatches) {
                 "missing `local_address`, consider specifying it by --local-addr command line option, \
                     or \"local_address\" and \"local_port\" in configuration file"
             );
-            return;
+            return ExitCode::SUCCESS;
         }
 
         if config.server.is_empty() {
@@ -917,7 +939,7 @@ pub fn main(matches: &ArgMatches) {
 
         if let Err(err) = config.check_integrity() {
             eprintln!("config integrity check failed, {}", err);
-            return;
+            return ExitCode::SUCCESS;
         }
 
         #[cfg(unix)]
@@ -965,17 +987,17 @@ pub fn main(matches: &ArgMatches) {
             // Server future resolved without an error. This should never happen.
             Either::Left((Ok(..), ..)) => {
                 eprintln!("server exited unexpectedly");
-                process::exit(crate::EXIT_CODE_SERVER_EXIT_UNEXPECTEDLY);
+                crate::EXIT_CODE_SERVER_EXIT_UNEXPECTEDLY.into()
             }
             // Server future resolved with error, which are listener errors in most cases
             Either::Left((Err(err), ..)) => {
                 eprintln!("server aborted with {}", err);
-                process::exit(crate::EXIT_CODE_SERVER_ABORTED);
+                crate::EXIT_CODE_SERVER_ABORTED.into()
             }
             // The abort signal future resolved. Means we should just exit.
-            Either::Right(_) => (),
+            Either::Right(_) => ExitCode::SUCCESS,
         }
-    });
+    })
 }
 
 #[cfg(unix)]

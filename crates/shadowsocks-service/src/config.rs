@@ -66,8 +66,8 @@ use serde::{Deserialize, Serialize};
 use shadowsocks::relay::socks5::Address;
 use shadowsocks::{
     config::{
-        ManagerAddr, Mode, ReplayAttackPolicy, ServerAddr, ServerConfig, ServerProtocol, ServerWeight,
-        ShadowsocksConfig,
+        ManagerAddr, Mode, ReplayAttackPolicy, ServerAddr, ServerConfig, ServerProtocol, ServerUser, ServerUserManager,
+        ServerWeight, ShadowsocksConfig,
     },
     crypto::CipherKind,
     plugin::PluginConfig,
@@ -271,11 +271,20 @@ struct SSLocalExtConfig {
     #[cfg(feature = "local-tun")]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_interface_address: Option<String>,
+    #[cfg(all(feature = "local-tun", unix))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tun_device_fd_from_path: Option<String>,
 
     /// SOCKS5
     #[cfg(feature = "local")]
     #[serde(skip_serializing_if = "Option::is_none")]
     socks5_auth_config_path: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct SSServerUserConfig {
+    name: String,
+    password: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -291,6 +300,9 @@ struct SSServerExtConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     password: Option<String>,
     method: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    users: Option<Vec<SSServerUserConfig>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     disabled: Option<bool>,
@@ -1016,6 +1028,17 @@ pub struct BalancerConfig {
     pub check_best_interval: Option<Duration>,
 }
 
+/// Address for local to report flow statistic data
+#[cfg(feature = "local-flow-stat")]
+#[derive(Debug, Clone)]
+pub enum LocalFlowStatAddress {
+    /// UNIX Domain Socket address
+    #[cfg(unix)]
+    UnixStreamPath(PathBuf),
+    /// TCP Stream Address
+    TcpStreamAddr(SocketAddr),
+}
+
 /// Configuration
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -1117,7 +1140,7 @@ pub struct Config {
 
     /// Flow statistic report Unix socket path (only for Android)
     #[cfg(feature = "local-flow-stat")]
-    pub stat_path: Option<PathBuf>,
+    pub local_stat_addr: Option<LocalFlowStatAddress>,
 
     /// Replay attack policy
     pub security: SecurityConfig,
@@ -1256,7 +1279,7 @@ impl Config {
             maintain_addr: None,
 
             #[cfg(feature = "local-flow-stat")]
-            stat_path: None,
+            local_stat_addr: None,
 
             security: SecurityConfig::default(),
 
@@ -1507,6 +1530,11 @@ impl Config {
                             local_config.tun_interface_name = Some(tun_interface_name);
                         }
 
+                        #[cfg(all(feature = "local-tun", unix))]
+                        if let Some(tun_device_fd_from_path) = local.tun_device_fd_from_path {
+                            local_config.tun_device_fd_from_path = Some(From::from(tun_device_fd_from_path));
+                        }
+
                         #[cfg(feature = "local")]
                         if let Some(socks5_auth_config_path) = local.socks5_auth_config_path {
                             local_config.socks5_auth = Socks5AuthConfig::load_from_file(&socks5_auth_config_path)?;
@@ -1668,6 +1696,29 @@ impl Config {
                 };
 
                 let mut nsvr = ServerConfig::new(addr, ServerProtocol::SS(ShadowsocksConfig::new(password, method)));
+
+                // Extensible Identity Header, Users
+                if let Some(users) = svr.users {
+                    let mut user_manager = ServerUserManager::new();
+
+                    for user in users {
+                        let key = match base64::decode_config(&user.password, base64::STANDARD) {
+                            Ok(k) => k,
+                            Err(..) => {
+                                let err = Error::new(
+                                    ErrorKind::Malformed,
+                                    "`users[].password` should be base64 encoded",
+                                    None,
+                                );
+                                return Err(err);
+                            }
+                        };
+
+                        user_manager.add_user(ServerUser::new(user.name, key));
+                    }
+
+                    nsvr.must_be_ss_mut(|c| c.set_user_manager(user_manager));
+                }
 
                 match svr.mode {
                     Some(mode) => match mode.parse::<Mode>() {
@@ -2184,6 +2235,21 @@ impl Config {
                     }
                 }
             }
+
+            // Users' key must match key length
+            if let Some(user_manager) = server.if_ss(|c| c.user_manager()).unwrap_or(None) {
+                let key_len = server.if_ss(|c| c.method().key_len()).unwrap();
+                for user in user_manager.users_iter() {
+                    if user.key().len() != key_len {
+                        let err = Error::new(
+                            ErrorKind::Malformed,
+                            "`users[].password` length must be exactly the same as method's key length",
+                            None,
+                        );
+                        return Err(err);
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -2308,6 +2374,11 @@ impl fmt::Display for Config {
                         tun_interface_name: local.tun_interface_name.clone(),
                         #[cfg(feature = "local-tun")]
                         tun_interface_address: local.tun_interface_address.as_ref().map(ToString::to_string),
+                        #[cfg(all(feature = "local-tun", unix))]
+                        tun_device_fd_from_path: local
+                            .tun_device_fd_from_path
+                            .as_ref()
+                            .map(|p| p.to_str().expect("tun_device_fd_from_path is not utf-8").to_owned()),
 
                         #[cfg(feature = "local")]
                         socks5_auth_config_path: None,
@@ -2377,26 +2448,30 @@ impl fmt::Display for Config {
                             ServerAddr::SocketAddr(ref sa) => sa.port(),
                             ServerAddr::DomainName(.., port) => port,
                         },
-                        password: match svr.protocol() {
-                            ServerProtocol::SS(cfg) => {
-                                if cfg.method().is_none() {
+                        users: svr
+                            .if_ss(|c| {
+                                c.user_manager().map(|m| {
+                                    let mut vu = Vec::new();
+                                    for u in m.users_iter() {
+                                        vu.push(SSServerUserConfig {
+                                            name: u.name().to_owned(),
+                                            password: base64::encode(u.key()),
+                                        });
+                                    }
+                                    vu
+                                })
+                            })
+                            .unwrap_or(None),
+                        password: svr
+                            .if_ss(|c| {
+                                if c.method().is_none() {
                                     None
                                 } else {
-                                    Some(cfg.password().to_string())
+                                    Some(c.password().to_string())
                                 }
-                            }
-                            #[cfg(feature = "trojan")]
-                            ServerProtocol::Trojan(..) => unreachable!(),
-                            #[cfg(feature = "vless")]
-                            ServerProtocol::Vless(..) => unreachable!(),
-                        },
-                        method: match svr.protocol() {
-                            ServerProtocol::SS(cfg) => cfg.method().to_string(),
-                            #[cfg(feature = "trojan")]
-                            ServerProtocol::Trojan(..) => unreachable!(),
-                            #[cfg(feature = "vless")]
-                            ServerProtocol::Vless(..) => unreachable!(),
-                        },
+                            })
+                            .unwrap_or(None),
+                        method: svr.if_ss(|c| c.method().to_string()).unwrap_or("".to_owned()),
                         disabled: None,
                         plugin: svr.if_ss(|c| c.plugin().map(|p| p.plugin.to_string())).unwrap_or(None),
                         plugin_opts: svr

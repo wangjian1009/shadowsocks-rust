@@ -9,6 +9,16 @@ pub struct ShadowsocksConfig {
     /// Encryption key
     enc_key: Box<[u8]>,
 
+    /// Extensible Identity Headers (AEAD-2022)
+    ///
+    /// For client, assemble EIH headers
+    identity_keys: Arc<Vec<Bytes>>,
+
+    /// Extensible Identity Headers (AEAD-2022)
+    ///
+    /// For server, support multi-users with EIH
+    user_manager: Option<Arc<ServerUserManager>>,
+
     /// Plugin config
     plugin: Option<PluginConfig>,
     /// Plugin address
@@ -24,15 +34,14 @@ impl ShadowsocksConfig {
     where
         P: Into<String>,
     {
-        let password = password.into();
-
-        let mut enc_key = vec![0u8; method.key_len()].into_boxed_slice();
-        make_derived_key(method, &password, &mut enc_key);
+        let (password, enc_key, identity_keys) = password_to_keys(method, password);
 
         ShadowsocksConfig {
             password,
             method,
             enc_key,
+            identity_keys: Arc::new(identity_keys),
+            user_manager: None,
             plugin: None,
             plugin_addr: None,
             id: None,
@@ -61,6 +70,31 @@ impl ShadowsocksConfig {
     /// Get password
     pub fn password(&self) -> &str {
         self.password.as_str()
+    }
+
+    /// Get identity keys (Client)
+    pub fn identity_keys(&self) -> &[Bytes] {
+        &self.identity_keys
+    }
+
+    /// Clone identity keys (Client)
+    pub fn clone_identity_keys(&self) -> Arc<Vec<Bytes>> {
+        self.identity_keys.clone()
+    }
+
+    /// Set user manager, enable Server's multi-user support with EIH
+    pub fn set_user_manager(&mut self, user_manager: ServerUserManager) {
+        self.user_manager = Some(Arc::new(user_manager));
+    }
+
+    /// Get user manager (Server)
+    pub fn user_manager(&self) -> Option<&ServerUserManager> {
+        self.user_manager.as_deref()
+    }
+
+    /// Clone user manager (Server)
+    pub fn clone_user_manager(&self) -> Option<Arc<ServerUserManager>> {
+        self.user_manager.clone()
     }
 
     /// Get method

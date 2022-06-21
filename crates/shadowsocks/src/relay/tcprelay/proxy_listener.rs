@@ -1,6 +1,6 @@
 //! A TCP listener for accepting shadowsocks' client connection
 
-use std::{io, net::SocketAddr};
+use std::{io, net::SocketAddr, sync::Arc};
 
 use once_cell::sync::Lazy;
 use tokio::{
@@ -9,7 +9,7 @@ use tokio::{
 };
 
 use crate::{
-    config::{ServerAddr, ServerConfig, ShadowsocksConfig},
+    config::{ServerAddr, ServerConfig, ServerUserManager, ShadowsocksConfig},
     context::SharedContext,
     crypto::CipherKind,
     net::{AcceptOpts, TcpListener},
@@ -22,6 +22,7 @@ pub struct ProxyListener {
     method: CipherKind,
     key: Box<[u8]>,
     context: SharedContext,
+    user_manager: Option<Arc<ServerUserManager>>,
 }
 
 static DEFAULT_ACCEPT_OPTS: Lazy<AcceptOpts> = Lazy::new(Default::default);
@@ -66,6 +67,7 @@ impl ProxyListener {
             method: svr_ss_cfg.method(),
             key: svr_ss_cfg.key().to_vec().into_boxed_slice(),
             context,
+            user_manager: svr_ss_cfg.clone_user_manager(),
         }
     }
 
@@ -85,7 +87,13 @@ impl ProxyListener {
         let stream = map_fn(stream);
 
         // Create a ProxyServerStream and read the target address from it
-        let stream = ProxyServerStream::from_stream(self.context.clone(), stream, self.method, &self.key);
+        let stream = ProxyServerStream::from_stream(
+            self.context.clone(),
+            stream,
+            self.method,
+            &self.key,
+            self.user_manager.clone(),
+        );
 
         Ok((stream, peer_addr))
     }

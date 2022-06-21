@@ -313,6 +313,7 @@ impl TcpServer {
                         local_stream,
                         ss_cfg.method(),
                         ss_cfg.key(),
+                        ss_cfg.clone_user_manager(),
                     );
                     let method = ss_cfg.method();
                     tokio::spawn(async move {
