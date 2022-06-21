@@ -9,6 +9,7 @@ use std::{
     target_os = "linux",
     target_os = "android",
     target_os = "macos",
+    target_os = "ios",
     target_os = "freebsd"
 ))]
 use std::{
@@ -44,6 +45,7 @@ use super::{
     target_os = "linux",
     target_os = "android",
     target_os = "macos",
+    target_os = "ios",
     target_os = "freebsd"
 ))]
 pub struct BatchSendMessage<'a> {
@@ -57,6 +59,7 @@ pub struct BatchSendMessage<'a> {
     target_os = "linux",
     target_os = "android",
     target_os = "macos",
+    target_os = "ios",
     target_os = "freebsd"
 ))]
 pub struct BatchRecvMessage<'a> {

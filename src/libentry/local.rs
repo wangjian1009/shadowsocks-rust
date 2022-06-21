@@ -25,6 +25,9 @@ use shadowsocks_service::{
     run_local,
 };
 
+#[cfg(feature = "local-flow-stat")]
+use shadowsocks_service::config::LocalFlowStatAddress;
+
 use futures::{
     stream::{FuturesUnordered, StreamExt},
     FutureExt,
@@ -134,7 +137,7 @@ fn load_config(
 
     #[cfg(feature = "local-flow-stat")]
     if let Some(stat_path) = stat_path {
-        config.stat_path = Some(From::from(stat_path));
+        config.local_stat_addr = Some(LocalFlowStatAddress::UnixStreamPath(From::from(stat_path)));
     }
 
     log::trace!("config {}", config);

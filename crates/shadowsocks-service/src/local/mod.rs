@@ -19,11 +19,14 @@ use shadowsocks::{
 use tokio::task::JoinHandle;
 
 #[cfg(feature = "local-flow-stat")]
-use crate::{config::LocalFlowStatAddress, net::FlowStat};
+use crate::config::LocalFlowStatAddress;
 use crate::{
     config::{Config, ConfigType, ProtocolType},
     dns::build_dns_resolver,
 };
+
+#[cfg(feature = "local-flow-stat")]
+use shadowsocks::net::FlowStat;
 
 #[cfg(feature = "rate-limit")]
 use shadowsocks::transport::RateLimiter;

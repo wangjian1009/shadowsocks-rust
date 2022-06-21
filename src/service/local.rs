@@ -515,7 +515,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                     }
                     None => {
                         eprintln!("missing `vless-user`");
-                        return;
+                        return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
                     }
                 };
 
@@ -934,7 +934,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                         or --server-url command line option, \
                         or configuration file, check more details in https://shadowsocks.org/en/config/quick-guide.html"
             );
-            return;
+            return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
         }
 
         if let Err(err) = config.check_integrity() {
