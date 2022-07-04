@@ -6,7 +6,7 @@ use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 
 use log::{error, info, trace};
 use shadowsocks::{
-    config::{Mode, ServerConfig, ServerType, ServerUser, ServerUserManager},
+    config::{Mode, ServerConfig, ServerProtocol, ServerType, ServerUser, ServerUserManager, ShadowsocksConfig},
     context::{Context, SharedContext},
     crypto::CipherKind,
     dns_resolver::DnsResolver,
@@ -474,7 +474,7 @@ impl Manager {
                 user_manager.add_user(ServerUser::new(&user.name, key));
             }
 
-            svr_cfg.set_user_manager(user_manager);
+            svr_cfg.must_be_ss_mut(|c| c.set_user_manager(user_manager));
         }
 
         self.add_server(svr_cfg).await;
@@ -508,7 +508,7 @@ impl Manager {
             };
 
             let mut users = None;
-            if let Some(user_manager) = server.svr_cfg.user_manager() {
+            if let Some(user_manager) = ss_cfg.user_manager() {
                 let mut vu = Vec::with_capacity(user_manager.user_count());
 
                 for user in user_manager.users_iter() {

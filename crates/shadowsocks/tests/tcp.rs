@@ -147,7 +147,8 @@ async fn tcp_tunnel_example(
 
             info!("server accepted stream {}", peer_addr);
 
-            let stream = ProxyServerStream::from_stream(ctx_server.clone(), stream, ss_cfg.method(), ss_cfg.key());
+            let stream =
+                ProxyServerStream::from_stream(ctx_server.clone(), stream, ss_cfg.method(), ss_cfg.key(), None);
             tokio::spawn(handle_tcp_tunnel_server_client(ss_cfg.method(), stream));
         }
     });
