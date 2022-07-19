@@ -261,10 +261,8 @@ impl Socks5TcpHandler {
         let mut remote = match remote_result {
             Ok(remote) => {
                 // Tell the client that we are ready
-                let header = TcpResponseHeader::new(
-                    socks5::Reply::Succeeded,
-                    Address::SocketAddress(remote.transport().local_addr()?),
-                );
+                let header =
+                    TcpResponseHeader::new(socks5::Reply::Succeeded, Address::SocketAddress(remote.local_addr()?));
                 header.write_to(&mut stream).await?;
 
                 trace!("sent header: {:?}", header);

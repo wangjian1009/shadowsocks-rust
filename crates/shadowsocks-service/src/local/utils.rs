@@ -127,6 +127,8 @@ where
         ServerProtocol::Trojan(_cfg) => copy_bidirectional(shadow, &mut plain, &None).await,
         #[cfg(feature = "vless")]
         ServerProtocol::Vless(_cfg) => copy_bidirectional(shadow, &mut plain, &None).await,
+        #[cfg(feature = "tuic")]
+        ServerProtocol::Tuic(_cfg) => copy_bidirectional(shadow, &mut plain, &None).await,
     } {
         Ok((wn, rn)) => {
             trace!(

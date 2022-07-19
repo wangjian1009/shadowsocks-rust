@@ -14,9 +14,9 @@ use log::{debug, trace};
 use tokio::sync::Mutex;
 use trust_dns_resolver::proto::{error::ProtoError, op::Message};
 
-use shadowsocks::{config::ServerConfig, net::ConnectOpts, relay::socks5::Address};
+use shadowsocks::{net::ConnectOpts, relay::socks5::Address};
 
-use crate::local::context::ServiceContext;
+use crate::local::{context::ServiceContext, loadbalancing::ServerIdent};
 
 use super::upstream::DnsClient;
 
@@ -62,7 +62,7 @@ impl DnsClientCache {
     pub async fn lookup_remote(
         &self,
         context: &ServiceContext,
-        svr_cfg: &ServerConfig,
+        svr: &ServerIdent,
         ns: &Address,
         msg: Message,
         is_udp: bool,
@@ -71,7 +71,7 @@ impl DnsClientCache {
             true => DnsClientKey::UdpRemote(ns.clone()),
             false => DnsClientKey::TcpRemote(ns.clone()),
         };
-        self.lookup_dns(&key, msg, None, Some(context), Some(svr_cfg)).await
+        self.lookup_dns(&key, msg, None, Some(context), Some(svr)).await
     }
 
     #[cfg(unix)]
@@ -112,7 +112,7 @@ impl DnsClientCache {
         msg: Message,
         connect_opts: Option<&ConnectOpts>,
         context: Option<&ServiceContext>,
-        svr_cfg: Option<&ServerConfig>,
+        svr: Option<&ServerIdent>,
     ) -> Result<Message, ProtoError> {
         let mut last_err = None;
         let mut dns_res: io::Result<DnsClient>;
@@ -127,7 +127,7 @@ impl DnsClientCache {
                 DnsClientKey::TcpRemote(tcp_l) => {
                     dns_res = DnsClient::connect_tcp_remote(
                         &context.unwrap().context(),
-                        svr_cfg.unwrap(),
+                        svr.unwrap(),
                         tcp_l,
                         context.unwrap().connect_opts_ref(),
                         context.unwrap().flow_stat(),
@@ -137,7 +137,7 @@ impl DnsClientCache {
                 DnsClientKey::UdpRemote(udp_l) => {
                     dns_res = DnsClient::connect_udp_remote(
                         context.unwrap().context(),
-                        svr_cfg.unwrap(),
+                        svr.unwrap(),
                         udp_l.clone(),
                         context.unwrap().connect_opts_ref(),
                         context.unwrap().flow_stat(),

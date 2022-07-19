@@ -844,3 +844,6 @@ pub mod trojan;
 
 #[cfg(feature = "vless")]
 pub mod vless;
+
+#[cfg(feature = "tuic")]
+pub mod tuic;

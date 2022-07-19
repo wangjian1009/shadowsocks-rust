@@ -57,13 +57,14 @@ neon = ["shadowsocks-crypto/neon"]
 
 transport = []
 transport-ws = ["transport", "tokio-tungstenite"]
-transport-tls = ["transport", "tokio-rustls", "webpki"]
+transport-tls = ["transport", "tokio-rustls", "webpki", "rustls-native-certs", "rustls-pemfile"]
 transport-mkcp = ["transport", "arc-swap", "rand"]
 transport-skcp = ["transport"]
 flow-stat = []
 
 trojan = ["rand"]
 vless = ["rand", "hex"]
+tuic = ["byteorder", "quinn", "parking_lot", "crossbeam-utils", "rustls", "rustls-native-certs", "rustls-pemfile"]
 
 rate-limit = ["governor", "nonzero_ext", "futures-timer", "quanta", "lazy_static", "regex"]
 
@@ -100,8 +101,8 @@ socket2 = { version = "0.4", features = ["all"] }
 tokio = { version = "1.9.0", features = ["io-util", "macros", "net", "parking_lot", "process", "rt", "sync", "time"] }
 tokio-tfo = "0.2.0"
 tokio-tungstenite = { version = "0.14", optional = true }
-tokio-rustls = { version = "0.22", optional = true, features = ["dangerous_configuration"] }
-webpki = { version = "0.21", optional = true }
+tokio-rustls = { version = "0.23.4", optional = true }
+webpki = { version = "0.22", optional = true }
 
 governor = { version = "0.3.2", optional = true }
 nonzero_ext = { version = "0.2", optional = true }
@@ -116,6 +117,14 @@ notify = { version = "5.0.0-pre.15", optional = true }
 
 aes = { version = "0.8", optional = true }
 blake3 = "1.3"
+
+byteorder = { version = "1.4", optional = true }
+crossbeam-utils = { version = "0.8", default-features = false, optional = true }
+parking_lot = { version = "0.12", optional = true }
+quinn = { version = "0.8", optional = true }
+rustls = { version = "0.20", features = ["quic"], default-features = false, optional = true }
+rustls-native-certs = { version = "0.6", optional = true }
+rustls-pemfile = { version = "1.0", optional = true }
 
 sha2 = { version = "0.9"}
 aes-gcm = { version = "0.9.4"}

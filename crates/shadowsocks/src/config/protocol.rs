@@ -7,6 +7,8 @@ pub enum ServerProtocol {
     Trojan(TrojanConfig),
     #[cfg(feature = "vless")]
     Vless(VlessConfig),
+    #[cfg(feature = "tuic")]
+    Tuic(TuicConfig),
 }
 
 impl ServerProtocol {
@@ -17,6 +19,8 @@ impl ServerProtocol {
             "trojan",
             #[cfg(feature = "vless")]
             "vless",
+            #[cfg(feature = "tuic")]
+            "tuic",
         ]
     }
 
@@ -27,6 +31,8 @@ impl ServerProtocol {
             Self::Trojan(..) => "trojan",
             #[cfg(feature = "vless")]
             Self::Vless(..) => "vless",
+            #[cfg(feature = "tuic")]
+            Self::Tuic(..) => "tuic",
         }
     }
 }

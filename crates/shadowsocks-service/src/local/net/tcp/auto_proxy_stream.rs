@@ -14,7 +14,6 @@ use shadowsocks::{
     net::{ConnectOpts, FlowStat},
     relay::{socks5::Address, tcprelay::proxy_stream::ProxyClientStream},
     transport::{DeviceOrGuard, StreamConnection},
-    ServerConfig,
 };
 
 #[cfg(feature = "rate-limit")]
@@ -25,6 +24,9 @@ use shadowsocks::trojan;
 
 #[cfg(feature = "vless")]
 use shadowsocks::vless;
+
+#[cfg(feature = "tuic")]
+use shadowsocks::tuic;
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -44,6 +46,8 @@ pub enum AutoProxyClientStream {
     ProxiedTrojan(#[pin] trojan::ClientStream<Box<dyn StreamConnection>>),
     #[cfg(feature = "vless")]
     ProxiedVless(#[pin] vless::ClientStream<Box<dyn StreamConnection>>),
+    #[cfg(feature = "tuic")]
+    ProxiedTuic(#[pin] Box<dyn StreamConnection>),
     Bypassed(#[pin] Box<dyn StreamConnection>),
 }
 
@@ -83,7 +87,7 @@ impl AutoProxyClientStream {
         match Self::connect_proxied_no_score(
             context.context(),
             context.connect_opts_ref(),
-            server.server_config(),
+            server,
             addr,
             Some(context.flow_stat()),
             #[cfg(feature = "rate-limit")]
@@ -102,11 +106,12 @@ impl AutoProxyClientStream {
     pub async fn connect_proxied_no_score(
         context: SharedContext,
         connect_opts: &ConnectOpts,
-        svr_cfg: &ServerConfig,
+        svr: &ServerIdent,
         addr: &Address,
         flow_stat: Option<Arc<FlowStat>>,
         #[cfg(feature = "rate-limit")] rate_limit: Option<Arc<RateLimiter>>,
     ) -> io::Result<AutoProxyClientStream> {
+        let svr_cfg = svr.server_config();
         create_connector_then!(Some(context.clone()), svr_cfg.connector_transport(), |connector| {
             let connector = Arc::new(connector);
             match svr_cfg.protocol() {
@@ -180,19 +185,41 @@ impl AutoProxyClientStream {
                     .await?;
                     Ok(AutoProxyClientStream::ProxiedVless(stream))
                 }
+                #[cfg(feature = "tuic")]
+                shadowsocks::config::ServerProtocol::Tuic(_tuic_cfg) => {
+                    use shadowsocks::tuic;
+                    use tuic::client::{Address as RelayAddress, Request as RelayRequest};
+
+                    let target_addr = match addr {
+                        Address::DomainNameAddress(domain, port) => {
+                            RelayAddress::DomainAddress(domain.clone(), port.clone())
+                        }
+                        Address::SocketAddress(addr) => RelayAddress::SocketAddress(addr.clone()),
+                    };
+
+                    let (relay_req, relay_resp_rx) = RelayRequest::new_connect(target_addr);
+                    svr.tuic_send_req(relay_req).await?;
+
+                    let mut stream = match relay_resp_rx.await {
+                        Ok(stream) => stream,
+                        Err(err) => {
+                            return Err(io::Error::new(io::ErrorKind::Other, err));
+                        }
+                    };
+
+                    #[cfg(feature = "rate-limit")]
+                    stream.set_rate_limit(rate_limit);
+
+                    let stream = if let Some(flow_stat) = flow_stat {
+                        Box::new(MonProxyStream::from_stream(stream, flow_stat, None)) as Box<dyn StreamConnection>
+                    } else {
+                        Box::new(stream) as Box<dyn StreamConnection>
+                    };
+
+                    Ok(AutoProxyClientStream::ProxiedTuic(stream))
+                }
             }
         })
-    }
-
-    pub fn transport(&self) -> &Box<dyn StreamConnection> {
-        match *self {
-            Self::Proxied(ref s) => s.get_ref(),
-            #[cfg(feature = "trojan")]
-            Self::ProxiedTrojan(ref s) => s.get_ref(),
-            #[cfg(feature = "vless")]
-            Self::ProxiedVless(ref s) => s.get_ref(),
-            Self::Bypassed(ref s) => s,
-        }
     }
 }
 
@@ -213,6 +240,8 @@ impl AsyncRead for AutoProxyClientStream {
             AutoProxyClientStreamProj::ProxiedTrojan(s) => s.poll_read(cx, buf),
             #[cfg(feature = "vless")]
             AutoProxyClientStreamProj::ProxiedVless(s) => s.poll_read(cx, buf),
+            #[cfg(feature = "tuic")]
+            AutoProxyClientStreamProj::ProxiedTuic(s) => s.poll_read(cx, buf),
             AutoProxyClientStreamProj::Bypassed(s) => s.poll_read(cx, buf),
         }
     }
@@ -226,6 +255,8 @@ impl AsyncWrite for AutoProxyClientStream {
             AutoProxyClientStreamProj::ProxiedTrojan(s) => s.poll_write(cx, buf),
             #[cfg(feature = "vless")]
             AutoProxyClientStreamProj::ProxiedVless(s) => s.poll_write(cx, buf),
+            #[cfg(feature = "tuic")]
+            AutoProxyClientStreamProj::ProxiedTuic(s) => s.poll_write(cx, buf),
             AutoProxyClientStreamProj::Bypassed(s) => s.poll_write(cx, buf),
         }
     }
@@ -237,6 +268,8 @@ impl AsyncWrite for AutoProxyClientStream {
             AutoProxyClientStreamProj::ProxiedTrojan(s) => s.poll_flush(cx),
             #[cfg(feature = "vless")]
             AutoProxyClientStreamProj::ProxiedVless(s) => s.poll_flush(cx),
+            #[cfg(feature = "tuic")]
+            AutoProxyClientStreamProj::ProxiedTuic(s) => s.poll_flush(cx),
             AutoProxyClientStreamProj::Bypassed(s) => s.poll_flush(cx),
         }
     }
@@ -248,6 +281,8 @@ impl AsyncWrite for AutoProxyClientStream {
             AutoProxyClientStreamProj::ProxiedTrojan(s) => s.poll_shutdown(cx),
             #[cfg(feature = "vless")]
             AutoProxyClientStreamProj::ProxiedVless(s) => s.poll_shutdown(cx),
+            #[cfg(feature = "tuic")]
+            AutoProxyClientStreamProj::ProxiedTuic(s) => s.poll_shutdown(cx),
             AutoProxyClientStreamProj::Bypassed(s) => s.poll_shutdown(cx),
         }
     }
@@ -263,6 +298,8 @@ impl AsyncWrite for AutoProxyClientStream {
             AutoProxyClientStreamProj::ProxiedTrojan(s) => s.poll_write_vectored(cx, bufs),
             #[cfg(feature = "vless")]
             AutoProxyClientStreamProj::ProxiedVless(s) => s.poll_write_vectored(cx, bufs),
+            #[cfg(feature = "tuic")]
+            AutoProxyClientStreamProj::ProxiedTuic(s) => s.poll_write_vectored(cx, bufs),
             AutoProxyClientStreamProj::Bypassed(s) => s.poll_write_vectored(cx, bufs),
         }
     }
@@ -282,6 +319,8 @@ impl StreamConnection for AutoProxyClientStream {
             AutoProxyClientStream::ProxiedTrojan(ref s) => s.check_connected(),
             #[cfg(feature = "vless")]
             AutoProxyClientStream::ProxiedVless(ref s) => s.check_connected(),
+            #[cfg(feature = "tuic")]
+            AutoProxyClientStream::ProxiedTuic(ref s) => s.check_connected(),
             AutoProxyClientStream::Bypassed(ref s) => s.check_connected(),
         }
     }
@@ -300,6 +339,10 @@ impl StreamConnection for AutoProxyClientStream {
             AutoProxyClientStream::ProxiedVless(ref mut s) => {
                 s.set_rate_limit(rate_limit);
             }
+            #[cfg(feature = "tuic")]
+            AutoProxyClientStream::ProxiedTuic(ref mut s) => {
+                s.set_rate_limit(rate_limit);
+            }
             AutoProxyClientStream::Bypassed(ref _s) => {}
         }
     }
@@ -311,6 +354,8 @@ impl StreamConnection for AutoProxyClientStream {
             AutoProxyClientStream::ProxiedTrojan(ref s) => s.physical_device(),
             #[cfg(feature = "vless")]
             AutoProxyClientStream::ProxiedVless(ref s) => s.physical_device(),
+            #[cfg(feature = "tuic")]
+            AutoProxyClientStream::ProxiedTuic(ref s) => s.physical_device(),
             AutoProxyClientStream::Bypassed(ref s) => s.physical_device(),
         }
     }

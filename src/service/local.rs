@@ -582,22 +582,16 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
             let mut protocol = protocol.unwrap();
 
-            match &mut protocol {
-                ServerProtocol::SS(protocol) => {
-                    if let Some(p) = matches.value_of("PLUGIN") {
-                        let plugin = PluginConfig {
-                            plugin: p.to_owned(),
-                            plugin_opts: matches.value_of("PLUGIN_OPT").map(ToOwned::to_owned),
-                            plugin_args: Vec::new(),
-                        };
+            if let ServerProtocol::SS(protocol) = &mut protocol {
+                if let Some(p) = matches.value_of("PLUGIN") {
+                    let plugin = PluginConfig {
+                        plugin: p.to_owned(),
+                        plugin_opts: matches.value_of("PLUGIN_OPT").map(ToOwned::to_owned),
+                        plugin_args: Vec::new(),
+                    };
 
-                        protocol.set_plugin(plugin);
-                    }
+                    protocol.set_plugin(plugin);
                 }
-                #[cfg(feature = "trojan")]
-                ServerProtocol::Trojan(..) => {}
-                #[cfg(feature = "vless")]
-                ServerProtocol::Vless(..) => {}
             }
 
             let svr_addr = svr_addr.parse::<ServerAddr>().expect("server-addr");

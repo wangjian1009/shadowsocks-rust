@@ -100,3 +100,13 @@ pub fn validate_uuid(v: &str) -> Result<(), String> {
         Err(err) => Err(format!("vless UUID format error: {}", err)),
     }
 }
+
+#[cfg(feature = "tuic")]
+pub fn validate_tuic_congestion_controller(v: &str) -> Result<(), String> {
+    use shadowsocks_service::shadowsocks::tuic::CongestionController;
+
+    match v.parse::<CongestionController>() {
+        Ok(_) => Ok(()),
+        Err(err) => Err(format!("tuic CongestionController format error: {}", err)),
+    }
+}

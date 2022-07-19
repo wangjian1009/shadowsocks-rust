@@ -56,12 +56,18 @@ impl Debug for ServerScore {
     }
 }
 
+#[cfg(feature = "tuic")]
+mod tuic;
+
 /// Identifer for a server
 #[derive(Debug)]
 pub struct ServerIdent {
     tcp_score: ServerScore,
     udp_score: ServerScore,
     svr_cfg: ServerConfig,
+
+    #[cfg(feature = "tuic")]
+    tuic_ctx: spin::Mutex<Option<tuic::TuicServerContext>>,
 }
 
 impl ServerIdent {
@@ -71,6 +77,8 @@ impl ServerIdent {
             tcp_score: ServerScore::new(svr_cfg.weight().tcp_weight(), max_server_rtt, check_window),
             udp_score: ServerScore::new(svr_cfg.weight().udp_weight(), max_server_rtt, check_window),
             svr_cfg,
+            #[cfg(feature = "tuic")]
+            tuic_ctx: spin::Mutex::new(None),
         }
     }
 

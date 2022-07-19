@@ -125,6 +125,7 @@ impl UdpTunnel {
                             err
                         );
                     }
+                    tokio::task::yield_now().await
                 }
             }
         }

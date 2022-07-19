@@ -78,7 +78,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                 .long("ss")
                 .requires("SERVER_ADDR")
                 .takes_value(false)
-                .conflicts_with_all(&["PROTOCOL_TROJAN", "PROTOCOL_VLESS"])
+                .conflicts_with_all(&["PROTOCOL_TROJAN", "PROTOCOL_VLESS", "PROTOCOL_TUIC"])
                 .help("Use shadowsocks protocol"),
         )
         .arg(
@@ -178,7 +178,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                     .long("vless")
                     .requires("SERVER_ADDR")
                     .takes_value(false)
-                    .conflicts_with_all(&["PROTOCOL_TROJAN", "PROTOCOL_SS"])
+                    .conflicts_with_all(&["PROTOCOL_TROJAN", "PROTOCOL_SS", "PROTOCOL_TUIC"])
                     .help("Use vless protocol"),
             )
             .arg(
@@ -199,7 +199,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                     .long("trojan")
                     .requires("SERVER_ADDR")
                     .takes_value(false)
-                    .conflicts_with_all(&["PROTOCOL_VLESS", "PROTOCOL_SS"])
+                    .conflicts_with_all(&["PROTOCOL_VLESS", "PROTOCOL_SS", "PROTOCOL_TUIC"])
                     .help("Use trojan protocol"),
             )
             .arg(
@@ -208,6 +208,55 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                     .takes_value(true)
                     .requires("PROTOCOL_TROJAN")
                     .help("Trojan server's password"),
+            );
+    }
+
+    #[cfg(feature = "tuic")]
+    {
+        app = app
+            .arg(
+                Arg::new("PROTOCOL_TUIC")
+                    .long("tuic")
+                    .requires("SERVER_ADDR")
+                    .takes_value(false)
+                    .conflicts_with_all(&["PROTOCOL_VLESS", "PROTOCOL_SS", "PROTOCOL_TROJAN"])
+                    .help("Use tuic protocol"),
+            )
+            .arg(
+                Arg::new("TUIC_CERT")
+                    .long("tuic-cert")
+                    .takes_value(true)
+                    .requires("PROTOCOL_TUIC")
+                    .help("tuic server's cert file path"),
+            )
+            .arg(
+                Arg::new("TUIC_KEY")
+                    .long("tuic-key")
+                    .takes_value(true)
+                    .requires("PROTOCOL_TUIC")
+                    .help("tuic server's key file path"),
+            )
+            .arg(
+                Arg::new("TUIC_TOKEN")
+                    .long("tuic-token")
+                    .takes_value(true)
+                    .requires("PROTOCOL_TUIC")
+                    .help("tuic server's user token"),
+            )
+            .arg(
+                Arg::new("TUIC_ALPN")
+                    .long("tuic-alpn")
+                    .takes_value(true)
+                    .requires("PROTOCOL_TUIC")
+                    .help("tuic tls alpn config"),
+            )
+            .arg(
+                Arg::new("TUIC_CONGESTION_CONTROLLER")
+                    .long("tuic-congestion-controller")
+                    .takes_value(true)
+                    .validator(validator::validate_tuic_congestion_controller)
+                    .requires("PROTOCOL_TUIC")
+                    .help("tuic tls alpn config"),
             );
     }
 
@@ -465,6 +514,40 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 protocol = Some(ServerProtocol::Trojan(TrojanConfig::new(password)));
             }
 
+            #[cfg(feature = "tuic")]
+            if protocol.is_none() && matches.is_present("PROTOCOL_TUIC") {
+                use shadowsocks_service::shadowsocks::{
+                    config::TuicConfig,
+                    tuic::{server::RawConfig, CongestionController},
+                };
+
+                let mut tuic_config = RawConfig::new(
+                    matches.value_of_t_or_exit::<String>("TUIC_CERT"),
+                    matches.value_of_t_or_exit::<String>("TUIC_KEY"),
+                );
+
+                if let Some(token_vec) = matches.values_of("TUIC_TOKEN") {
+                    for token in token_vec.into_iter() {
+                        tuic_config.token.push(token.to_string())
+                    }
+                }
+
+                if let Some(alpn_vec) = matches.values_of("TUIC_ALPN") {
+                    for alpn in alpn_vec.into_iter() {
+                        tuic_config.alpn.push(alpn.to_string())
+                    }
+                }
+
+                if let Some(congestion_controller) = matches
+                    .try_get_one::<CongestionController>("TUIC_CONGESTION_CONTROLLER")
+                    .unwrap()
+                {
+                    tuic_config.congestion_controller = congestion_controller.clone();
+                }
+
+                protocol = Some(ServerProtocol::Tuic(TuicConfig::Server(tuic_config)));
+            }
+
             if protocol.is_none() && matches.is_present("PROTOCOL_SS") {
                 let method = matches.value_of_t_or_exit::<CipherKind>("SS_ENCRYPT_METHOD");
 
@@ -533,18 +616,18 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                     plugin_args: Vec::new(),
                 };
 
-                sc.must_be_ss_mut(|c| c.set_plugin(plugin));
+                sc.if_ss_mut(|c| c.set_plugin(plugin));
             }
 
             // For historical reason, servers that are created from command-line have to be tcp_only.
-            sc.set_mode(Mode::TcpOnly);
+            sc.if_ss_mut(|c| c.set_mode(Mode::TcpOnly));
 
             if matches.is_present("UDP_ONLY") {
-                sc.set_mode(Mode::UdpOnly);
+                sc.if_ss_mut(|c| c.set_mode(Mode::UdpOnly));
             }
 
             if matches.is_present("TCP_AND_UDP") {
-                sc.set_mode(Mode::TcpAndUdp);
+                sc.if_ss_mut(|c| c.set_mode(Mode::TcpAndUdp));
             }
 
             config.server.push(sc);

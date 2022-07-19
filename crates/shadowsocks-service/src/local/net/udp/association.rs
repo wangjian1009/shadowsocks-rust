@@ -267,6 +267,8 @@ enum MultiProtocolProxySocket {
     },
     #[cfg(feature = "vless")]
     Vless(vless::VlessUdpContext),
+    #[cfg(feature = "tuic")]
+    Tuic(tuic::TuicUdpContext),
 }
 
 struct UdpAssociationContext<W>
@@ -487,6 +489,10 @@ where
                         MultiProtocolProxySocket::Vless(ref mut context) => {
                             context.vless_receive_from(_peer_addr, buf).await
                         }
+                        #[cfg(feature = "tuic")]
+                        MultiProtocolProxySocket::Tuic(ref mut context) => {
+                            context.tuic_receive_from(_peer_addr, buf).await
+                        }
                     }
                 }
             }
@@ -668,6 +674,10 @@ where
                         )
                         .await?,
                     ),
+                    #[cfg(feature = "tuic")]
+                    ServerProtocol::Tuic(..) => self
+                        .proxied_socket
+                        .insert(self.tuic_create_context(server.as_ref()).await?),
                 }
             }
         };
@@ -682,6 +692,10 @@ where
             #[cfg(feature = "vless")]
             MultiProtocolProxySocket::Vless(ref mut context) => {
                 return context.vless_send_to(&self.peer_addr, target_addr, data).await;
+            }
+            #[cfg(feature = "tuic")]
+            MultiProtocolProxySocket::Tuic(ref mut context) => {
+                return context.tuic_try_send_to(&self.peer_addr, target_addr, data);
             }
         };
 
@@ -761,3 +775,6 @@ mod trojan;
 
 #[cfg(feature = "vless")]
 mod vless;
+
+#[cfg(feature = "tuic")]
+mod tuic;

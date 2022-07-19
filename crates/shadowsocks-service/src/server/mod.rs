@@ -65,6 +65,8 @@ pub async fn run(config: Config) -> io::Result<()> {
             shadowsocks::config::ServerProtocol::Trojan(_cfg) => {}
             #[cfg(feature = "vless")]
             shadowsocks::config::ServerProtocol::Vless(_cfg) => {}
+            #[cfg(feature = "tuic")]
+            shadowsocks::config::ServerProtocol::Tuic(_cfg) => {}
         }
     }
 

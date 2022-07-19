@@ -611,14 +611,14 @@ impl DnsClient {
             Mode::TcpOnly => {
                 let server = self.balancer.best_tcp_server();
                 self.client_cache
-                    .lookup_remote(&self.context, server.server_config(), remote_addr, message, false)
+                    .lookup_remote(&self.context, server.as_ref(), remote_addr, message, false)
                     .await
                     .map_err(From::from)
             }
             Mode::UdpOnly => {
                 let server = self.balancer.best_udp_server();
                 self.client_cache
-                    .lookup_remote(&self.context, server.server_config(), remote_addr, message, true)
+                    .lookup_remote(&self.context, server.as_ref(), remote_addr, message, true)
                     .await
                     .map_err(From::from)
             }
@@ -636,13 +636,13 @@ impl DnsClient {
 
                     let server = self.balancer.best_tcp_server();
                     self.client_cache
-                        .lookup_remote(&self.context, server.server_config(), remote_addr, message2, false)
+                        .lookup_remote(&self.context, server.as_ref(), remote_addr, message2, false)
                         .await
                 };
                 let udp_fut = async {
                     let server = self.balancer.best_udp_server();
                     self.client_cache
-                        .lookup_remote(&self.context, server.server_config(), remote_addr, message, true)
+                        .lookup_remote(&self.context, server.as_ref(), remote_addr, message, true)
                         .await
                 };
 

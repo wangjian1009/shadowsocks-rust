@@ -37,6 +37,11 @@ use shadowsocks_service::shadowsocks::config::TrojanConfig;
 #[cfg(feature = "vless")]
 use shadowsocks_service::shadowsocks::config::VlessConfig;
 
+#[cfg(feature = "tuic")]
+use shadowsocks_service::shadowsocks::config::TuicConfig;
+#[cfg(feature = "tuic")]
+use shadowsocks_service::shadowsocks::tuic;
+
 pub struct Socks5TestServer {
     local_addr: SocketAddr,
     svr_config: Config,
@@ -46,10 +51,11 @@ pub struct Socks5TestServer {
 impl Socks5TestServer {
     pub fn new<S, L>(
         svr_addr: S,
+        server_protocol: ServerProtocol,
+        #[cfg(feature = "transport")] server_transport: Option<TransportAcceptorConfig>,
         local_addr: L,
-        p: ServerProtocol,
-        #[cfg(feature = "transport")] ts: Option<TransportAcceptorConfig>,
-        #[cfg(feature = "transport")] tc: Option<TransportConnectorConfig>,
+        local_protocol: ServerProtocol,
+        #[cfg(feature = "transport")] local_transport: Option<TransportConnectorConfig>,
         mode: Mode,
     ) -> Socks5TestServer
     where
@@ -59,15 +65,14 @@ impl Socks5TestServer {
         let svr_addr = svr_addr.to_socket_addrs().unwrap().next().unwrap();
         let local_addr = local_addr.to_socket_addrs().unwrap().next().unwrap();
 
-        let p2 = p.clone();
         Socks5TestServer {
             local_addr,
             svr_config: {
                 let mut cfg = Config::new(ConfigType::Server);
-                cfg.server = vec![ServerConfig::new(svr_addr, p)];
-                cfg.server[0].set_mode(mode);
+                cfg.server = vec![ServerConfig::new(svr_addr, server_protocol)];
+                cfg.server[0].if_ss_mut(|c| c.set_mode(mode));
                 #[cfg(feature = "transport")]
-                cfg.server[0].set_acceptor_transport(ts);
+                cfg.server[0].set_acceptor_transport(server_transport);
                 cfg
             },
             cli_config: {
@@ -77,9 +82,9 @@ impl Socks5TestServer {
                     ProtocolType::Socks,
                 )];
                 cfg.local[0].mode = mode;
-                cfg.server = vec![ServerConfig::new(svr_addr, p2)];
+                cfg.server = vec![ServerConfig::new(svr_addr, local_protocol)];
                 #[cfg(feature = "transport")]
-                cfg.server[0].set_connector_transport(tc);
+                cfg.server[0].set_connector_transport(local_transport);
                 cfg
             },
         }
@@ -101,9 +106,10 @@ impl Socks5TestServer {
 }
 
 async fn socks5_tcp_relay_test(
-    p: ServerProtocol,
-    #[cfg(feature = "transport")] ts: Option<TransportAcceptorConfig>,
-    #[cfg(feature = "transport")] tc: Option<TransportConnectorConfig>,
+    server_protocol: ServerProtocol,
+    #[cfg(feature = "transport")] server_transport: Option<TransportAcceptorConfig>,
+    local_protocol: ServerProtocol,
+    #[cfg(feature = "transport")] local_transport: Option<TransportConnectorConfig>,
 ) {
     let _ = env_logger::builder()
         .filter_level(log::LevelFilter::Debug)
@@ -111,13 +117,16 @@ async fn socks5_tcp_relay_test(
         .try_init();
 
     let svr = Socks5TestServer::new(
+        // server
         format!("127.0.0.1:{}", generate_port().expect("generate port error")),
+        server_protocol,
+        #[cfg(feature = "transport")]
+        server_transport,
+        // local
         format!("127.0.0.1:{}", generate_port().expect("generate port error")),
-        p,
+        local_protocol,
         #[cfg(feature = "transport")]
-        ts,
-        #[cfg(feature = "transport")]
-        tc,
+        local_transport,
         Mode::TcpOnly,
     );
     svr.run().await;
@@ -167,12 +176,13 @@ fn start_udp_echo_server(port: u16) -> String {
 }
 
 async fn socks5_udp_relay_test(
-    p: ServerProtocol,
-    #[cfg(feature = "transport")] ts: Option<TransportAcceptorConfig>,
-    #[cfg(feature = "transport")] tc: Option<TransportConnectorConfig>,
+    server_protocol: ServerProtocol,
+    #[cfg(feature = "transport")] server_transport: Option<TransportAcceptorConfig>,
+    local_protocol: ServerProtocol,
+    #[cfg(feature = "transport")] local_transport: Option<TransportConnectorConfig>,
 ) {
     let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Debug)
+        .filter_level(log::LevelFilter::Info)
         .is_test(true)
         .try_init();
 
@@ -184,12 +194,13 @@ async fn socks5_udp_relay_test(
 
     let svr = Socks5TestServer::new(
         socks_remote_addr,
+        server_protocol,
+        #[cfg(feature = "transport")]
+        server_transport,
         socks_local_addr.clone(),
-        p,
+        local_protocol,
         #[cfg(feature = "transport")]
-        ts,
-        #[cfg(feature = "transport")]
-        tc,
+        local_transport,
         Mode::TcpAndUdp,
     );
     svr.run().await;
@@ -219,6 +230,7 @@ async fn socks5_udp_relay_ss() {
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_128_GCM)),
         #[cfg(feature = "transport")]
         None,
+        ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_128_GCM)),
         #[cfg(feature = "transport")]
         None,
     )
@@ -232,6 +244,7 @@ async fn socks5_tcp_relay_ss_stream() {
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_128_CFB128)),
         #[cfg(feature = "transport")]
         None,
+        ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_128_CFB128)),
         #[cfg(feature = "transport")]
         None,
     )
@@ -244,6 +257,7 @@ async fn socks5_tcp_relay_ss_aead() {
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         #[cfg(feature = "transport")]
         None,
+        ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         #[cfg(feature = "transport")]
         None,
     )
@@ -258,6 +272,7 @@ async fn socks5_udp_relay_ss_ws() {
         Some(TransportAcceptorConfig::Ws(websocket::WebSocketAcceptorConfig {
             path: "/a".to_owned(),
         })),
+        ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_128_GCM)),
         Some(TransportConnectorConfig::Ws(websocket::WebSocketConnectorConfig {
             path: "/a".to_owned(),
             host: "www.google.com".to_owned(),
@@ -276,6 +291,7 @@ async fn socks5_tcp_relay_ss_ws() {
         Some(TransportAcceptorConfig::Ws(websocket::WebSocketAcceptorConfig {
             path: "/a".to_owned(),
         })),
+        ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportConnectorConfig::Ws(websocket::WebSocketConnectorConfig {
             path: "/a".to_owned(),
             host: "www.google.com".to_owned(),
@@ -294,8 +310,9 @@ async fn socks5_tcp_relay_ss_tls() {
             key: "tests/cert/server.key".to_owned(),
             cipher: None,
         })),
+        ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportConnectorConfig::Tls(tls::TlsConnectorConfig {
-            sni: "www.google.com".to_owned(),
+            sni: "proxy0101.com".to_owned(),
             cert: None,
             cipher: None,
         })),
@@ -316,13 +333,14 @@ async fn socks5_tcp_relay_ss_wss() {
                 cipher: None,
             },
         )),
+        ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportConnectorConfig::Wss(
             websocket::WebSocketConnectorConfig {
                 path: "/a".to_owned(),
                 host: "www.google.com".to_owned(),
             },
             tls::TlsConnectorConfig {
-                sni: "www.google.com".to_owned(),
+                sni: "proxy0101.com".to_owned(),
                 cert: None,
                 cipher: None,
             },
@@ -337,6 +355,7 @@ async fn socks5_tcp_relay_ss_skcp() {
     socks5_tcp_relay_test(
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportAcceptorConfig::Skcp(skcp::SkcpConfig::default())),
+        ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportConnectorConfig::Skcp(skcp::SkcpConfig::default())),
     )
     .await
@@ -349,6 +368,7 @@ async fn socks5_tcp_relay_trojan() {
         ServerProtocol::Trojan(TrojanConfig::new("test-password")),
         #[cfg(feature = "transport")]
         None,
+        ServerProtocol::Trojan(TrojanConfig::new("test-password")),
         #[cfg(feature = "transport")]
         None,
     )
@@ -362,6 +382,7 @@ async fn socks5_udp_relay_trojan() {
         ServerProtocol::Trojan(TrojanConfig::new("test-password")),
         #[cfg(feature = "transport")]
         None,
+        ServerProtocol::Trojan(TrojanConfig::new("test-password")),
         #[cfg(feature = "transport")]
         None,
     )
@@ -376,10 +397,12 @@ async fn socks5_tcp_relay_vless() {
         .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
         .unwrap();
 
+    let config2 = config.clone();
     socks5_tcp_relay_test(
         ServerProtocol::Vless(config),
         #[cfg(feature = "transport")]
         None,
+        ServerProtocol::Vless(config2),
         #[cfg(feature = "transport")]
         None,
     )
@@ -394,10 +417,12 @@ async fn socks5_udp_relay_vless() {
         .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
         .unwrap();
 
+    let config2 = config.clone();
     socks5_udp_relay_test(
         ServerProtocol::Vless(config),
         #[cfg(feature = "transport")]
         None,
+        ServerProtocol::Vless(config2),
         #[cfg(feature = "transport")]
         None,
     )
@@ -412,9 +437,11 @@ async fn socks5_tcp_relay_vless_skcp() {
         .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
         .unwrap();
 
+    let config2 = config.clone();
     socks5_tcp_relay_test(
         ServerProtocol::Vless(config),
         Some(TransportAcceptorConfig::Skcp(skcp::SkcpConfig::default())),
+        ServerProtocol::Vless(config2),
         Some(TransportConnectorConfig::Skcp(skcp::SkcpConfig::default())),
     )
     .await
@@ -428,10 +455,56 @@ async fn socks5_udp_relay_vless_skcp() {
         .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
         .unwrap();
 
+    let config2 = config.clone();
     socks5_udp_relay_test(
         ServerProtocol::Vless(config),
         Some(TransportAcceptorConfig::Skcp(skcp::SkcpConfig::default())),
+        ServerProtocol::Vless(config2),
         Some(TransportConnectorConfig::Skcp(skcp::SkcpConfig::default())),
+    )
+    .await
+}
+
+#[cfg(feature = "tuic")]
+#[tokio::test]
+async fn socks5_tcp_relay_tuic() {
+    let mut client_config = tuic::client::RawConfig::new("token1".to_owned());
+    client_config.sni = Some("proxy0101.com".to_owned());
+    client_config.disable_sni = true;
+
+    let mut server_config =
+        tuic::server::RawConfig::new("tests/cert/server.crt".to_owned(), "tests/cert/server.key".to_owned());
+    server_config.token.push("token1".to_owned());
+
+    socks5_tcp_relay_test(
+        ServerProtocol::Tuic(TuicConfig::Server(server_config)),
+        #[cfg(feature = "transport")]
+        None,
+        ServerProtocol::Tuic(TuicConfig::Client(client_config)),
+        #[cfg(feature = "transport")]
+        None,
+    )
+    .await
+}
+
+#[cfg(feature = "tuic")]
+#[tokio::test]
+async fn socks5_udp_relay_tuic() {
+    let mut client_config = tuic::client::RawConfig::new("token1".to_owned());
+    client_config.sni = Some("proxy0101.com".to_owned());
+    client_config.disable_sni = true;
+
+    let mut server_config =
+        tuic::server::RawConfig::new("tests/cert/server.crt".to_owned(), "tests/cert/server.key".to_owned());
+    server_config.token.push("token1".to_owned());
+
+    socks5_udp_relay_test(
+        ServerProtocol::Tuic(TuicConfig::Server(server_config)),
+        #[cfg(feature = "transport")]
+        None,
+        ServerProtocol::Tuic(TuicConfig::Client(client_config)),
+        #[cfg(feature = "transport")]
+        None,
     )
     .await
 }

@@ -450,7 +450,7 @@ impl Manager {
             },
         };
 
-        svr_cfg.set_mode(mode.unwrap_or(self.svr_cfg.mode));
+        svr_cfg.must_be_ss_mut(|c| c.set_mode(mode.unwrap_or(self.svr_cfg.mode)));
 
         if let Some(ref users) = req.users {
             let mut user_manager = ServerUserManager::new();

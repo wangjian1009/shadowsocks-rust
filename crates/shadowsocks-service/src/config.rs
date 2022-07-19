@@ -1561,7 +1561,7 @@ impl Config {
                 )
             })?;
 
-            nsvr.set_mode(global_mode);
+            nsvr.if_ss_mut(|c| c.set_mode(global_mode));
 
             if let Some(timeout) = config.timeout.map(Duration::from_secs) {
                 nsvr.set_timeout(timeout);
@@ -1612,7 +1612,7 @@ impl Config {
                 };
 
                 let mut nsvr = ServerConfig::new(addr, ServerProtocol::SS(ShadowsocksConfig::new(password, method)));
-                nsvr.set_mode(global_mode);
+                nsvr.must_be_ss_mut(|c| c.set_mode(global_mode));
 
                 if let Some(ref p) = config.plugin {
                     // SIP008 allows "plugin" to be an empty string
@@ -1722,7 +1722,7 @@ impl Config {
 
                 match svr.mode {
                     Some(mode) => match mode.parse::<Mode>() {
-                        Ok(mode) => nsvr.set_mode(mode),
+                        Ok(mode) => nsvr.must_be_ss_mut(|c| c.set_mode(mode)),
                         Err(..) => {
                             let err = Error::new(ErrorKind::Invalid, "invalid `mode`", None);
                             return Err(err);
@@ -1731,7 +1731,7 @@ impl Config {
                     None => {
                         // Server will derive mode from the global scope
                         if matches!(config_type, ConfigType::Server | ConfigType::Manager) {
-                            nsvr.set_mode(global_mode);
+                            nsvr.must_be_ss_mut(|c| c.set_mode(global_mode));
                         }
                     }
                 }
@@ -2418,6 +2418,8 @@ impl fmt::Display for Config {
                     ServerProtocol::Trojan(_cfg) => {}
                     #[cfg(feature = "vless")]
                     ServerProtocol::Vless(_cfg) => {}
+                    #[cfg(feature = "tuic")]
+                    ServerProtocol::Tuic(_cfg) => {}
                 }
 
                 svr.if_ss(|svr| {
@@ -2432,7 +2434,7 @@ impl fmt::Display for Config {
                     });
                 });
                 jconf.timeout = svr.timeout().map(|t| t.as_secs());
-                jconf.mode = Some(svr.mode().to_string());
+                jconf.mode = Some(svr.if_ss(|c| c.mode()).unwrap_or(Mode::TcpAndUdp).to_string());
             }
             // For >1 servers, uses extended multiple server format
             _ => {
@@ -2491,7 +2493,7 @@ impl fmt::Display for Config {
                         timeout: svr.timeout().map(|t| t.as_secs()),
                         remarks: svr.remarks().map(ToOwned::to_owned),
                         id: svr.if_ss(|c| c.id().map(ToOwned::to_owned)).unwrap_or(None),
-                        mode: Some(svr.mode().to_string()),
+                        mode: Some(svr.if_ss(|c| c.mode()).unwrap_or(Mode::TcpAndUdp).to_string()),
                         tcp_weight: if (svr.weight().tcp_weight() - 1.0).abs() > f32::EPSILON {
                             Some(svr.weight().tcp_weight())
                         } else {

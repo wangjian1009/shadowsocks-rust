@@ -38,6 +38,7 @@ default = [
     "transport-tls",
     "trojan",
     "vless",
+    "tuic",
 ]
 
 full = [
@@ -63,6 +64,7 @@ full = [
     "transport-skcp",
     "trojan",
     "vless",
+    "tuic",
 ]
 
 # Enable local server
@@ -98,6 +100,7 @@ transport-skcp = ["transport", "shadowsocks/transport-skcp"]
 # enable protocol
 trojan = ["shadowsocks/trojan"]
 vless = ["shadowsocks/vless"]
+tuic = ["shadowsocks/tuic"]
 
 # Enables trust-dns for replacing tokio's builtin DNS resolver
 trust-dns = ["trust-dns-resolver", "shadowsocks/trust-dns"]

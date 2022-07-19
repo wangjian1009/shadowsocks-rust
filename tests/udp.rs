@@ -32,7 +32,7 @@ fn get_svr_config() -> Config {
         SERVER_ADDR.parse::<SocketAddr>().unwrap(),
         ServerProtocol::SS(ShadowsocksConfig::new(PASSWORD.to_owned(), METHOD)),
     )];
-    cfg.server[0].set_mode(Mode::TcpAndUdp);
+    cfg.server[0].must_be_ss_mut(|c| c.set_mode(Mode::TcpAndUdp));
     cfg
 }
 

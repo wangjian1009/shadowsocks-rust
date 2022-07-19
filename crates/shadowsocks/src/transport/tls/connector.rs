@@ -1,22 +1,21 @@
 use async_trait::async_trait;
+use rustls_pemfile::Item;
 use std::{
-    fs::File,
+    fs::{self, File},
     io::{self, BufReader},
-    path::Path,
     sync::Arc,
 };
 use tokio_rustls::{
     client::TlsStream as TokioTlsStream,
-    rustls::{Certificate, ClientConfig, RootCertStore, ServerCertVerified, ServerCertVerifier, TLSError},
+    rustls::{Certificate, ClientConfig, RootCertStore, ServerName},
     TlsConnector as TokioTlsConnector,
 };
-use webpki::DNSNameRef;
 
 use crate::net::{ConnectOpts, Destination};
 
 use super::{
     super::{Connection, Connector, DeviceOrGuard, DummyPacket, StreamConnection},
-    get_cipher_suite, new_error,
+    get_cipher_suite,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,41 +46,55 @@ impl<S: StreamConnection> StreamConnection for TokioTlsStream<S> {
     }
 }
 
-struct NoServerVerifier {}
+fn load_certificates(files: Vec<String>) -> io::Result<RootCertStore> {
+    let mut certs = RootCertStore::empty();
 
-impl ServerCertVerifier for NoServerVerifier {
-    fn verify_server_cert(
-        &self,
-        _roots: &RootCertStore,
-        _presented_certs: &[Certificate],
-        _dns_name: webpki::DNSNameRef,
-        _ocsp_response: &[u8],
-    ) -> Result<ServerCertVerified, TLSError> {
-        Ok(ServerCertVerified::assertion())
+    for file in &files {
+        let mut file = BufReader::new(File::open(file)?);
+
+        while let Ok(Some(item)) = rustls_pemfile::read_one(&mut file) {
+            if let Item::X509Certificate(cert) = item {
+                certs
+                    .add(&Certificate(cert))
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            }
+        }
     }
+
+    if certs.is_empty() {
+        for file in &files {
+            certs
+                .add(&Certificate(fs::read(file)?))
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        }
+    }
+
+    for cert in rustls_native_certs::load_native_certs().map_err(|e| io::Error::new(io::ErrorKind::Other, e))? {
+        certs
+            .add(&Certificate(cert.0))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    }
+
+    Ok(certs)
 }
 
 impl<C: Connector> TlsConnector<C> {
     pub fn new(config: &TlsConnectorConfig, inner: C) -> io::Result<Self> {
-        let mut tls_config = ClientConfig::new();
+        let cipher_suites = get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
 
-        tls_config.ciphersuites =
-            get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
-
-        if let Some(ref cert_path) = config.cert {
-            let cert_path = Path::new(cert_path);
-            tls_config
-                .root_store
-                .add_pem_file(&mut BufReader::new(
-                    File::open(cert_path)
-                        .map_err(|e| new_error(format!("open tls cert {:?} fail, {}", cert_path, e)))?,
-                ))
-                .unwrap();
-        } else {
-            tls_config
-                .dangerous()
-                .set_certificate_verifier(Arc::new(NoServerVerifier {}));
+        let mut cert_files = Vec::new();
+        if let Some(cert_file) = config.cert.as_ref() {
+            cert_files.push(cert_file.clone());
         }
+        let certs = load_certificates(cert_files)?;
+
+        let tls_config = ClientConfig::builder()
+            .with_cipher_suites(&cipher_suites)
+            .with_safe_default_kx_groups()
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(certs)
+            .with_no_client_auth();
 
         Ok(Self {
             sni: config.sni.clone(),
@@ -108,7 +121,7 @@ where
     ) -> io::Result<Connection<Self::TS, Self::PR, Self::PW>> {
         match self.inner.connect(destination, connect_opts).await? {
             Connection::Stream(stream) => {
-                let dns_name = DNSNameRef::try_from_ascii_str(&self.sni)
+                let dns_name = ServerName::try_from(self.sni.as_str())
                     .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
                 let stream = TokioTlsConnector::from(self.tls_config.clone())
                     .connect(dns_name, stream)

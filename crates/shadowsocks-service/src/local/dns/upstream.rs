@@ -9,7 +9,7 @@ use bytes::{BufMut, BytesMut};
 use log::trace;
 use rand::{thread_rng, Rng};
 use shadowsocks::{
-    config::{ServerConfig, ServerProtocol},
+    config::ServerProtocol,
     context::SharedContext,
     net::{ConnectOpts, FlowStat, TcpStream as ShadowTcpStream, UdpSocket as ShadowUdpSocket},
     relay::{udprelay::ProxySocket, Address},
@@ -30,7 +30,10 @@ use trust_dns_resolver::proto::{
     op::Message,
 };
 
-use crate::{local::net::AutoProxyClientStream, net::MonProxySocket};
+use crate::{
+    local::{loadbalancing::ServerIdent, net::AutoProxyClientStream},
+    net::MonProxySocket,
+};
 
 /// Collection of various DNS connections
 #[allow(clippy::large_enum_variant)]
@@ -78,7 +81,7 @@ impl DnsClient {
     /// Connect to remote DNS server through proxy in TCP
     pub async fn connect_tcp_remote(
         context: &SharedContext,
-        svr_cfg: &ServerConfig,
+        svr: &ServerIdent,
         ns: &Address,
         connect_opts: &ConnectOpts,
         flow_stat: Arc<FlowStat>,
@@ -86,7 +89,7 @@ impl DnsClient {
         let stream = AutoProxyClientStream::connect_proxied_no_score(
             context.clone(),
             connect_opts,
-            svr_cfg,
+            svr,
             ns,
             Some(flow_stat),
             #[cfg(feature = "rate-limit")]
@@ -99,11 +102,12 @@ impl DnsClient {
     /// Connect to remote DNS server through proxy in UDP
     pub async fn connect_udp_remote(
         context: SharedContext,
-        svr_cfg: &ServerConfig,
+        svr: &ServerIdent,
         ns: Address,
         connect_opts: &ConnectOpts,
         flow_stat: Arc<FlowStat>,
     ) -> io::Result<DnsClient> {
+        let svr_cfg = svr.server_config();
         match svr_cfg.protocol() {
             ServerProtocol::SS(ss_cfg) => {
                 let socket = ProxySocket::connect_with_opts(context, svr_cfg, ss_cfg, connect_opts).await?;
@@ -116,6 +120,8 @@ impl DnsClient {
             }
             #[cfg(feature = "vless")]
             ServerProtocol::Vless(_cfg) => Err(io::Error::new(io::ErrorKind::Other, "not support dns udp over vless")),
+            #[cfg(feature = "tuic")]
+            ServerProtocol::Tuic(_cfg) => Err(io::Error::new(io::ErrorKind::Other, "not support dns udp over tuic")),
         }
     }
 
@@ -176,7 +182,7 @@ impl DnsClient {
             DnsClient::UdpLocal { .. } => true,
             #[cfg(unix)]
             DnsClient::UnixStream { ref stream } => shadowsocks::net::check_peekable(stream),
-            DnsClient::TcpRemote { ref stream } => stream.transport().check_connected(),
+            DnsClient::TcpRemote { ref stream } => stream.check_connected(),
             DnsClient::UdpRemote { .. } => true,
         }
     }

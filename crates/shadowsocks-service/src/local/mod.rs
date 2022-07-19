@@ -12,7 +12,7 @@ use std::{
 use futures::{future, ready};
 use log::trace;
 use shadowsocks::{
-    config::{Mode, ServerType},
+    config::{Mode, ServerProtocol, ServerType},
     context::Context,
     net::{AcceptOpts, ConnectOpts},
 };
@@ -125,18 +125,12 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
     // Warning for Stream Ciphers
     #[cfg(feature = "stream-cipher")]
     for server in config.server.iter() {
-        match server.protocol() {
-            shadowsocks::config::ServerProtocol::SS(ss_cfg) => {
-                if ss_cfg.method().is_stream() {
-                    log::warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
-                    DO NOT USE. It will be removed in the future.", ss_cfg.method(), server.addr());
-                }
+        server.if_ss(|ss_cfg| {
+            if ss_cfg.method().is_stream() {
+                log::warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
+                            DO NOT USE. It will be removed in the future.", ss_cfg.method(), server.addr());
             }
-            #[cfg(feature = "trojan")]
-            shadowsocks::config::ServerProtocol::Trojan(_cfg) => {}
-            #[cfg(feature = "vless")]
-            shadowsocks::config::ServerProtocol::Vless(_cfg) => {}
-        }
+        });
     }
 
     #[cfg(all(unix, not(target_os = "android")))]
@@ -256,6 +250,15 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
 
         let report_fut = flow_report_task(stat_addr, context.flow_stat());
         vfut.push(ServerHandle(tokio::spawn(report_fut)));
+    }
+
+    // 部分协议需要针对每一个server启动一个task
+    #[cfg(feature = "tuic")]
+    for runing_server in balancer.servers() {
+        if let ServerProtocol::Tuic(tuic_config) = runing_server.server_config().protocol() {
+            let tuic_run_fut = runing_server.tuic_run(context.context(), tuic_config).await?;
+            vfut.push(ServerHandle(tokio::spawn(tuic_run_fut)));
+        }
     }
 
     for local_config in config.local {

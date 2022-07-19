@@ -349,11 +349,11 @@ impl PingBalancerContext {
     }
 
     fn check_server_tcp_enabled(svr_cfg: &ServerConfig) -> bool {
-        svr_cfg.mode().enable_tcp() && svr_cfg.weight().tcp_weight() > 0.0
+        svr_cfg.if_ss(|c| c.mode().enable_tcp()).unwrap_or(true) && svr_cfg.weight().tcp_weight() > 0.0
     }
 
     fn check_server_udp_enabled(svr_cfg: &ServerConfig) -> bool {
-        svr_cfg.mode().enable_udp() && svr_cfg.weight().udp_weight() > 0.0
+        svr_cfg.if_ss(|c| c.mode().enable_udp()).unwrap_or(true) && svr_cfg.weight().udp_weight() > 0.0
     }
 
     fn probing_required(&self) -> bool {
@@ -931,6 +931,8 @@ impl PingChecker {
                 ServerProtocol::Trojan(_cfg) => Ok(()),
                 #[cfg(feature = "vless")]
                 ServerProtocol::Vless(_cfg) => Ok(()),
+                #[cfg(feature = "tuic")]
+                ServerProtocol::Tuic(_cfg) => Ok(()),
             },
         }
     }

@@ -90,6 +90,11 @@ impl TcpServer {
     }
 
     pub async fn run(self, svr_cfg: &ServerConfig) -> io::Result<()> {
+        #[cfg(feature = "tuic")]
+        if let ServerProtocol::Tuic(tuic_config) = svr_cfg.protocol() {
+            return self.serve_tuic(svr_cfg, tuic_config).await;
+        }
+
         #[cfg(feature = "transport")]
         match svr_cfg.acceptor_transport().as_ref() {
             Some(ref transport) => match transport {
@@ -358,6 +363,11 @@ impl TcpServer {
                         connection_stat.remove_in_connection(&conn_id).await;
                     });
                 }
+                #[cfg(feature = "tuic")]
+                ServerProtocol::Tuic(..) => {
+                    //TODO: Loki
+                    unreachable!()
+                }
             }
         }
     }
@@ -587,3 +597,6 @@ mod trojan;
 
 #[cfg(feature = "vless")]
 mod vless;
+
+#[cfg(feature = "tuic")]
+mod tuic;

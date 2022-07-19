@@ -1,17 +1,5 @@
-use tokio_rustls::rustls::{
-    internal::pemfile,
-    Certificate,
-    CipherSuite,
-    PrivateKey,
-    SupportedCipherSuite,
-    ALL_CIPHERSUITES,
-};
-
-use std::{
-    fs::File,
-    io::{self, BufReader},
-    path::Path,
-};
+use std::io;
+use tokio_rustls::rustls::{CipherSuite, SupportedCipherSuite, ALL_CIPHER_SUITES};
 
 pub mod acceptor;
 pub mod connector;
@@ -21,29 +9,6 @@ pub use connector::{TlsConnector, TlsConnectorConfig};
 
 fn new_error<T: ToString>(message: T) -> io::Error {
     io::Error::new(io::ErrorKind::Other, format!("tls: {}", message.to_string()))
-}
-
-fn load_cert(path: &Path) -> io::Result<Vec<Certificate>> {
-    pemfile::certs(&mut BufReader::new(
-        File::open(path).map_err(|e| new_error(format!("open tls cert {:?} fail, {}", path, e)))?,
-    ))
-    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid tls cert"))
-}
-
-fn load_key(path: &Path) -> io::Result<Vec<PrivateKey>> {
-    let pkcs8_key = pemfile::pkcs8_private_keys(&mut BufReader::new(
-        File::open(path).map_err(|e| new_error(format!("open tls key {:?} fail, {}", path, e)))?,
-    ))
-    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid tls pkcs8 key"))?;
-    if pkcs8_key.len() != 0 {
-        return Ok(pkcs8_key);
-    }
-    let rsa_key = pemfile::rsa_private_keys(&mut BufReader::new(File::open(path)?))
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid tls rsa key"))?;
-    if rsa_key.len() != 0 {
-        return Ok(rsa_key);
-    }
-    return Err(new_error("no valid key found"));
 }
 
 fn get_cipher_name(cipher: &SupportedCipherSuite) -> &'static str {
@@ -62,7 +27,7 @@ fn get_cipher_name(cipher: &SupportedCipherSuite) -> &'static str {
     // &TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
     // &TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
     // ];
-    match cipher.suite {
+    match cipher.suite() {
         CipherSuite::TLS13_CHACHA20_POLY1305_SHA256 => "TLS13_CHACHA20_POLY1305_SHA256",
         CipherSuite::TLS13_AES_256_GCM_SHA384 => "TLS13_AES_256_GCM_SHA384",
         CipherSuite::TLS13_AES_128_GCM_SHA256 => "TLS13_AES_128_GCM_SHA256",
@@ -76,18 +41,18 @@ fn get_cipher_name(cipher: &SupportedCipherSuite) -> &'static str {
     }
 }
 
-fn get_cipher_suite(cipher: Option<Vec<&str>>) -> io::Result<Vec<&'static SupportedCipherSuite>> {
+fn get_cipher_suite(cipher: Option<Vec<&str>>) -> io::Result<Vec<SupportedCipherSuite>> {
     if cipher.is_none() {
-        return Ok(ALL_CIPHERSUITES.to_vec());
+        return Ok(ALL_CIPHER_SUITES.to_vec());
     }
     let cipher = cipher.unwrap();
     let mut result = Vec::new();
 
     for name in cipher {
         let mut found = false;
-        for i in ALL_CIPHERSUITES.to_vec() {
+        for i in ALL_CIPHER_SUITES {
             if name == get_cipher_name(i) {
-                result.push(i);
+                result.push(i.clone());
                 found = true;
                 log::debug!("cipher: {} applied", name);
                 break;

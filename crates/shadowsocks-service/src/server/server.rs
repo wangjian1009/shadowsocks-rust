@@ -188,7 +188,7 @@ impl Server {
 
         let connector = Arc::new(TcpConnector::new(Some(self.context.context())));
 
-        if self.svr_cfg.mode().enable_tcp() {
+        if self.svr_cfg.if_ss(|ss_cfg| ss_cfg.mode().enable_tcp()).unwrap_or(false) {
             let mut plugin = None;
 
             if let Some(plugin_cfg) = self.svr_cfg.if_ss(|c| c.plugin()).unwrap_or(None) {
@@ -219,7 +219,7 @@ impl Server {
             vfut.push(tcp_fut);
         }
 
-        if self.svr_cfg.mode().enable_udp() {
+        if self.svr_cfg.if_ss(|ss_cfg| ss_cfg.mode().enable_udp()).unwrap_or(false) {
             match &self.svr_cfg.protocol() {
                 ServerProtocol::SS(cfg) => {
                     let udp_fut = self.run_udp_server(cfg).boxed();
@@ -229,7 +229,15 @@ impl Server {
                 ServerProtocol::Trojan(_cfg) => {}
                 #[cfg(feature = "vless")]
                 ServerProtocol::Vless(_cfg) => {}
+                #[cfg(feature = "tuic")]
+                ServerProtocol::Tuic(_cfg) => {}
             }
+        }
+
+        // 其他协议处理
+        if self.svr_cfg.if_not_ss() {
+            let tcp_fut = self.run_tcp_server(connector.clone()).boxed();
+            vfut.push(tcp_fut);
         }
 
         if self.manager_addr.is_some() {

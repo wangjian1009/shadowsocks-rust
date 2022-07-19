@@ -2,11 +2,16 @@ pub trait DeviceGuard {
     fn device(&self) -> DeviceOrGuard<'_>;
 }
 
+pub trait PrivateDevice {
+    fn local_addr(&self) -> std::io::Result<std::net::SocketAddr>;
+}
+
 #[derive(Clone)]
 pub enum Device<'a> {
     Tcp(&'a tokio::net::TcpStream),
     Udp(&'a tokio::net::UdpSocket),
     TofTcp(&'a tokio_tfo::TfoStream),
+    Private(&'a dyn PrivateDevice),
 }
 
 pub enum DeviceOrGuard<'a> {

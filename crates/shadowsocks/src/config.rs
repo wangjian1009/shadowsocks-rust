@@ -43,6 +43,18 @@ cfg_if! {
     }
 }
 
+cfg_if! {
+    if #[cfg(feature = "tuic")] {
+        mod tuic;
+
+        #[derive(Clone, Debug, PartialEq)]
+        pub enum TuicConfig {
+            Client(crate::tuic::client::RawConfig),
+            Server(crate::tuic::server::RawConfig),
+        }
+    }
+}
+
 mod protocol;
 pub use protocol::ServerProtocol;
 
@@ -296,9 +308,6 @@ pub struct ServerConfig {
     /// Remark (Profile Name), normally used as an identifier of this erver
     remarks: Option<String>,
 
-    /// Mode
-    mode: Mode,
-
     /// Weight
     weight: ServerWeight,
 
@@ -458,7 +467,6 @@ impl ServerConfig {
             remarks: None,
             protocol,
             timeout: None,
-            mode: Mode::TcpAndUdp, // Server serves TCP & UDP by default
             weight: ServerWeight::new(),
 
             request_recv_timeout: None,
@@ -493,6 +501,8 @@ impl ServerConfig {
             ServerProtocol::Trojan(..) => &self.addr,
             #[cfg(feature = "vless")]
             ServerProtocol::Vless(..) => &self.addr,
+            #[cfg(feature = "tuic")]
+            ServerProtocol::Tuic(..) => &self.addr,
         }
     }
 
@@ -517,16 +527,6 @@ impl ServerConfig {
         S: Into<String>,
     {
         self.remarks = Some(remarks.into());
-    }
-
-    /// Get server's `Mode`
-    pub fn mode(&self) -> Mode {
-        self.mode
-    }
-
-    /// Set server's `Mode`
-    pub fn set_mode(&mut self, mode: Mode) {
-        self.mode = mode;
     }
 
     /// Get server's balancer weight
@@ -557,6 +557,12 @@ impl ServerConfig {
                 let param = format!("");
                 return format!("vless://{}", encode_config(&param, URL_SAFE_NO_PAD));
             }
+            #[cfg(feature = "tuic")]
+            ServerProtocol::Tuic(_config) => {
+                // TODO: Loki
+                let param = format!("");
+                return format!("tuic://{}", encode_config(&param, URL_SAFE_NO_PAD));
+            }
         };
 
         let param = format!("{}:{}@{}", config.method(), config.password(), self.addr());
@@ -575,6 +581,8 @@ impl ServerConfig {
             }
             #[cfg(feature = "vless")]
             ServerProtocol::Vless(vless_config) => return self.to_url_vless(vless_config),
+            #[cfg(feature = "tuic")]
+            ServerProtocol::Tuic(tuic_config) => return self.to_url_tuic(tuic_config),
         };
 
         cfg_if! {
@@ -633,6 +641,11 @@ impl ServerConfig {
             #[cfg(feature = "vless")]
             if parsed.scheme() == "vless" {
                 return Self::from_url_vless(&parsed);
+            }
+
+            #[cfg(feature = "tuic")]
+            if parsed.scheme() == "tuic" {
+                return Self::from_url_tuic_client(&parsed);
             }
 
             log::error!("not supported protocol {}", parsed.scheme());
@@ -821,6 +834,8 @@ impl ServerConfig {
             ServerProtocol::Trojan(..) => unreachable!(),
             #[cfg(feature = "vless")]
             ServerProtocol::Vless(..) => unreachable!(),
+            #[cfg(feature = "tuic")]
+            ServerProtocol::Tuic(..) => unreachable!(),
         }
     }
 
@@ -834,6 +849,35 @@ impl ServerConfig {
             ServerProtocol::Trojan(..) => None,
             #[cfg(feature = "vless")]
             ServerProtocol::Vless(..) => None,
+            #[cfg(feature = "tuic")]
+            ServerProtocol::Tuic(..) => None,
+        }
+    }
+
+    pub fn if_ss_mut<'a, Fn, R>(&'a mut self, f: Fn) -> Option<R>
+    where
+        Fn: FnOnce(&'a mut ShadowsocksConfig) -> R,
+    {
+        match &mut self.protocol {
+            ServerProtocol::SS(cfg) => Some(f(cfg)),
+            #[cfg(feature = "trojan")]
+            ServerProtocol::Trojan(..) => None,
+            #[cfg(feature = "vless")]
+            ServerProtocol::Vless(..) => None,
+            #[cfg(feature = "tuic")]
+            ServerProtocol::Tuic(..) => None,
+        }
+    }
+
+    pub fn if_not_ss(&self) -> bool {
+        match &self.protocol {
+            ServerProtocol::SS(..) => false,
+            #[cfg(feature = "trojan")]
+            ServerProtocol::Trojan(..) => true,
+            #[cfg(feature = "vless")]
+            ServerProtocol::Vless(..) => true,
+            #[cfg(feature = "tuic")]
+            ServerProtocol::Tuic(..) => true,
         }
     }
 }

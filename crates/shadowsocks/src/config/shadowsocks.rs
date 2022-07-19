@@ -26,6 +26,9 @@ pub struct ShadowsocksConfig {
 
     /// ID (SIP008) is a random generated UUID
     id: Option<String>,
+
+    /// Mode
+    mode: Mode,
 }
 
 impl ShadowsocksConfig {
@@ -45,6 +48,7 @@ impl ShadowsocksConfig {
             plugin: None,
             plugin_addr: None,
             id: None,
+            mode: Mode::TcpAndUdp, // Server serves TCP & UDP by default
         }
     }
 
@@ -142,5 +146,15 @@ impl ShadowsocksConfig {
         S: Into<String>,
     {
         self.id = Some(id.into())
+    }
+
+    /// Get server's `Mode`
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// Set server's `Mode`
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
     }
 }
