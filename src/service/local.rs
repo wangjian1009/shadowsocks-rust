@@ -49,7 +49,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
             .short('c')
             .long("config")
             .takes_value(true)
-            .help("Shadowsocks configuration file (https://shadowsocks.org/en/config/quick-guide.html)"),
+            .help("Shadowsocks configuration file (https://shadowsocks.org/guide/configs.html)"),
     )
     .arg(
         Arg::new("LOCAL_ADDR")
@@ -124,7 +124,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
             .long("plugin")
             .takes_value(true)
             .requires("SERVER_ADDR")
-            .help("SIP003 (https://shadowsocks.org/en/wiki/Plugin.html) plugin"),
+            .help("SIP003 (https://shadowsocks.org/guide/sip003.html) plugin"),
     )
     .arg(
         Arg::new("PLUGIN_OPT")
@@ -138,7 +138,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
             .long("server-url")
             .takes_value(true)
             .validator(validator::validate_server_url)
-            .help("Server address in SIP002 (https://shadowsocks.org/en/wiki/SIP002-URI-Scheme.html) URL"),
+            .help("Server address in SIP002 (https://shadowsocks.org/guide/sip002.html) URL"),
     )
     .group(ArgGroup::new("SERVER_CONFIG")
         .arg("SERVER_ADDR").arg("URL").multiple(true))
@@ -447,6 +447,17 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
             );
     }
 
+    #[cfg(unix)]
+    {
+        app = app.arg(
+            Arg::new("USER")
+                .long("user")
+                .short('a')
+                .takes_value(true)
+                .help("Run as another user"),
+        );
+    }
+
     app
 }
 
@@ -681,16 +692,20 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
             #[cfg(feature = "local-redir")]
             {
-                match matches.value_of_t::<RedirType>("TCP_REDIR") {
-                    Ok(tcp_redir) => local_config.tcp_redir = tcp_redir,
-                    Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {}
-                    Err(err) => err.exit(),
+                if RedirType::tcp_default() != RedirType::NotSupported {
+                    match matches.value_of_t::<RedirType>("TCP_REDIR") {
+                        Ok(tcp_redir) => local_config.tcp_redir = tcp_redir,
+                        Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {}
+                        Err(err) => err.exit(),
+                    }
                 }
 
-                match matches.value_of_t::<RedirType>("UDP_REDIR") {
-                    Ok(udp_redir) => local_config.udp_redir = udp_redir,
-                    Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {}
-                    Err(err) => err.exit(),
+                if RedirType::udp_default() != RedirType::NotSupported {
+                    match matches.value_of_t::<RedirType>("UDP_REDIR") {
+                        Ok(udp_redir) => local_config.udp_redir = udp_redir,
+                        Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {}
+                        Err(err) => err.exit(),
+                    }
                 }
             }
 
@@ -924,7 +939,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 "missing `local_address`, consider specifying it by --local-addr command line option, \
                     or \"local_address\" and \"local_port\" in configuration file"
             );
-            return ExitCode::SUCCESS;
+            return crate::EXIT_CODE_INSUFFICIENT_PARAMS.into();
         }
 
         if config.server.is_empty() {
@@ -939,13 +954,18 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
         if let Err(err) = config.check_integrity() {
             eprintln!("config integrity check failed, {}", err);
-            return ExitCode::SUCCESS;
+            return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
         }
 
         #[cfg(unix)]
         if matches.is_present("DAEMONIZE") || matches.is_present("DAEMONIZE_PID_PATH") {
             use crate::daemonize;
             daemonize::daemonize(matches.value_of("DAEMONIZE_PID_PATH"));
+        }
+
+        #[cfg(unix)]
+        if let Some(uname) = matches.value_of("USER") {
+            crate::sys::run_as_user(uname);
         }
 
         info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);

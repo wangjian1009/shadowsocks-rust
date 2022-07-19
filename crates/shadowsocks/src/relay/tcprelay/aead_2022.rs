@@ -56,9 +56,7 @@ use std::{
 
 use aes::{
     cipher::{BlockDecrypt, BlockEncrypt, KeyInit},
-    Aes128,
-    Aes256,
-    Block,
+    Aes128, Aes256, Block,
 };
 use byte_string::ByteStr;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -68,7 +66,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use super::{crypto_io::StreamType, proxy_stream::protocol::v2::SERVER_STREAM_TIMESTAMP_MAX_DIFF};
 use crate::{
-    config::ServerUserManager,
+    config::{method_support_eih, ServerUserManager},
     context::Context,
     crypto::{v2::tcp::TcpCipher, CipherKind},
 };
@@ -81,18 +79,45 @@ fn get_now_timestamp() -> u64 {
     }
 }
 
-#[inline]
-fn method_support_eih(method: CipherKind) -> bool {
-    matches!(
-        method,
-        CipherKind::AEAD2022_BLAKE3_AES_128_GCM | CipherKind::AEAD2022_BLAKE3_AES_256_GCM
-    )
-}
-
 /// AEAD packet payload must be smaller than 0xFFFF (u16::MAX)
 pub const MAX_PACKET_SIZE: usize = 0xFFFF;
 
 const AEAD2022_EIH_SUBKEY_CONTEXT: &str = "shadowsocks 2022 identity subkey";
+
+/// AEAD 2022 Protocol Error
+#[derive(thiserror::Error, Debug)]
+pub enum ProtocolError {
+    #[error(transparent)]
+    IoError(#[from] io::Error),
+    #[error("header too short, expecting {0} bytes, but found {1} bytes")]
+    HeaderTooShort(usize, usize),
+    #[error("missing extended identity header")]
+    MissingExtendedIdentityHeader,
+    #[error("invalid client user identity {:?}", ByteStr::new(.0))]
+    InvalidClientUser(Bytes),
+    #[error("decrypt header chunk failed")]
+    DecryptHeaderChunkError,
+    #[error("decrypt data failed")]
+    DecryptDataError,
+    #[error("decrypt length failed")]
+    DecryptLengthError,
+    #[error("invalid stream type, expecting {0:#x}, but found {1:#x}")]
+    InvalidStreamType(u8, u8),
+    #[error("invalid timestamp {0} - now {1} = {}", *.0 as i64 - *.1 as i64)]
+    InvalidTimestamp(u64, u64),
+}
+
+/// AEAD 2022 Protocol result
+pub type ProtocolResult<T> = Result<T, ProtocolError>;
+
+impl From<ProtocolError> for io::Error {
+    fn from(e: ProtocolError) -> io::Error {
+        match e {
+            ProtocolError::IoError(err) => err,
+            _ => io::Error::new(ErrorKind::Other, e),
+        }
+    }
+}
 
 enum DecryptReadState {
     ReadHeader { key: Bytes },
@@ -186,7 +211,7 @@ impl DecryptedReader {
         context: &Context,
         stream: &mut S,
         buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>>
+    ) -> Poll<ProtocolResult<()>>
     where
         S: AsyncRead + Unpin + ?Sized,
     {
@@ -248,7 +273,7 @@ impl DecryptedReader {
         context: &Context,
         stream: &mut S,
         key: &[u8],
-    ) -> Poll<io::Result<Option<usize>>>
+    ) -> Poll<ProtocolResult<Option<usize>>>
     where
         S: AsyncRead + Unpin + ?Sized,
     {
@@ -273,11 +298,7 @@ impl DecryptedReader {
             // EOF.
             return Ok(None).into();
         } else if header_buf.len() != header_len {
-            return Err(io::Error::new(
-                ErrorKind::Other,
-                format!("header too short, {}B, should >= {}B", header_buf.len(), header_len),
-            ))
-            .into();
+            return Err(ProtocolError::HeaderTooShort(header_len, header_buf.len())).into();
         }
 
         let (salt, mut header_chunk) = header_buf.split_at_mut(salt_len);
@@ -291,7 +312,7 @@ impl DecryptedReader {
                 // Assume we have at least 1 EIH
                 if header_chunk.len() < 16 {
                     error!("expecting EIH, but header chunk len: {}", header_chunk.len());
-                    return Err(io::Error::new(ErrorKind::Other, "header too short, expecting EIH")).into();
+                    return Err(ProtocolError::MissingExtendedIdentityHeader).into();
                 }
 
                 let (eih, remain_header_chunk) = header_chunk.split_at_mut(16);
@@ -321,14 +342,10 @@ impl DecryptedReader {
 
                 match user_manager.get_user_by_hash(user_hash) {
                     None => {
-                        return Err(io::Error::new(
-                            ErrorKind::Other,
-                            format!("user with identity {:?} not found", ByteStr::new(user_hash)),
-                        ))
-                        .into();
+                        return Err(ProtocolError::InvalidClientUser(Bytes::copy_from_slice(user_hash))).into();
                     }
                     Some(user) => {
-                        trace!("user {} choosen by EIH", user.name());
+                        trace!("{:?} chosen by EIH", user);
                         self.user_key = Some(Bytes::copy_from_slice(user.key()));
                         TcpCipher::new(self.method, user.key(), salt)
                     }
@@ -342,7 +359,7 @@ impl DecryptedReader {
 
         // Decrypt the header chunk
         if !cipher.decrypt_packet(header_chunk) {
-            return Err(io::Error::new(ErrorKind::Other, "invalid tag-in")).into();
+            return Err(ProtocolError::DecryptHeaderChunkError).into();
         }
 
         let mut header_reader = Cursor::new(header_chunk);
@@ -353,24 +370,13 @@ impl DecryptedReader {
             StreamType::Server => 0,
         };
         if stream_ty != expected_stream_ty {
-            return Err(io::Error::new(
-                ErrorKind::Other,
-                format!(
-                    "invalid stream type {:#x}, expecting {:#x}",
-                    stream_ty, expected_stream_ty
-                ),
-            ))
-            .into();
+            return Err(ProtocolError::InvalidStreamType(expected_stream_ty, stream_ty)).into();
         }
 
         let timestamp = header_reader.get_u64();
         let now = get_now_timestamp();
-        if abs_difference(now, timestamp) > SERVER_STREAM_TIMESTAMP_MAX_DIFF {
-            return Err(io::Error::new(
-                ErrorKind::Other,
-                format!("received TCP request header with aged timestamp: {}", timestamp),
-            ))
-            .into();
+        if now.abs_diff(timestamp) > SERVER_STREAM_TIMESTAMP_MAX_DIFF {
+            return Err(ProtocolError::InvalidTimestamp(timestamp, now)).into();
         }
 
         // Server respond packet will contain a request salt
@@ -391,10 +397,15 @@ impl DecryptedReader {
             self.request_salt.as_deref().map(ByteStr::new)
         );
 
-        // Check repeated salt after first successful decryption #442
-        //
-        // If we check salt right here will allow attacker to flood our filter and eventually block all of our legitimate clients' requests.
-        context.check_nonce_replay(self.method, salt)?;
+        // Salt doesn't need to be checked in client, because it has request_salt in respond header
+        if self.stream_ty == StreamType::Server {
+            // Check repeated salt after first successful decryption #442
+            //
+            // If we check salt right here will allow attacker to flood our filter and eventually block all of our legitimate clients' requests.
+
+            context.check_nonce_replay(self.method, salt)?;
+        }
+
         self.salt = Some(Bytes::copy_from_slice(salt));
 
         self.cipher = Some(cipher);
@@ -420,7 +431,7 @@ impl DecryptedReader {
         Ok(Some(length)).into()
     }
 
-    fn poll_read_data<S>(&mut self, cx: &mut task::Context<'_>, stream: &mut S, size: usize) -> Poll<io::Result<()>>
+    fn poll_read_data<S>(&mut self, cx: &mut task::Context<'_>, stream: &mut S, size: usize) -> Poll<ProtocolResult<()>>
     where
         S: AsyncRead + Unpin + ?Sized,
     {
@@ -428,14 +439,14 @@ impl DecryptedReader {
 
         let n = ready!(self.poll_read_exact(cx, stream, data_len))?;
         if n == 0 {
-            return Err(ErrorKind::UnexpectedEof.into()).into();
+            return Err(io::Error::from(ErrorKind::UnexpectedEof).into()).into();
         }
 
         let cipher = self.cipher.as_mut().expect("cipher is None");
 
         let m = &mut self.buffer[..data_len];
         if !cipher.decrypt_packet(m) {
-            return Err(io::Error::new(ErrorKind::Other, "invalid tag-in")).into();
+            return Err(ProtocolError::DecryptDataError).into();
         }
 
         // Remote TAG
@@ -475,10 +486,10 @@ impl DecryptedReader {
         Ok(size).into()
     }
 
-    fn decrypt_length(cipher: &mut TcpCipher, m: &mut [u8]) -> io::Result<usize> {
+    fn decrypt_length(cipher: &mut TcpCipher, m: &mut [u8]) -> ProtocolResult<usize> {
         let plen = {
             if !cipher.decrypt_packet(m) {
-                return Err(io::Error::new(ErrorKind::Other, "invalid tag-in"));
+                return Err(ProtocolError::DecryptLengthError);
             }
 
             u16::from_be_bytes([m[0], m[1]]) as usize
@@ -729,14 +740,5 @@ impl EncryptedWriter {
                 }
             }
         }
-    }
-}
-
-#[inline]
-fn abs_difference<T: std::ops::Sub<Output = T> + Ord>(x: T, y: T) -> T {
-    if x < y {
-        y - x
-    } else {
-        x - y
     }
 }

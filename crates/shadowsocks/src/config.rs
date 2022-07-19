@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::{
     collections::HashMap,
     error,
-    fmt::{self, Display},
+    fmt::{self, Debug, Display},
     net::SocketAddr,
     str::FromStr,
     sync::Arc,
@@ -13,6 +13,7 @@ use std::{
 };
 
 use base64::{decode_config, encode_config, URL_SAFE_NO_PAD};
+use byte_string::ByteStr;
 use bytes::Bytes;
 use cfg_if::cfg_if;
 use log::error;
@@ -178,10 +179,21 @@ impl ServerWeight {
 }
 
 /// Server's user
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ServerUser {
     name: String,
     key: Bytes,
+    identity_hash: Bytes,
+}
+
+impl Debug for ServerUser {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("ServerUser")
+            .field("name", &self.name)
+            .field("key", &base64::encode(&self.key))
+            .field("identity_hash", &ByteStr::new(&self.identity_hash))
+            .finish()
+    }
 }
 
 impl ServerUser {
@@ -191,9 +203,16 @@ impl ServerUser {
         N: Into<String>,
         K: Into<Bytes>,
     {
+        let name = name.into();
+        let key = key.into();
+
+        let hash = blake3::hash(&key);
+        let identity_hash = Bytes::from(hash.as_bytes()[0..16].to_owned());
+
         ServerUser {
-            name: name.into(),
-            key: key.into(),
+            name,
+            key,
+            identity_hash,
         }
     }
 
@@ -206,12 +225,26 @@ impl ServerUser {
     pub fn key(&self) -> &[u8] {
         self.key.as_ref()
     }
+
+    /// User's identity hash
+    ///
+    /// https://github.com/Shadowsocks-NET/shadowsocks-specs/blob/main/2022-2-shadowsocks-2022-extensible-identity-headers.md
+    pub fn identity_hash(&self) -> &[u8] {
+        self.identity_hash.as_ref()
+    }
+
+    /// User's identity hash
+    ///
+    /// https://github.com/Shadowsocks-NET/shadowsocks-specs/blob/main/2022-2-shadowsocks-2022-extensible-identity-headers.md
+    pub fn clone_identity_hash(&self) -> Bytes {
+        self.identity_hash.clone()
+    }
 }
 
 /// Server multi-users manager
 #[derive(Clone, Debug, PartialEq)]
 pub struct ServerUserManager {
-    users: HashMap<Bytes, ServerUser>,
+    users: HashMap<Bytes, Arc<ServerUser>>,
 }
 
 impl ServerUserManager {
@@ -222,15 +255,17 @@ impl ServerUserManager {
 
     /// Add a new user
     pub fn add_user(&mut self, user: ServerUser) {
-        // https://github.com/Shadowsocks-NET/shadowsocks-specs/blob/main/2022-2-shadowsocks-2022-extensible-identity-headers.md
-        let hash = blake3::hash(user.key());
-        let user_hash = Bytes::from(hash.as_bytes()[0..16].to_owned());
-        self.users.insert(user_hash, user);
+        self.users.insert(user.clone_identity_hash(), Arc::new(user));
     }
 
     /// Get user by hash key
     pub fn get_user_by_hash(&self, user_hash: &[u8]) -> Option<&ServerUser> {
-        self.users.get(user_hash)
+        self.users.get(user_hash).map(AsRef::as_ref)
+    }
+
+    /// Get user by hash key cloned
+    pub fn clone_user_by_hash(&self, user_hash: &[u8]) -> Option<Arc<ServerUser>> {
+        self.users.get(user_hash).cloned()
     }
 
     /// Number of users
@@ -240,7 +275,13 @@ impl ServerUserManager {
 
     /// Iterate users
     pub fn users_iter(&self) -> impl Iterator<Item = &ServerUser> {
-        self.users.iter().map(|(_, v)| v)
+        self.users.iter().map(|(_, v)| v.as_ref())
+    }
+}
+
+impl Default for ServerUserManager {
+    fn default() -> ServerUserManager {
+        ServerUserManager::new()
     }
 }
 
@@ -310,6 +351,18 @@ fn make_derived_key(_method: CipherKind, password: &str, enc_key: &mut [u8]) {
     openssl_bytes_to_key(password.as_bytes(), enc_key);
 }
 
+/// Check if method supports Extended Identity Header
+///
+/// https://github.com/Shadowsocks-NET/shadowsocks-specs/blob/main/2022-2-shadowsocks-2022-extensible-identity-headers.md
+#[cfg(feature = "aead-cipher-2022")]
+#[inline]
+pub fn method_support_eih(method: CipherKind) -> bool {
+    matches!(
+        method,
+        CipherKind::AEAD2022_BLAKE3_AES_128_GCM | CipherKind::AEAD2022_BLAKE3_AES_256_GCM
+    )
+}
+
 fn password_to_keys<P>(method: CipherKind, password: P) -> (String, Box<[u8]>, Vec<Bytes>)
 where
     P: Into<String>,
@@ -317,10 +370,7 @@ where
     let password = password.into();
 
     #[cfg(feature = "aead-cipher-2022")]
-    if matches!(
-        method,
-        CipherKind::AEAD2022_BLAKE3_AES_128_GCM | CipherKind::AEAD2022_BLAKE3_AES_256_GCM
-    ) {
+    if method_support_eih(method) {
         // Extensible Identity Headers
         // iPSK1:iPSK2:iPSK3:...:uPSK
 
@@ -352,13 +402,18 @@ where
     let mut enc_key = vec![0u8; method.key_len()].into_boxed_slice();
     make_derived_key(method, &password, &mut enc_key);
 
-    return (password, enc_key, Vec::new());
+    (password, enc_key, Vec::new())
 }
 
 impl ServerConfig {
     /// 传输层配置
     #[cfg(not(feature = "transport"))]
     pub fn acceptor_transport_tag(&self) -> &str {
+        ""
+    }
+
+    #[cfg(not(feature = "transport"))]
+    pub fn connector_transport_tag(&self) -> &str {
         ""
     }
 
@@ -736,6 +791,7 @@ impl ServerConfig {
         }
     }
 
+    #[allow(dead_code)]
     fn from_url_host(parsed: &Url, dft_port: u16) -> Result<ServerAddr, UrlParseError> {
         let host = match parsed.host_str() {
             Some(host) => host,

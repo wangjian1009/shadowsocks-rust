@@ -48,7 +48,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                 .short('c')
                 .long("config")
                 .takes_value(true)
-                .help("Shadowsocks configuration file (https://shadowsocks.org/en/config/quick-guide.html)"),
+                .help("Shadowsocks configuration file (https://shadowsocks.org/guide/configs.html)"),
         )
         .arg(
             Arg::new("OUTBOUND_BIND_ADDR")
@@ -143,7 +143,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                 .long("plugin")
                 .takes_value(true)
                 .requires("SERVER_ADDR")
-                .help("SIP003 (https://shadowsocks.org/en/wiki/Plugin.html) plugin"),
+                .help("SIP003 (https://shadowsocks.org/guide/sip003.html) plugin"),
         )
         .arg(
             Arg::new("PLUGIN_OPT")
@@ -355,6 +355,17 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                 .takes_value(true)
                 .validator(validator::validate_address)
                 .help("mock proxied dns connection to local"),
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        app = app.arg(
+            Arg::new("USER")
+                .long("user")
+                .short('a')
+                .takes_value(true)
+                .help("Run as another user"),
         );
     }
 
@@ -708,20 +719,25 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             eprintln!(
                 "missing proxy servers, consider specifying it by \
                     --server-addr, --encrypt-method, --password command line option, \
-                        or configuration file, check more details in https://shadowsocks.org/en/config/quick-guide.html"
+                        or configuration file, check more details in https://shadowsocks.org/guide/configs.html"
             );
-            return ExitCode::SUCCESS;
+            return crate::EXIT_CODE_INSUFFICIENT_PARAMS.into();
         }
 
         if let Err(err) = config.check_integrity() {
             eprintln!("config integrity check failed, {}", err);
-            return ExitCode::SUCCESS;
+            return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
         }
 
         #[cfg(unix)]
         if matches.is_present("DAEMONIZE") || matches.is_present("DAEMONIZE_PID_PATH") {
             use crate::daemonize;
             daemonize::daemonize(matches.value_of("DAEMONIZE_PID_PATH"));
+        }
+
+        #[cfg(unix)]
+        if let Some(uname) = matches.value_of("USER") {
+            crate::sys::run_as_user(uname);
         }
 
         info!("shadowsocks server {} build {}", crate::VERSION, crate::BUILD_TIME);

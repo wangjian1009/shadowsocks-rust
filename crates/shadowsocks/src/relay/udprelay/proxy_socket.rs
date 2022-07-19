@@ -1,6 +1,11 @@
 //! UDP socket for communicating with shadowsocks' proxy server
 
-use std::{io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    io::{self, ErrorKind},
+    net::SocketAddr,
+    sync::Arc,
+    time::Duration,
+};
 
 use byte_string::ByteStr;
 use bytes::{Bytes, BytesMut};
@@ -17,7 +22,8 @@ use crate::{
 };
 
 use super::crypto_io::{
-    decrypt_client_payload, decrypt_server_payload, encrypt_client_payload, encrypt_server_payload,
+    decrypt_client_payload, decrypt_server_payload, encrypt_client_payload, encrypt_server_payload, ProtocolError,
+    ProtocolResult,
 };
 
 static DEFAULT_CONNECT_OPTS: Lazy<ConnectOpts> = Lazy::new(Default::default);
@@ -31,6 +37,32 @@ pub enum UdpSocketType {
     /// Socket used for `Server -> Client`
     Server,
 }
+
+/// `ProxySocket` error type
+#[derive(thiserror::Error, Debug)]
+pub enum ProxySocketError {
+    /// std::io::Error
+    #[error(transparent)]
+    IoError(#[from] io::Error),
+    #[error(transparent)]
+    ProtocolError(ProtocolError),
+    #[error("peer: {0}, {1}")]
+    ProtocolErrorWithPeer(SocketAddr, ProtocolError),
+    #[error("invalid server user identity {:?}", ByteStr::new(.0))]
+    InvalidServerUser(Bytes),
+}
+
+impl From<ProxySocketError> for io::Error {
+    fn from(e: ProxySocketError) -> io::Error {
+        match e {
+            ProxySocketError::IoError(e) => e,
+            _ => io::Error::new(ErrorKind::Other, e),
+        }
+    }
+}
+
+/// `ProxySocket` result type
+pub type ProxySocketResult<T> = Result<T, ProxySocketError>;
 
 /// UDP client for communicating with ShadowSocks' server
 pub struct ProxySocket {
@@ -51,8 +83,10 @@ impl ProxySocket {
         context: SharedContext,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
-    ) -> io::Result<ProxySocket> {
-        ProxySocket::connect_with_opts(context, svr_cfg, svr_ss_cfg, &DEFAULT_CONNECT_OPTS).await
+    ) -> ProxySocketResult<ProxySocket> {
+        ProxySocket::connect_with_opts(context, svr_cfg, svr_ss_cfg, &DEFAULT_CONNECT_OPTS)
+            .await
+            .map_err(Into::into)
     }
 
     /// Create a client to communicate with Shadowsocks' UDP server (outbound)
@@ -61,7 +95,7 @@ impl ProxySocket {
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
         opts: &ConnectOpts,
-    ) -> io::Result<ProxySocket> {
+    ) -> ProxySocketResult<ProxySocket> {
         // Note: Plugins doesn't support UDP relay
 
         let socket = ShadowUdpSocket::connect_server_with_opts(&context, svr_cfg.addr(), opts).await?;
@@ -115,8 +149,10 @@ impl ProxySocket {
         context: SharedContext,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
-    ) -> io::Result<ProxySocket> {
-        ProxySocket::bind_with_opts(context, svr_cfg, svr_ss_cfg, AcceptOpts::default()).await
+    ) -> ProxySocketResult<ProxySocket> {
+        ProxySocket::bind_with_opts(context, svr_cfg, svr_ss_cfg, AcceptOpts::default())
+            .await
+            .map_err(Into::into)
     }
 
     /// Create a `ProxySocket` binding to a specific address (inbound)
@@ -125,7 +161,7 @@ impl ProxySocket {
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
         opts: AcceptOpts,
-    ) -> io::Result<ProxySocket> {
+    ) -> ProxySocketResult<ProxySocket> {
         // Plugins doesn't support UDP
         let socket = match svr_cfg.addr() {
             ServerAddr::SocketAddr(sa) => ShadowUdpSocket::listen_with_opts(sa, opts).await?,
@@ -151,7 +187,7 @@ impl ProxySocket {
         identity_keys: &[Bytes],
         payload: &[u8],
         send_buf: &mut BytesMut,
-    ) -> io::Result<()> {
+    ) -> ProxySocketResult<()> {
         match self.socket_type {
             UdpSocketType::Client => encrypt_client_payload(
                 &self.context,
@@ -166,21 +202,9 @@ impl ProxySocket {
             UdpSocketType::Server => {
                 let mut key = self.key.as_ref();
 
-                if let Some(ref user_hash) = control.user_hash {
-                    if let Some(ref user_manager) = self.user_manager {
-                        match user_manager.get_user_by_hash(user_hash) {
-                            None => {
-                                return Err(io::Error::new(
-                                    io::ErrorKind::Other,
-                                    format!("user with hash {:?} not found", ByteStr::new(user_hash)),
-                                ));
-                            }
-                            Some(user) => {
-                                trace!("udp encrypt with user {} identity", user.name());
-                                key = user.key();
-                            }
-                        }
-                    }
+                if let Some(ref user) = control.user {
+                    trace!("udp encrypt with {:?} identity", user);
+                    key = user.key();
                 }
 
                 encrypt_server_payload(&self.context, self.method, key, addr, control, payload, send_buf)
@@ -192,8 +216,10 @@ impl ProxySocket {
 
     /// Send a UDP packet to addr through proxy
     #[inline]
-    pub async fn send(&self, addr: &Address, payload: &[u8]) -> io::Result<usize> {
-        self.send_with_ctrl(addr, &DEFAULT_SOCKET_CONTROL, payload).await
+    pub async fn send(&self, addr: &Address, payload: &[u8]) -> ProxySocketResult<usize> {
+        self.send_with_ctrl(addr, &DEFAULT_SOCKET_CONTROL, payload)
+            .await
+            .map_err(Into::into)
     }
 
     /// Send a UDP packet to addr through proxy
@@ -202,7 +228,7 @@ impl ProxySocket {
         addr: &Address,
         control: &UdpSocketControlData,
         payload: &[u8],
-    ) -> io::Result<usize> {
+    ) -> ProxySocketResult<usize> {
         let mut send_buf = BytesMut::new();
         self.encrypt_send_buffer(addr, control, &self.identity_keys, payload, &mut send_buf)?;
 
@@ -218,8 +244,8 @@ impl ProxySocket {
             None => self.socket.send(&send_buf).await?,
             Some(d) => match time::timeout(d, self.socket.send(&send_buf)).await {
                 Ok(Ok(l)) => l,
-                Ok(Err(err)) => return Err(err),
-                Err(..) => return Err(io::ErrorKind::TimedOut.into()),
+                Ok(Err(err)) => return Err(err.into()),
+                Err(..) => return Err(io::Error::from(ErrorKind::TimedOut).into()),
             },
         };
 
@@ -235,9 +261,15 @@ impl ProxySocket {
     }
 
     /// Send a UDP packet to target from proxy
-    pub async fn send_to<A: ToSocketAddrs>(&self, target: A, addr: &Address, payload: &[u8]) -> io::Result<usize> {
+    pub async fn send_to<A: ToSocketAddrs>(
+        &self,
+        target: A,
+        addr: &Address,
+        payload: &[u8],
+    ) -> ProxySocketResult<usize> {
         self.send_to_with_ctrl(target, addr, &DEFAULT_SOCKET_CONTROL, payload)
             .await
+            .map_err(Into::into)
     }
 
     /// Send a UDP packet to target from proxy
@@ -247,7 +279,7 @@ impl ProxySocket {
         addr: &Address,
         control: &UdpSocketControlData,
         payload: &[u8],
-    ) -> io::Result<usize> {
+    ) -> ProxySocketResult<usize> {
         let mut send_buf = BytesMut::new();
         self.encrypt_send_buffer(addr, control, &self.identity_keys, payload, &mut send_buf)?;
 
@@ -263,8 +295,8 @@ impl ProxySocket {
             None => self.socket.send_to(&send_buf, target).await?,
             Some(d) => match time::timeout(d, self.socket.send_to(&send_buf, target)).await {
                 Ok(Ok(l)) => l,
-                Ok(Err(err)) => return Err(err),
-                Err(..) => return Err(io::ErrorKind::TimedOut.into()),
+                Ok(Err(err)) => return Err(err.into()),
+                Err(..) => return Err(io::Error::from(ErrorKind::TimedOut).into()),
             },
         };
 
@@ -283,7 +315,7 @@ impl ProxySocket {
         &self,
         recv_buf: &mut [u8],
         user_manager: Option<&ServerUserManager>,
-    ) -> io::Result<(usize, Address, Option<UdpSocketControlData>)> {
+    ) -> ProtocolResult<(usize, Address, Option<UdpSocketControlData>)> {
         match self.socket_type {
             UdpSocketType::Client => decrypt_server_payload(&self.context, self.method, &self.key, recv_buf).await,
             UdpSocketType::Server => {
@@ -297,7 +329,7 @@ impl ProxySocket {
     /// This function will use `recv_buf` to store intermediate data, so it has to be big enough to store the whole shadowsocks' packet
     ///
     /// It is recommended to allocate a buffer to have at least 65536 bytes.
-    pub async fn recv(&self, recv_buf: &mut [u8]) -> io::Result<(usize, Address, usize)> {
+    pub async fn recv(&self, recv_buf: &mut [u8]) -> ProxySocketResult<(usize, Address, usize)> {
         self.recv_with_ctrl(recv_buf).await.map(|(n, a, rn, _)| (n, a, rn))
     }
 
@@ -309,20 +341,24 @@ impl ProxySocket {
     pub async fn recv_with_ctrl(
         &self,
         recv_buf: &mut [u8],
-    ) -> io::Result<(usize, Address, usize, Option<UdpSocketControlData>)> {
+    ) -> ProxySocketResult<(usize, Address, usize, Option<UdpSocketControlData>)> {
         // Waiting for response from server SERVER -> CLIENT
         let recv_n = match self.recv_timeout {
             None => self.socket.recv(recv_buf).await?,
             Some(d) => match time::timeout(d, self.socket.recv(recv_buf)).await {
                 Ok(Ok(l)) => l,
-                Ok(Err(err)) => return Err(err),
-                Err(..) => return Err(io::ErrorKind::TimedOut.into()),
+                Ok(Err(err)) => return Err(err.into()),
+                Err(..) => return Err(io::Error::from(ErrorKind::TimedOut).into()),
             },
         };
 
-        let (n, addr, control) = self
+        let (n, addr, control) = match self
             .decrypt_recv_buffer(&mut recv_buf[..recv_n], self.user_manager.as_deref())
-            .await?;
+            .await
+        {
+            Ok(x) => x,
+            Err(err) => return Err(ProxySocketError::ProtocolError(err)),
+        };
 
         trace!(
             "UDP server client receive from {}, control: {:?}, packet length {} bytes, payload length {} bytes",
@@ -340,7 +376,7 @@ impl ProxySocket {
     /// This function will use `recv_buf` to store intermediate data, so it has to be big enough to store the whole shadowsocks' packet
     ///
     /// It is recommended to allocate a buffer to have at least 65536 bytes.
-    pub async fn recv_from(&self, recv_buf: &mut [u8]) -> io::Result<(usize, SocketAddr, Address, usize)> {
+    pub async fn recv_from(&self, recv_buf: &mut [u8]) -> ProxySocketResult<(usize, SocketAddr, Address, usize)> {
         self.recv_from_with_ctrl(recv_buf)
             .await
             .map(|(n, sa, a, rn, _)| (n, sa, a, rn))
@@ -354,20 +390,24 @@ impl ProxySocket {
     pub async fn recv_from_with_ctrl(
         &self,
         recv_buf: &mut [u8],
-    ) -> io::Result<(usize, SocketAddr, Address, usize, Option<UdpSocketControlData>)> {
+    ) -> ProxySocketResult<(usize, SocketAddr, Address, usize, Option<UdpSocketControlData>)> {
         // Waiting for response from server SERVER -> CLIENT
         let (recv_n, target_addr) = match self.recv_timeout {
             None => self.socket.recv_from(recv_buf).await?,
             Some(d) => match time::timeout(d, self.socket.recv_from(recv_buf)).await {
                 Ok(Ok(l)) => l,
-                Ok(Err(err)) => return Err(err),
-                Err(..) => return Err(io::ErrorKind::TimedOut.into()),
+                Ok(Err(err)) => return Err(err.into()),
+                Err(..) => return Err(io::Error::from(ErrorKind::TimedOut).into()),
             },
         };
 
-        let (n, addr, control) = self
+        let (n, addr, control) = match self
             .decrypt_recv_buffer(&mut recv_buf[..recv_n], self.user_manager.as_deref())
-            .await?;
+            .await
+        {
+            Ok(x) => x,
+            Err(err) => return Err(ProxySocketError::ProtocolErrorWithPeer(target_addr, err)),
+        };
 
         trace!(
             "UDP server client receive from {}, addr {}, control: {:?}, packet length {} bytes, payload length {} bytes",

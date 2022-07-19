@@ -35,7 +35,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                 .short('c')
                 .long("config")
                 .takes_value(true)
-                .help("Shadowsocks configuration file (https://shadowsocks.org/en/config/quick-guide.html), the only required fields are \"manager_address\" and \"manager_port\". Servers defined will be created when process is started."),
+                .help("Shadowsocks configuration file (https://shadowsocks.org/guide/configs.html), the only required fields are \"manager_address\" and \"manager_port\". Servers defined will be created when process is started."),
         )
         .arg(
             Arg::new("UDP_ONLY")
@@ -82,7 +82,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                 .long("plugin")
                 .takes_value(true)
                 .requires("SERVER_ADDR")
-                .help("Default SIP003 (https://shadowsocks.org/en/wiki/Plugin.html) plugin"),
+                .help("Default SIP003 (https://shadowsocks.org/guide/sip003.html) plugin"),
         )
         .arg(
             Arg::new("PLUGIN_OPT")
@@ -202,6 +202,17 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                     .validator(validator::validate_usize)
                     .help("Sets the number of worker threads the `Runtime` will use"),
             );
+    }
+
+    #[cfg(unix)]
+    {
+        app = app.arg(
+            Arg::new("USER")
+                .long("user")
+                .short('a')
+                .takes_value(true)
+                .help("Run as another user"),
+        );
     }
 
     app
@@ -434,18 +445,23 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 "missing `manager_address`, consider specifying it by --manager-address command line option, \
                     or \"manager_address\" and \"manager_port\" keys in configuration file"
             );
-            return ExitCode::SUCCESS;
+            return crate::EXIT_CODE_INSUFFICIENT_PARAMS.into();
         }
 
         if let Err(err) = config.check_integrity() {
             eprintln!("config integrity check failed, {}", err);
-            return ExitCode::SUCCESS;
+            return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
         }
 
         #[cfg(unix)]
         if matches.is_present("DAEMONIZE") || matches.is_present("DAEMONIZE_PID_PATH") {
             use crate::daemonize;
             daemonize::daemonize(matches.value_of("DAEMONIZE_PID_PATH"));
+        }
+
+        #[cfg(unix)]
+        if let Some(uname) = matches.value_of("USER") {
+            crate::sys::run_as_user(uname);
         }
 
         info!("shadowsocks manager {} build {}", crate::VERSION, crate::BUILD_TIME);
