@@ -63,6 +63,7 @@ default = [
     "trust-dns",
     "stream-cipher",
     "local",
+    "local-maintain",
     "server",
     "server-maintain",
     "server-limit",
@@ -92,6 +93,7 @@ default = [
 
 # Enable local server
 local = ["shadowsocks-service/local"]
+local-maintain = ["shadowsocks-service/local-maintain"]
 
 # Enable env-crypt
 env-crypt = ["shadowsocks-service/env-crypt"]

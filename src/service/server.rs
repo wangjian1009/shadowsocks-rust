@@ -1,6 +1,11 @@
 //! Server launchers
 
-use std::{net::IpAddr, path::PathBuf, process::ExitCode, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    process::ExitCode,
+    time::Duration,
+};
 
 use clap::{Arg, ArgGroup, ArgMatches, Command, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
@@ -639,6 +644,12 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
         if matches.is_present("TCP_FAST_OPEN") {
             config.fast_open = true;
+        }
+
+        #[cfg(feature = "server-maintain")]
+        if let Some(maintain_addr) = matches.value_of("MAINTAIN_ADDR") {
+            let maintain_addr = maintain_addr.parse::<SocketAddr>().expect("maintain addr format error");
+            config.maintain_addr = Some(maintain_addr);
         }
 
         #[cfg(feature = "transport")]

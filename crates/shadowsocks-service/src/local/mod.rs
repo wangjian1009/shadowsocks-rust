@@ -25,6 +25,9 @@ use crate::{
     dns::build_dns_resolver,
 };
 
+#[cfg(feature = "local-maintain")]
+mod maintain;
+
 #[cfg(feature = "local-flow-stat")]
 use shadowsocks::net::FlowStat;
 
@@ -259,6 +262,13 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
             let tuic_run_fut = runing_server.tuic_run(context.context(), tuic_config).await?;
             vfut.push(ServerHandle(tokio::spawn(tuic_run_fut)));
         }
+    }
+
+    // 启动一个维护服务，接受运行时控制
+    #[cfg(feature = "local-maintain")]
+    if let Some(maintain_addr) = config.maintain_addr {
+        let maintain_server = maintain::MaintainServer::new(context.clone());
+        vfut.push(ServerHandle(tokio::spawn(maintain_server.run(maintain_addr))));
     }
 
     for local_config in config.local {

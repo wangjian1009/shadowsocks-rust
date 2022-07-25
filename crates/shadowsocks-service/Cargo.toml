@@ -26,6 +26,7 @@ default = [
     "local-redir",
     "local-tunnel",
     "local-socks4",
+    "local-maintain",
     "server-maintain",
     "server-limit",
     "server-mock",
@@ -51,6 +52,7 @@ full = [
     "local-redir",
     "local-tunnel",
     "local-socks4",
+    "local-maintain",
     "server-maintain",
     "server-limit",
     "server-mock",
@@ -69,6 +71,7 @@ full = [
 
 # Enable local server
 local = []
+local-maintain = ["hyper"]
 # Enable remote server
 server = []
 server-maintain = ["hyper", "csv"]

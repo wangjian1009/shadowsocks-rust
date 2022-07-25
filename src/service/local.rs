@@ -386,6 +386,17 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
         }
     }
 
+    #[cfg(feature = "local-maintain")]
+    {
+        app = app.arg(
+            Arg::new("MAINTAIN_ADDR")
+                .long("maintain-addr")
+                .takes_value(true)
+                .validator(validator::validate_server_addr)
+                .help("Maintain server address"),
+        );
+    }
+
     #[cfg(feature = "transport")]
     {
         app = app.arg(
@@ -803,6 +814,14 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
         if matches.is_present("TCP_FAST_OPEN") {
             config.fast_open = true;
+        }
+
+        #[cfg(feature = "local-maintain")]
+        if let Some(maintain_addr) = matches.value_of("MAINTAIN_ADDR") {
+            let maintain_addr = maintain_addr
+                .parse::<std::net::SocketAddr>()
+                .expect("maintain addr format error");
+            config.maintain_addr = Some(maintain_addr);
         }
 
         #[cfg(feature = "transport")]

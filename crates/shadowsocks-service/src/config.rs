@@ -1124,7 +1124,7 @@ pub struct Config {
     pub manager: Option<ManagerConfig>,
 
     /// Maintain's configuration
-    #[cfg(feature = "server-maintain")]
+    #[cfg(any(feature = "server-maintain", feature = "local-maintain"))]
     pub maintain_addr: Option<SocketAddr>,
 
     /// Config is for Client or Server
@@ -1275,7 +1275,7 @@ impl Config {
 
             acl: None,
 
-            #[cfg(feature = "server-maintain")]
+            #[cfg(any(feature = "server-maintain", feature = "local-maintain"))]
             maintain_addr: None,
 
             #[cfg(feature = "local-flow-stat")]
