@@ -55,7 +55,7 @@ pub struct ServiceContext {
     reverse_lookup_cache: Mutex<LruCache<IpAddr, bool>>,
 
     #[cfg(feature = "rate-limit")]
-    rate_limiter: spin::Mutex<Option<Arc<RateLimiter>>>,
+    rate_limiter: Arc<RateLimiter>,
 
     #[cfg(feature = "sniffer")]
     protocol_action: HashMap<SnifferProtocol, ProtocolAction>,
@@ -85,7 +85,7 @@ impl ServiceContext {
                 10240, // XXX: It should be enough for a normal user.
             )),
             #[cfg(feature = "rate-limit")]
-            rate_limiter: spin::Mutex::new(None),
+            rate_limiter: Arc::new(RateLimiter::new(None).unwrap()),
             #[cfg(feature = "sniffer")]
             protocol_action: HashMap::new(),
             #[cfg(feature = "transport")]
@@ -215,16 +215,10 @@ impl ServiceContext {
         context.set_replay_attack_policy(security.replay_attack.policy);
     }
 
-    /// set rate limit
-    #[cfg(feature = "rate-limit")]
-    pub fn set_rate_limiter(&self, rate_limiter: Option<Arc<RateLimiter>>) {
-        *self.rate_limiter.lock() = rate_limiter;
-    }
-
     /// rate limit
     #[cfg(feature = "rate-limit")]
-    pub fn rate_limiter(&self) -> Option<Arc<RateLimiter>> {
-        self.rate_limiter.lock().clone()
+    pub fn rate_limiter(&self) -> Arc<RateLimiter> {
+        self.rate_limiter.clone()
     }
 
     #[cfg(feature = "sniffer")]

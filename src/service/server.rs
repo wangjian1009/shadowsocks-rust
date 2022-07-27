@@ -20,6 +20,7 @@ use shadowsocks_service::{
         config::{ManagerAddr, Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::{available_ciphers, CipherKind},
         plugin::PluginConfig,
+        transport::RateLimiter,
     },
 };
 
@@ -670,9 +671,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
             let connection_speed_limit =
                 BoundWidth::from_str(connection_speed_limit).expect("speed limit with b/s or Kb/s or Mb/s or Gb/s");
-            connection_speed_limit
-                .to_quota_byte_per_second()
-                .expect("speed limit rante error!");
+            let _ = RateLimiter::new(Some(connection_speed_limit.clone())).expect("speed limit rante error!");
             config.rate_limit = Some(connection_speed_limit);
         }
 

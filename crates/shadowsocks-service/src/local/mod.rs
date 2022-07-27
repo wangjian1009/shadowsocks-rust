@@ -31,9 +31,6 @@ mod maintain;
 #[cfg(feature = "local-flow-stat")]
 use shadowsocks::net::FlowStat;
 
-#[cfg(feature = "rate-limit")]
-use shadowsocks::transport::RateLimiter;
-
 use self::{
     context::ServiceContext,
     loadbalancing::{PingBalancer, PingBalancerBuilder},
@@ -197,9 +194,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
     #[cfg(feature = "rate-limit")]
     if let Some(bound_width) = config.rate_limit.as_ref() {
         log::info!("bound-width={}", bound_width);
-        let quota = bound_width.to_quota_byte_per_second().unwrap();
-        let rate_limiter = RateLimiter::new(quota);
-        context.set_rate_limiter(Some(Arc::new(rate_limiter)));
+        context.rate_limiter().set_rate_limit(Some(bound_width.clone()))?;
     }
 
     #[cfg(feature = "sniffer-bittorrent")]

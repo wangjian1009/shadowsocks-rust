@@ -13,7 +13,7 @@ use shadowsocks::{
     create_connector_then,
     net::{ConnectOpts, FlowStat},
     relay::{socks5::Address, tcprelay::proxy_stream::ProxyClientStream},
-    transport::{DeviceOrGuard, StreamConnection},
+    transport::{DeviceOrGuard, RateLimitedStream, StreamConnection},
 };
 
 #[cfg(feature = "rate-limit")]
@@ -91,7 +91,7 @@ impl AutoProxyClientStream {
             addr,
             Some(context.flow_stat()),
             #[cfg(feature = "rate-limit")]
-            context.rate_limiter(),
+            Some(context.rate_limiter()),
         )
         .await
         {
@@ -123,9 +123,9 @@ impl AutoProxyClientStream {
                         ss_cfg,
                         addr,
                         connect_opts,
-                        |#[allow(unused_mut)] mut stream| {
+                        |#[allow(unused_mut)] stream| {
                             #[cfg(feature = "rate-limit")]
-                            stream.set_rate_limit(rate_limit);
+                            let stream = RateLimitedStream::from_stream(stream, rate_limit);
 
                             if let Some(flow_stat) = flow_stat {
                                 Box::new(MonProxyStream::from_stream(stream, flow_stat, None))
@@ -146,9 +146,9 @@ impl AutoProxyClientStream {
                         trojan_cfg,
                         addr.clone(),
                         connect_opts,
-                        |mut stream| {
+                        |stream| {
                             #[cfg(feature = "rate-limit")]
-                            stream.set_rate_limit(rate_limit);
+                            let stream = RateLimitedStream::from_stream(stream, rate_limit);
 
                             if let Some(flow_stat) = flow_stat {
                                 Box::new(MonProxyStream::from_stream(stream, flow_stat, None))
@@ -170,9 +170,9 @@ impl AutoProxyClientStream {
                         vless::protocol::RequestCommand::TCP,
                         Some(addr.clone()),
                         connect_opts,
-                        |mut stream| {
+                        |stream| {
                             #[cfg(feature = "rate-limit")]
-                            stream.set_rate_limit(rate_limit);
+                            let stream = RateLimitedStream::from_stream(stream, rate_limit);
 
                             if let Some(flow_stat) = flow_stat {
                                 Box::new(MonProxyStream::from_stream(stream, flow_stat, None))
@@ -200,7 +200,7 @@ impl AutoProxyClientStream {
                     let (relay_req, relay_resp_rx) = RelayRequest::new_connect(target_addr);
                     svr.tuic_send_req(relay_req).await?;
 
-                    let mut stream = match relay_resp_rx.await {
+                    let stream = match relay_resp_rx.await {
                         Ok(stream) => stream,
                         Err(err) => {
                             return Err(io::Error::new(io::ErrorKind::Other, err));
@@ -208,7 +208,7 @@ impl AutoProxyClientStream {
                     };
 
                     #[cfg(feature = "rate-limit")]
-                    stream.set_rate_limit(rate_limit);
+                    let stream = RateLimitedStream::from_stream(stream, rate_limit);
 
                     let stream = if let Some(flow_stat) = flow_stat {
                         Box::new(MonProxyStream::from_stream(stream, flow_stat, None)) as Box<dyn StreamConnection>

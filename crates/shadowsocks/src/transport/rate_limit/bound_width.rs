@@ -1,13 +1,10 @@
 use std::{
     fmt::{self, Debug, Display, Formatter},
-    io,
     str::FromStr,
 };
 
 use lazy_static::lazy_static;
 
-use governor::Quota;
-use nonzero_ext::*;
 use serde::{
     de::{self, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
@@ -15,7 +12,7 @@ use serde::{
 
 use regex::Regex;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Duration {
     S,
 }
@@ -28,23 +25,13 @@ impl Display for Duration {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BoundWidth {
     amount: u32,
     duration: Duration,
 }
 
 impl BoundWidth {
-    pub fn to_quota_byte_per_second(&self) -> io::Result<Quota> {
-        let byte_per_second = self.amount / 8u32;
-
-        if byte_per_second == 0 {
-            return Err(io::Error::new(io::ErrorKind::Other, "BoundWith too small"));
-        }
-
-        Ok(Quota::per_second(byte_per_second.into_nonzero().unwrap()))
-    }
-
     pub fn as_bps(&self) -> u32 {
         match &self.duration {
             &Duration::S => self.amount,
@@ -218,14 +205,5 @@ mod test {
 
         let bound_width: BoundWidth = serde_json::from_str("\"32Kb/s\"").unwrap();
         assert_eq!(bound_width.as_bps(), 32u32 * 1024u32);
-    }
-
-    #[test]
-    fn to_quota_byte_per_second() {
-        let quota = BoundWidth::from_str("8m")
-            .unwrap()
-            .to_quota_byte_per_second()
-            .expect("OK");
-        assert_eq!(quota.burst_size().get(), 1024 * 1024);
     }
 }

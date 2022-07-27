@@ -44,29 +44,28 @@ impl MaintainServerContext {
 
     #[cfg(feature = "rate-limit")]
     async fn update_speed_limit(&self, req: Request<Body>) -> GenericResult<Response<Body>> {
-        use shadowsocks::transport::{BoundWidth, RateLimiter};
+        use shadowsocks::transport::BoundWidth;
         use std::str::FromStr;
 
-        let mut rate_limit = None;
+        let mut bound_width = None;
 
         let whole_body = hyper::body::to_bytes(req.into_body()).await?;
         if !whole_body.is_empty() {
             let str_speed_limit = std::str::from_utf8(&whole_body[..])?;
-
-            let bound_width = BoundWidth::from_str(str_speed_limit)?;
-
-            let quota = bound_width.to_quota_byte_per_second()?;
-
-            let rate_limiter = RateLimiter::new(quota);
-
-            log::trace!("maintain-service: speed-limit => {}({})", bound_width, str_speed_limit);
-
-            rate_limit = Some(Arc::new(rate_limiter))
-        } else {
-            log::trace!("maintain-service: speed-limit => None");
+            bound_width = Some(BoundWidth::from_str(str_speed_limit)?);
         }
 
-        self.service_context.set_rate_limiter(rate_limit);
+        let rate_limiter = self.service_context.rate_limiter();
+
+        let old_bound_width = rate_limiter.rate_limit();
+        if old_bound_width != bound_width {
+            log::trace!(
+                "maintain-service: speed-limit {:?} => {:?}",
+                old_bound_width,
+                bound_width
+            );
+            self.service_context.rate_limiter().set_rate_limit(bound_width)?;
+        };
 
         let response = Response::builder().status(StatusCode::OK).body(Body::empty())?;
 

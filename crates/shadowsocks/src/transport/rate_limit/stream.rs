@@ -9,7 +9,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::super::{DeviceOrGuard, StreamConnection};
 use futures::Future;
 use futures_timer::Delay;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -17,28 +16,117 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use governor::{
     clock::MonotonicClock,
     state::{InMemoryState, NotKeyed},
-    Jitter, NegativeMultiDecision, Quota,
+    Jitter, Quota,
 };
 use nonzero_ext::*;
 
+use super::{
+    super::{DeviceOrGuard, StreamConnection},
+    BoundWidth,
+};
+
 type BaseRateLimiter = governor::RateLimiter<NotKeyed, InMemoryState, MonotonicClock>;
 
+struct RateLimiterData {
+    rate_limit: BoundWidth,
+    limiter: BaseRateLimiter,
+}
+
+impl RateLimiterData {
+    fn new(rate_limit: BoundWidth) -> io::Result<Self> {
+        let byte_per_second = rate_limit.as_bps() / 8u32;
+
+        if byte_per_second == 0 {
+            return Err(io::Error::new(io::ErrorKind::Other, "BoundWith too small"));
+        }
+
+        let limiter = BaseRateLimiter::direct_with_clock(
+            Quota::per_second(byte_per_second.into_nonzero().unwrap()),
+            &MonotonicClock::default(),
+        );
+        Ok(Self { limiter, rate_limit })
+    }
+}
+
 pub struct RateLimiter {
-    pub(crate) limiter: BaseRateLimiter,
-    pub(crate) max_burst: u32,
+    data: spin::Mutex<Option<RateLimiterData>>,
+}
+
+/// see governor::NegativeMultiDecision
+pub enum NegativeMultiDecision {
+    BatchNonConforming(Duration),
+    InsufficientCapacity,
 }
 
 impl RateLimiter {
-    pub fn new(quota: Quota) -> RateLimiter {
-        let max_burst = quota.burst_size().get();
-        let limiter = BaseRateLimiter::direct_with_clock(quota, &MonotonicClock::default());
-        RateLimiter { limiter, max_burst }
+    pub fn new(rate_limit: Option<BoundWidth>) -> io::Result<RateLimiter> {
+        let data = match rate_limit {
+            Some(rate_limit) => Some(RateLimiterData::new(rate_limit)?),
+            None => None,
+        };
+
+        Ok(RateLimiter {
+            data: spin::Mutex::new(data),
+        })
+    }
+
+    pub fn set_rate_limit(&self, rate_limit: Option<BoundWidth>) -> io::Result<()> {
+        let data = match rate_limit {
+            Some(rate_limit) => Some(RateLimiterData::new(rate_limit)?),
+            None => None,
+        };
+
+        *self.data.lock() = data;
+
+        Ok(())
+    }
+
+    pub fn rate_limit(&self) -> Option<BoundWidth> {
+        let data = self.data.lock();
+        match data.as_ref() {
+            Some(data) => Some(data.rate_limit.clone()),
+            None => None,
+        }
+    }
+
+    pub fn check_n(&self, n: NonZeroU32) -> Result<(), NegativeMultiDecision> {
+        let data = self.data.lock();
+        match data.as_ref() {
+            Some(data) => match data.limiter.check_n(n) {
+                Err(err) => match err {
+                    governor::NegativeMultiDecision::BatchNonConforming(_, negative) => {
+                        let duration: Duration = negative.wait_time_from(Instant::now());
+                        Err(NegativeMultiDecision::BatchNonConforming(duration))
+                    }
+                    governor::NegativeMultiDecision::InsufficientCapacity(..) => {
+                        Err(NegativeMultiDecision::InsufficientCapacity)
+                    }
+                },
+                Ok(..) => Ok(()),
+            },
+            None => Ok(()),
+        }
+    }
+
+    pub fn max_receive_once(&self) -> Option<usize> {
+        let data = self.data.lock();
+        match data.as_ref() {
+            Some(data) => {
+                let bytes_per_10ms = data.rate_limit.as_bps() as usize / 8 / 100;
+                Some(std::cmp::max(1024, std::cmp::min(bytes_per_10ms, 1024 * 1024 * 64)))
+            }
+            None => None,
+        }
     }
 }
 
 impl Debug for RateLimiter {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "RateLimiter: max-burst={}", self.max_burst)
+        let data = self.data.lock();
+        match data.as_ref() {
+            Some(data) => write!(f, "RateLimiter: {}", data.rate_limit),
+            None => write!(f, "RateLimiter: no limit"),
+        }
     }
 }
 
@@ -124,8 +212,9 @@ where
         loop {
             match self.limiter_ctx.as_ref().unwrap().state.clone() {
                 State::ReadInner => {
-                    let max_burst = self.limiter_ctx.as_ref().unwrap().limiter.max_burst;
-                    let mut recv_buf = buf.take(max_burst as usize);
+                    let max_once_size = self.limiter_ctx.as_ref().unwrap().limiter.max_receive_once();
+                    let buf_capacity = std::cmp::min(max_once_size.unwrap_or(buf.capacity()), buf.capacity());
+                    let mut recv_buf = buf.take(buf_capacity);
                     let stream = Pin::new(&mut self.stream);
                     match stream.poll_read(cx, &mut recv_buf) {
                         Poll::Pending => return Poll::Pending,
@@ -136,7 +225,11 @@ where
                             if readed == 0 {
                                 return Poll::Ready(Ok(()));
                             } else {
-                                // log::error!("xxxxxxx: received {} data", buf.filled().len());
+                                // log::error!(
+                                //     "xxxxxxx: limit: received {} data, max-once-size={:?}",
+                                //     buf.filled().len(),
+                                //     max_once_size
+                                // );
                                 // 读取到数据进入CheckNextRead进行检测
                                 let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
                                 limiter_ctx.state = State::CheckNextRead;
@@ -150,12 +243,11 @@ where
                 State::CheckNextRead => {
                     let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
                     let readed = limiter_ctx.readed.unwrap();
-                    match limiter_ctx.limiter.limiter.check_n(readed) {
+                    match limiter_ctx.limiter.check_n(readed) {
                         Err(err) => match err {
                             // 检测不通过，需要处理错误情况
-                            NegativeMultiDecision::BatchNonConforming(_, negative) => {
+                            NegativeMultiDecision::BatchNonConforming(duration) => {
                                 // 需要等待一定时间，设置好定时器后尝试等待
-                                let duration: Duration = negative.wait_time_from(Instant::now());
                                 let duration = limiter_ctx.jitter + duration;
                                 limiter_ctx.delay.reset(duration);
                                 let future = Pin::new(&mut limiter_ctx.delay);
@@ -164,20 +256,27 @@ where
                                         // 定时器启动，进入等待状态，此时如果有数据，返回数据，等待只影响下一次读取
                                         limiter_ctx.state = State::Wait;
                                         if buf.filled().len() > 0 {
-                                            // log::error!("xxxxxxx: sleep begin, duration={:?}, return {}", duration, buf.filled().len());
+                                            // log::error!(
+                                            //     "xxxxxxx: limit: sleep begin, duration={:?}, return {}",
+                                            //     duration,
+                                            //     buf.filled().len()
+                                            // );
                                             return Poll::Ready(Ok(()));
                                         } else {
-                                            // log::error!("xxxxxxx: sleep begin, duration={:?}, no data", duration);
+                                            // log::error!(
+                                            //     "xxxxxxx: limit: sleep begin, duration={:?}, no data",
+                                            //     duration
+                                            // );
                                             return Poll::Pending;
                                         }
                                     }
                                     Poll::Ready(_) => {
-                                        // log::error!("xxxxxxx: sleep skip");
+                                        // log::error!("xxxxxxx: limit: sleep skip");
                                         // 定时器反馈无需等待，则再次检测(下一个循环还是CheckNextRead状态)
                                     }
                                 }
                             }
-                            NegativeMultiDecision::InsufficientCapacity(..) => {
+                            NegativeMultiDecision::InsufficientCapacity => {
                                 // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个请客
                                 unreachable!()
                             }
@@ -189,12 +288,12 @@ where
 
                             if buf.filled().len() > 0 {
                                 // 从State::ReadInner进入检测状态时，已经可能读取过数据，直接返回上层
-                                // log::error!("xxxxxxx: check passed, return {}", buf.filled().len());
+                                // log::error!("xxxxxxx: limit: check passed, return {}", buf.filled().len());
                                 return Poll::Ready(Ok(()));
                             }
 
                             // 没有已经读取的数据，直接进行一次读取
-                            // log::error!("xxxxxxx: check passed, no data");
+                            // log::error!("xxxxxxx: limit: check passed, no data");
                         }
                     }
                 }

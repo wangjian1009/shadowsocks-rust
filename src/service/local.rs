@@ -20,6 +20,7 @@ use shadowsocks_service::{
         config::{Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::{available_ciphers, CipherKind},
         plugin::PluginConfig,
+        transport::RateLimiter,
     },
 };
 
@@ -841,9 +842,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             use std::str::FromStr;
 
             let speed_limit = BoundWidth::from_str(speed_limit).expect("speed limit with b/s or Kb/s or Mb/s or Gb/s");
-            speed_limit
-                .to_quota_byte_per_second()
-                .expect("speed limit rante error!");
+            let _ = RateLimiter::new(Some(speed_limit.clone())).expect("speed limit rante error!");
             config.rate_limit = Some(speed_limit);
         }
 

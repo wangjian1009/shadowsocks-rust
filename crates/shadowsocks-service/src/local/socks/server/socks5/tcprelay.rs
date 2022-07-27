@@ -235,7 +235,8 @@ impl Socks5TcpHandler {
         target_addr: Address,
     ) -> io::Result<()> {
         #[cfg(feature = "rate-limit")]
-        let mut stream = shadowsocks::transport::RateLimitedStream::from_stream(stream, self.context.rate_limiter());
+        let mut stream =
+            shadowsocks::transport::RateLimitedStream::from_stream(stream, Some(self.context.rate_limiter()));
 
         if !self.mode.enable_tcp() {
             warn!("TCP CONNECT is disabled");

@@ -230,8 +230,9 @@ impl TcpServer {
 
                 #[cfg(feature = "rate-limit")]
                 if let Some(connection_bound_width) = connection_bound_width {
-                    let quota = connection_bound_width.to_quota_byte_per_second().unwrap();
-                    rate_limiter = Some(Arc::new(RateLimiter::new(quota)));
+                    rate_limiter = Some(Arc::new(
+                        RateLimiter::new(Some(connection_bound_width.clone())).unwrap(),
+                    ));
                 }
 
                 #[cfg(feature = "rate-limit")]
