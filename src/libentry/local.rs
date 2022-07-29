@@ -88,6 +88,7 @@ pub extern "C" fn lib_local_run(
     let config = load_config(
         &str_config,
         acl_path.as_deref(),
+        control_port,
         #[cfg(feature = "local-flow-stat")]
         stat_path.as_deref(),
         #[cfg(target_os = "android")]
@@ -99,6 +100,7 @@ pub extern "C" fn lib_local_run(
 fn load_config(
     str_config: &str,
     acl_path: Option<&str>,
+    control_port: u16,
     #[cfg(feature = "local-flow-stat")] stat_path: Option<&str>,
     #[cfg(target_os = "android")] vpn_protect_path: Option<&str>,
 ) -> Config {
@@ -133,6 +135,11 @@ fn load_config(
         // A socket `protect_path` in CWD
         // Same as shadowsocks-libev's android.c
         config.outbound_vpn_protect_path = Some(From::from(vpn_protect_path));
+    }
+
+    #[cfg(feature = "local-maintain")]
+    if control_port > 0 {
+        config.maintain_addr = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), control_port));
     }
 
     #[cfg(feature = "local-flow-stat")]
@@ -282,6 +289,13 @@ async fn run_ctrl(control_port: u16, #[cfg(feature = "host-dns")] host_dns: Opti
                         host_dns.update_servers(servers).await;
                     }
                 }
+                #[cfg(feature = "rate-limit")]
+                "update-rate-limit" => match on_update_speed_limit(control_port, args).await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        log::error!("control: {}: error {}", cmd, e);
+                    }
+                },
                 _ => log::error!("control: not support cmd {}", cmd),
             }
         }
@@ -294,4 +308,38 @@ async fn run_ctrl(control_port: u16, #[cfg(feature = "host-dns")] host_dns: Opti
         Ok(()) => log::info!("server control stop success"),
         Err(err) => log::error!("server control stop with error {}", err),
     }
+}
+
+#[cfg(feature = "rate-limit")]
+async fn on_update_speed_limit(maintain_port: u16, args: Option<&Value>) -> io::Result<()> {
+    use hyper::{Body, Client, Method, Request};
+
+    let bps = match args {
+        Some(args) => match args.as_u64() {
+            Some(s) => Some(s),
+            None => {
+                return Err(io::Error::new(io::ErrorKind::Other, "arg not number"));
+            }
+        },
+        None => None,
+    };
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(format!("http://127.0.0.1:{}/speed-limit", maintain_port))
+        .body(match bps {
+            Some(bps) => Body::from(format!("{}", bps)),
+            None => Body::empty(),
+        })
+        .expect("request builder");
+
+    let client = Client::new();
+
+    let rsp = client
+        .request(req)
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+
+    log::info!("control: update speed limit: rsp={:?}", rsp);
+    Ok(())
 }

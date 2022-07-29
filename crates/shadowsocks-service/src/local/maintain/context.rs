@@ -59,7 +59,7 @@ impl MaintainServerContext {
 
         let old_bound_width = rate_limiter.rate_limit();
         if old_bound_width != bound_width {
-            log::trace!(
+            log::info!(
                 "maintain-service: speed-limit {:?} => {:?}",
                 old_bound_width,
                 bound_width

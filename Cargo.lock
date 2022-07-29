@@ -2598,6 +2598,7 @@ dependencies = [
  "exitcode",
  "futures",
  "governor",
+ "hyper",
  "ipnet",
  "jemallocator",
  "json5",
