@@ -1,4 +1,5 @@
 use hyper::{Body, Method, Request, Response, StatusCode};
+use serde_json::json;
 use std::sync::Arc;
 
 use crate::local::ServiceContext;
@@ -16,6 +17,7 @@ impl MaintainServerContext {
 
     pub async fn handle_request(&self, req: Request<Body>) -> GenericResult<Response<Body>> {
         let result = match (req.method(), req.uri().path()) {
+            (&Method::GET, "/traffic") => self.query_traffic(req).await,
             #[cfg(feature = "rate-limit")]
             (&Method::POST, "/speed-limit") => self.update_speed_limit(req).await,
             _ => {
@@ -40,6 +42,16 @@ impl MaintainServerContext {
                 Ok(response)
             }
         }
+    }
+
+    async fn query_traffic(&self, _req: Request<Body>) -> GenericResult<Response<Body>> {
+        let flow_state = self.service_context.flow_stat();
+
+        let response = json5::to_string(&json!({"tx": flow_state.tx(), "rx": flow_state.rx()}))?;
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from(response.into_bytes()))?)
     }
 
     #[cfg(feature = "rate-limit")]
