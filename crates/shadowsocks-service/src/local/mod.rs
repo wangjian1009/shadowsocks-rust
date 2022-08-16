@@ -28,6 +28,9 @@ use crate::{
 #[cfg(feature = "local-maintain")]
 mod maintain;
 
+/// 解析证书等可以脱离Android运行，环境相关在模块内区分
+pub mod android;
+
 #[cfg(feature = "local-flow-stat")]
 use shadowsocks::net::FlowStat;
 

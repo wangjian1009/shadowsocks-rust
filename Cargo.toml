@@ -94,6 +94,7 @@ default = [
 # Enable local server
 local = ["shadowsocks-service/local"]
 local-maintain = ["shadowsocks-service/local-maintain"]
+local-signed-info = ["shadowsocks-service/local-signed-info"]
 
 # Enable env-crypt
 env-crypt = ["shadowsocks-service/env-crypt"]

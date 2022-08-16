@@ -18,6 +18,8 @@ impl MaintainServerContext {
     pub async fn handle_request(&self, req: Request<Body>) -> GenericResult<Response<Body>> {
         let result = match (req.method(), req.uri().path()) {
             (&Method::GET, "/traffic") => self.query_traffic(req).await,
+            #[cfg(feature = "local-signed-info")]
+            (&Method::GET, "/android/validate") => self.android_validate(req).await,
             #[cfg(feature = "rate-limit")]
             (&Method::POST, "/speed-limit") => self.update_speed_limit(req).await,
             _ => {
@@ -82,5 +84,27 @@ impl MaintainServerContext {
         let response = Response::builder().status(StatusCode::OK).body(Body::empty())?;
 
         Ok(response)
+    }
+}
+
+impl MaintainServerContext {
+    #[cfg(feature = "local-signed-info")]
+    async fn android_validate(&self, _req: Request<Body>) -> GenericResult<Response<Body>> {
+        use crate::local::android;
+
+        let validate_result = android::validate_sign();
+
+        let response = json5::to_string(&json!(
+            {"apk-path": validate_result.apk_path,
+             "signed-data-file": validate_result.signed_data_file,
+             "sha1-fingerprint": validate_result.sha1_fingerprint.map(|e| {
+                 e.iter().map(|e| format!("{:X}", e)).collect::<Vec<String>>().join(":")
+             }),
+             "error": validate_result.error.as_ref().map(|e| format!("{}", e)),
+             "error-detail": validate_result.error.as_ref().map(|e| format!("{:?}", e))}))?;
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from(response.into_bytes()))?)
     }
 }

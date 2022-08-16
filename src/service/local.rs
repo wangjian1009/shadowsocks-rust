@@ -969,6 +969,14 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
         }
 
+        // 考虑延迟验证，替换密码的方案，如果直接不能启动可能会被注意到
+        // #[cfg(target_os = "android")]
+        // if let Some(_err) = shadowsocks_service::local::android::validate_sign().error {
+        //     // TODO: 正式发布应该关闭打印
+        //     eprintln!("perm check failed, {}", _err);
+        //     return sysexits::ExitCode::NoPerm.into();
+        // }
+
         #[cfg(unix)]
         if matches.is_present("DAEMONIZE") || matches.is_present("DAEMONIZE_PID_PATH") {
             use crate::daemonize;
