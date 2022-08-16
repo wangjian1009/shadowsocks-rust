@@ -95,13 +95,15 @@ impl MaintainServerContext {
         let validate_result = android::validate_sign();
 
         let response = json5::to_string(&json!(
-            {"apk-path": validate_result.apk_path,
-             "signed-data-file": validate_result.signed_data_file,
-             "sha1-fingerprint": validate_result.sha1_fingerprint.map(|e| {
+            {"signedDataFile": validate_result.signed_data_file.map(|v| {
+                let parts: Vec<&str> = v.split("/").collect();
+                parts.last().map(|v| v.to_string())
+            }),
+             "sha1Fingerprint": validate_result.sha1_fingerprint.map(|e| {
                  e.iter().map(|e| format!("{:X}", e)).collect::<Vec<String>>().join(":")
              }),
              "error": validate_result.error.as_ref().map(|e| format!("{}", e)),
-             "error-detail": validate_result.error.as_ref().map(|e| format!("{:?}", e))}))?;
+             "errorDetail": validate_result.error.as_ref().map(|e| format!("{:?}", e))}))?;
 
         Ok(Response::builder()
             .status(StatusCode::OK)
