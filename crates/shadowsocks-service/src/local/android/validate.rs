@@ -2,8 +2,12 @@ use cryptographic_message_syntax::SignedData;
 use std::fs;
 use std::io;
 use std::io::prelude::*;
+use std::ops::Index;
 
-use super::{env::get_apk_path, signed_data};
+use super::{
+    env::{get_apk_path, get_sdk_version_code, load_path_infos, PathEntryInfo},
+    signed_data,
+};
 
 pub enum ValidateError {
     FindApkFail(io::Error),
@@ -14,6 +18,7 @@ pub enum ValidateError {
     SignedDataDecodeFail(io::Error),
     SignedDataNoCert,
     CertCheckFailed,
+    PathCheckFailed(Option<String>, io::Error),
 }
 
 impl std::fmt::Display for ValidateError {
@@ -27,6 +32,7 @@ impl std::fmt::Display for ValidateError {
             Self::SignedDataDecodeFail(..) => write!(f, "signed data decode fail"),
             Self::SignedDataNoCert => write!(f, "signed data no cert"),
             Self::CertCheckFailed => write!(f, "cert check failed"),
+            Self::PathCheckFailed(..) => write!(f, "path check failed"),
         }
     }
 }
@@ -42,6 +48,13 @@ impl std::fmt::Debug for ValidateError {
             Self::SignedDataDecodeFail(e) => write!(f, "cert decode fail({:?})", e),
             Self::SignedDataNoCert => write!(f, "signed data no cert"),
             Self::CertCheckFailed => write!(f, "cert check failed"),
+            Self::PathCheckFailed(ef, e) => {
+                if let Some(ef) = ef {
+                    write!(f, "path {} check failed: {:?}", ef, e)
+                } else {
+                    write!(f, "path check failed: {:?}", e)
+                }
+            }
         }
     }
 }
@@ -67,6 +80,63 @@ pub fn validate_sign() -> ValidateResult {
         Ok(apk_path) => result.apk_path = Some(apk_path),
         Err(err) => {
             result.error = Some(ValidateError::FindApkFail(err));
+            return result;
+        }
+    }
+
+    let apk_path_infos = match load_path_infos(result.apk_path.as_ref().unwrap()) {
+        Ok(path_infos) => path_infos,
+        Err((path, err)) => {
+            result.error = Some(ValidateError::PathCheckFailed(Some(path), err));
+            return result;
+        }
+    };
+
+    match apk_path_infos.len() {
+        6 => match check_apk_path_match_expects(result.apk_path.as_ref().unwrap(), &apk_path_infos, &S_PERM_6) {
+            Ok(()) => {}
+            Err((f, e)) => {
+                result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
+                return result;
+            }
+        },
+        5 => {
+            //__ANDROID_API_P__ 28
+            if get_sdk_version_code() <= 28 {
+                //sdk_version_code <= __ANDROID_API_P__
+                match check_apk_path_match_expects(
+                    result.apk_path.as_ref().unwrap(),
+                    &apk_path_infos,
+                    &S_PERM_5_9_BEFORE,
+                ) {
+                    Ok(()) => {}
+                    Err((f, e)) => {
+                        result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
+                        return result;
+                    }
+                }
+            } else {
+                match check_apk_path_match_expects(
+                    result.apk_path.as_ref().unwrap(),
+                    &apk_path_infos,
+                    &S_PERM_5_10_AFTER,
+                ) {
+                    Ok(()) => {}
+                    Err((f, e)) => {
+                        result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
+                        return result;
+                    }
+                }
+            }
+        }
+        _ => {
+            result.error = Some(ValidateError::PathCheckFailed(
+                Some(result.apk_path.as_ref().unwrap().to_owned()),
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("path level {} unknown", apk_path_infos.len()),
+                ),
+            ));
             return result;
         }
     }
@@ -152,6 +222,156 @@ fn load_file_content(archive: &mut zip::ZipArchive<fs::File>, fname: &str) -> io
     }
 
     Ok(None)
+}
+
+const S_PERM_5_10_AFTER: [PathEntryInfo; 5] = [
+    PathEntryInfo {
+        uid: 0,
+        gid: 0,
+        perm_u: 7,
+        perm_g: 5,
+        perm_o: 5,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 7,
+        perm_g: 7,
+        perm_o: 1,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 7,
+        perm_g: 7,
+        perm_o: 1,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 7,
+        perm_g: 7,
+        perm_o: 5,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 6,
+        perm_g: 4,
+        perm_o: 4,
+    },
+];
+
+const S_PERM_5_9_BEFORE: [PathEntryInfo; 5] = [
+    PathEntryInfo {
+        uid: 0,
+        gid: 0,
+        perm_u: 7,
+        perm_g: 5,
+        perm_o: 5,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 7,
+        perm_g: 7,
+        perm_o: 1,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 7,
+        perm_g: 7,
+        perm_o: 1,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 7,
+        perm_g: 5,
+        perm_o: 5,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 6,
+        perm_g: 4,
+        perm_o: 4,
+    },
+];
+
+const S_PERM_6: [PathEntryInfo; 6] = [
+    PathEntryInfo {
+        uid: 0,
+        gid: 0,
+        perm_u: 7,
+        perm_g: 5,
+        perm_o: 5,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 7,
+        perm_g: 7,
+        perm_o: 1,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 7,
+        perm_g: 7,
+        perm_o: 1,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 7,
+        perm_g: 7,
+        perm_o: 5,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 7,
+        perm_g: 7,
+        perm_o: 5,
+    },
+    PathEntryInfo {
+        uid: 1000,
+        gid: 1000,
+        perm_u: 6,
+        perm_g: 4,
+        perm_o: 4,
+    },
+];
+
+pub fn check_apk_path_match_expects(
+    all_path: &str,
+    path_infos: &Vec<PathEntryInfo>,
+    expect: &[PathEntryInfo],
+) -> std::result::Result<(), (String, io::Error)> {
+    assert!(path_infos.len() == expect.len());
+
+    for pos in 0..path_infos.len() {
+        if path_infos.index(pos) != &expect[pos] {
+            let all_path = std::path::Path::new(all_path);
+
+            let mut left_path: Option<&std::path::Path> = Some(&all_path);
+            for _j in 0..(path_infos.len() - pos - 1) {
+                left_path = left_path.unwrap().parent();
+            }
+
+            return Err((
+                left_path.unwrap().to_str().unwrap().to_owned(),
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("PathPermMismatch({} <=> {})", path_infos.index(pos), &expect[pos]),
+                ),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn check_sha1_fingerprint(fingerprint: &[u8]) -> bool {

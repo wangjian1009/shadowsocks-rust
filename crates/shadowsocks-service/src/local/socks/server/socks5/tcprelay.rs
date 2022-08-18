@@ -234,10 +234,6 @@ impl Socks5TcpHandler {
         peer_addr: SocketAddr,
         target_addr: Address,
     ) -> io::Result<()> {
-        #[cfg(feature = "rate-limit")]
-        let mut stream =
-            shadowsocks::transport::RateLimitedStream::from_stream(stream, Some(self.context.rate_limiter()));
-
         if !self.mode.enable_tcp() {
             warn!("TCP CONNECT is disabled");
 
@@ -287,6 +283,10 @@ impl Socks5TcpHandler {
 
         match server_opt {
             Some(server) => {
+                #[cfg(feature = "rate-limit")]
+                let mut stream =
+                    shadowsocks::transport::RateLimitedStream::from_stream(stream, Some(self.context.rate_limiter()));
+
                 let svr_cfg = server.server_config();
                 establish_tcp_tunnel(
                     self.context.as_ref(),
