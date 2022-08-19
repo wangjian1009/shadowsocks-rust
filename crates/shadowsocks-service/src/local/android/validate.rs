@@ -17,6 +17,8 @@ pub enum ValidateError {
     SignedDataNotFound,
     SignedDataDecodeFail(io::Error),
     SignedDataNoCert,
+    CertNotFound,
+    CertDuplicate(String, String),
     CertCheckFailed,
     PathCheckFailed(Option<String>, io::Error),
 }
@@ -31,6 +33,8 @@ impl std::fmt::Display for ValidateError {
             Self::SignedDataNotFound => write!(f, "signed data not found"),
             Self::SignedDataDecodeFail(..) => write!(f, "signed data decode fail"),
             Self::SignedDataNoCert => write!(f, "signed data no cert"),
+            Self::CertNotFound => write!(f, "cert not found"),
+            Self::CertDuplicate(..) => write!(f, "cert duplicate"),
             Self::CertCheckFailed => write!(f, "cert check failed"),
             Self::PathCheckFailed(..) => write!(f, "path check failed"),
         }
@@ -47,6 +51,8 @@ impl std::fmt::Debug for ValidateError {
             Self::SignedDataNotFound => write!(f, "cert not found"),
             Self::SignedDataDecodeFail(e) => write!(f, "cert decode fail({:?})", e),
             Self::SignedDataNoCert => write!(f, "signed data no cert"),
+            Self::CertNotFound => write!(f, "cert not found"),
+            Self::CertDuplicate(a, b) => write!(f, "cert duplicate, {} and {}", a, b),
             Self::CertCheckFailed => write!(f, "cert check failed"),
             Self::PathCheckFailed(ef, e) => {
                 if let Some(ef) = ef {
@@ -76,6 +82,7 @@ pub fn validate_sign() -> ValidateResult {
         error: None,
     };
 
+    // 获取apk路径
     match get_apk_path() {
         Ok(apk_path) => result.apk_path = Some(apk_path),
         Err(err) => {
@@ -84,63 +91,13 @@ pub fn validate_sign() -> ValidateResult {
         }
     }
 
-    let apk_path_infos = match load_path_infos(result.apk_path.as_ref().unwrap()) {
-        Ok(path_infos) => path_infos,
-        Err((path, err)) => {
-            result.error = Some(ValidateError::PathCheckFailed(Some(path), err));
-            return result;
-        }
-    };
-
-    match apk_path_infos.len() {
-        6 => match check_apk_path_match_expects(result.apk_path.as_ref().unwrap(), &apk_path_infos, &S_PERM_6) {
-            Ok(()) => {}
-            Err((f, e)) => {
-                result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
-                return result;
-            }
-        },
-        5 => {
-            //__ANDROID_API_P__ 28
-            if get_sdk_version_code() <= 28 {
-                //sdk_version_code <= __ANDROID_API_P__
-                match check_apk_path_match_expects(
-                    result.apk_path.as_ref().unwrap(),
-                    &apk_path_infos,
-                    &S_PERM_5_9_BEFORE,
-                ) {
-                    Ok(()) => {}
-                    Err((f, e)) => {
-                        result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
-                        return result;
-                    }
-                }
-            } else {
-                match check_apk_path_match_expects(
-                    result.apk_path.as_ref().unwrap(),
-                    &apk_path_infos,
-                    &S_PERM_5_10_AFTER,
-                ) {
-                    Ok(()) => {}
-                    Err((f, e)) => {
-                        result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
-                        return result;
-                    }
-                }
-            }
-        }
-        _ => {
-            result.error = Some(ValidateError::PathCheckFailed(
-                Some(result.apk_path.as_ref().unwrap().to_owned()),
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("path level {} unknown", apk_path_infos.len()),
-                ),
-            ));
-            return result;
-        }
+    // 验证apk路径权限
+    validate_sign_apk_path(&mut result);
+    if result.error.is_some() {
+        return result;
     }
 
+    // 打开apk文件
     let apk_file = match fs::File::open(result.apk_path.as_ref().unwrap()) {
         Ok(apk_file) => apk_file,
         Err(err) => {
@@ -149,6 +106,7 @@ pub fn validate_sign() -> ValidateResult {
         }
     };
 
+    // 加载apk内容
     let mut apk_archive = match zip::ZipArchive::new(apk_file) {
         Ok(apk_archive) => apk_archive,
         Err(err) => {
@@ -157,33 +115,29 @@ pub fn validate_sign() -> ValidateResult {
         }
     };
 
-    // 加载证书内容
-    const TO_CHECK_CERTS: &[&'static str] = &["META-INF/BNDLTOOL.RSA", "META-INF/CERT.RSA"];
-    let mut file_and_content = None;
-    for f in TO_CHECK_CERTS {
-        file_and_content = match load_file_content(&mut apk_archive, f) {
-            Ok(content) => match content {
-                Some(content) => Some((f, content)),
-                None => None,
-            },
-            Err(err) => {
-                result.error = Some(ValidateError::SignedDataLoadFail(err));
-                return result;
-            }
-        };
-
-        if file_and_content.is_some() {
-            break;
+    // 找到证书路径
+    match search_cert_file(&apk_archive, &mut result) {
+        Some(f) => {
+            result.signed_data_file = Some(f);
         }
-    }
-    let content = match file_and_content {
         None => {
-            result.error = Some(ValidateError::SignedDataNotFound);
+            assert!(result.error.is_some());
             return result;
         }
-        Some((file, context)) => {
-            result.signed_data_file = Some(file.to_string());
-            context
+    };
+
+    // 加载证书内容
+    let content = match load_file_content(&mut apk_archive, result.signed_data_file.as_ref().unwrap()) {
+        Ok(content) => match content {
+            None => {
+                result.error = Some(ValidateError::SignedDataNotFound);
+                return result;
+            }
+            Some(context) => context,
+        },
+        Err(err) => {
+            result.error = Some(ValidateError::SignedDataLoadFail(err));
+            return result;
         }
     };
 
@@ -207,6 +161,173 @@ pub fn validate_sign() -> ValidateResult {
     }
 
     result
+}
+
+fn validate_sign_apk_path(result: &mut ValidateResult) {
+    match get_apk_path() {
+        Ok(apk_path) => result.apk_path = Some(apk_path),
+        Err(err) => {
+            result.error = Some(ValidateError::FindApkFail(err));
+            return;
+        }
+    }
+
+    let apk_path_infos = match load_path_infos(result.apk_path.as_ref().unwrap()) {
+        Ok(path_infos) => path_infos,
+        Err((path, err)) => {
+            result.error = Some(ValidateError::PathCheckFailed(Some(path), err));
+            return;
+        }
+    };
+
+    match apk_path_infos.len() {
+        6 => match check_apk_path_match_expects(result.apk_path.as_ref().unwrap(), &apk_path_infos, &S_PERM_6) {
+            Ok(()) => {}
+            Err((f, e)) => {
+                result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
+                return;
+            }
+        },
+        5 => {
+            //__ANDROID_API_P__ 28
+            if get_sdk_version_code() <= 28 {
+                //sdk_version_code <= __ANDROID_API_P__
+                match check_apk_path_match_expects(
+                    result.apk_path.as_ref().unwrap(),
+                    &apk_path_infos,
+                    &S_PERM_5_9_BEFORE,
+                ) {
+                    Ok(()) => {}
+                    Err((f, e)) => {
+                        result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
+                        return;
+                    }
+                }
+            } else {
+                match check_apk_path_match_expects(
+                    result.apk_path.as_ref().unwrap(),
+                    &apk_path_infos,
+                    &S_PERM_5_10_AFTER,
+                ) {
+                    Ok(()) => {}
+                    Err((f, e)) => {
+                        result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
+                        return;
+                    }
+                }
+            }
+        }
+        _ => {
+            result.error = Some(ValidateError::PathCheckFailed(
+                Some(result.apk_path.as_ref().unwrap().to_owned()),
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("path level {} unknown", apk_path_infos.len()),
+                ),
+            ));
+        }
+    }
+}
+
+const S_SEED: [u8; 8] = [0x33, 0x34, 0x52, 0x58, 0x11, 0x73, 0x94, 0x38];
+const fn const_string_encode<const N: usize>(mut input: [u8; N]) -> [u8; N] {
+    if 0 < N {
+        input[0] = input[0] ^ S_SEED[0 % S_SEED.len()];
+    }
+
+    if 1 < N {
+        input[1] = input[1] ^ S_SEED[1 % S_SEED.len()];
+    }
+
+    if 2 < N {
+        input[2] = input[2] ^ S_SEED[2 % S_SEED.len()];
+    }
+
+    if 3 < N {
+        input[3] = input[3] ^ S_SEED[3 % S_SEED.len()];
+    }
+
+    if 4 < N {
+        input[4] = input[4] ^ S_SEED[4 % S_SEED.len()];
+    }
+
+    if 5 < N {
+        input[5] = input[5] ^ S_SEED[5 % S_SEED.len()];
+    }
+
+    if 6 < N {
+        input[6] = input[6] ^ S_SEED[6 % S_SEED.len()];
+    }
+
+    if 7 < N {
+        input[7] = input[7] ^ S_SEED[7 % S_SEED.len()];
+    }
+
+    if 8 < N {
+        input[8] = input[8] ^ S_SEED[8 % S_SEED.len()];
+    }
+
+    if 9 < N {
+        input[9] = input[9] ^ S_SEED[9 % S_SEED.len()];
+    }
+
+    if 10 < N {
+        input[10] = input[10] ^ S_SEED[10 % S_SEED.len()];
+    }
+
+    assert!(N < 10);
+    input
+}
+
+// meta-inf/
+const PATH_PREFIX: [u8; 9] = const_string_encode([0x6D, 0x65, 0x74, 0x61, 0x2D, 0x69, 0x6E, 0x66, 0x2F]);
+// .rsa
+const PATH_SUFFIX: [u8; 4] = const_string_encode([0x2E, 0x72, 0x73, 0x61]);
+
+#[inline]
+fn check_file_match(path_name: &str) -> bool {
+    // meta-inf/a.rsa
+    if path_name.len() < 14 {
+        return false;
+    }
+
+    let path_name = path_name.to_lowercase();
+
+    let mut prefix = [0u8; 9];
+    prefix.copy_from_slice(&path_name.as_bytes()[..9]);
+    if const_string_encode(prefix) != PATH_PREFIX {
+        return false;
+    }
+
+    let mut suffix = [0u8; 4];
+    suffix.copy_from_slice(&path_name.as_bytes()[(path_name.len() - 4)..]);
+    if const_string_encode(suffix) != PATH_SUFFIX {
+        return false;
+    }
+
+    true
+}
+
+fn search_cert_file(apk_archive: &zip::ZipArchive<fs::File>, result: &mut ValidateResult) -> Option<String> {
+    let mut found_path = None;
+
+    for path_name in apk_archive.file_names() {
+        if check_file_match(path_name) {
+            if found_path.is_none() {
+                found_path = Some(path_name.to_owned());
+            } else {
+                result.error = Some(ValidateError::CertDuplicate(found_path.unwrap(), path_name.to_owned()));
+                return None;
+            }
+        }
+    }
+
+    if found_path.is_none() {
+        result.error = Some(ValidateError::CertNotFound);
+        return None;
+    }
+
+    Some(found_path.unwrap())
 }
 
 fn load_file_content(archive: &mut zip::ZipArchive<fs::File>, fname: &str) -> io::Result<Option<Vec<u8>>> {
@@ -399,6 +520,7 @@ fn check_sha1_fingerprint(fingerprint: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
     fn test_check_sha1_fingerprint() {
@@ -406,6 +528,18 @@ mod tests {
             .filter_level(log::LevelFilter::Debug)
             .is_test(true)
             .try_init();
+    }
+
+    #[test]
+    fn file_match_1() {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Debug)
+            .is_test(true)
+            .try_init();
+
+        assert_eq!(check_file_match("aa"), false);
+        assert_eq!(check_file_match("MeTA-INf/CeRT.RsA"), true);
+        assert_eq!(check_file_match("MeTA-INf/CeRT.RsB"), false);
     }
 }
 

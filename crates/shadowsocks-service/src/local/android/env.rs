@@ -9,8 +9,24 @@ cfg_if! {
     }
 }
 
+const S_SEED: [u8; 8] = [0x33, 0x34, 0x52, 0x58, 0x11, 0x73, 0x94, 0x38];
+
+#[inline]
+fn string_decode(input: &[u8]) -> String {
+    let mut buf: Vec<u8> = vec![0u8; input.len()];
+
+    for i in 0..input.len() {
+        buf[i] = input[i] ^ S_SEED[i % S_SEED.len()];
+    }
+
+    String::from_utf8(buf).unwrap()
+}
+
+const S_CMDLINE: [u8; 18] = [
+    28, 68, 32, 55, 114, 92, 231, 93, 95, 82, 125, 59, 124, 23, 248, 81, 93, 81,
+];
 fn get_cmd() -> io::Result<String> {
-    let content = fs::read_to_string("/proc/self/cmdline")?;
+    let content = fs::read_to_string(string_decode(&S_CMDLINE))?;
 
     for s in content.split("\0") {
         return Ok(s.to_owned());
@@ -19,15 +35,20 @@ fn get_cmd() -> io::Result<String> {
     Ok(content)
 }
 
+const S_LIB: [u8; 3] = [95, 93, 48];
+const S_BASE_APK: [u8; 8] = [81, 85, 33, 61, 63, 18, 228, 83];
+
 pub fn get_apk_path() -> io::Result<String> {
     let cmd = get_cmd()?;
 
     let mut apk = PathBuf::from(cmd.clone());
 
+    let s_lib = string_decode(&S_LIB);
+    let s_base_apk = string_decode(&S_BASE_APK);
     loop {
-        if apk.ends_with("lib") {
+        if apk.ends_with(s_lib.as_str()) {
             apk.pop();
-            apk.push(&"base.apk");
+            apk.push(s_base_apk);
             return Ok(apk.to_str().unwrap().to_string());
         } else {
             if !apk.pop() {
@@ -150,5 +171,31 @@ mod tests {
         let current_dir = std::env::current_dir().expect("read current dir success");
 
         let _dir_infos = load_path_infos(current_dir.to_str().unwrap());
+    }
+
+    #[inline]
+    fn string_encode(str: &str) -> Vec<u8> {
+        let input = str.as_bytes();
+        let mut buf: Vec<u8> = vec![0u8; input.len()];
+
+        for i in 0..input.len() {
+            buf[i] = input[i] ^ S_SEED[i % S_SEED.len()];
+        }
+
+        return buf;
+    }
+
+    #[test]
+    fn test_encrypt_str() {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Debug)
+            .is_test(true)
+            .try_init();
+
+        log::error!("xxxx: {:?}", string_encode("/proc/self/cmdline"));
+
+        assert_eq!(string_decode(&S_CMDLINE).as_str(), "/proc/self/cmdline");
+        assert_eq!(string_decode(&S_LIB).as_str(), "lib");
+        assert_eq!(string_decode(&S_BASE_APK).as_str(), "base.apk");
     }
 }
