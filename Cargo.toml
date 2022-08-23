@@ -75,6 +75,8 @@ default = [
     "local-tunnel",
     "local-socks4",
     "local-redir",
+    "local-signed-info",
+    "local-fake-mode",
     "multi-threaded",
     "rate-limit",
     "lib-entry",
@@ -95,6 +97,7 @@ default = [
 local = ["shadowsocks-service/local"]
 local-maintain = ["shadowsocks-service/local-maintain"]
 local-signed-info = ["shadowsocks-service/local-signed-info"]
+local-fake-mode = ["shadowsocks-service/local-fake-mode"]
 
 # Enable env-crypt
 env-crypt = ["shadowsocks-service/env-crypt"]

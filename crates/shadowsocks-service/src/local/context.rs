@@ -38,6 +38,32 @@ cfg_if! {
     }
 }
 
+cfg_if! {
+    if #[cfg(feature = "local-fake-mode")] {
+        #[derive(Debug, Clone)]
+        pub enum FakeMode {
+            Bypass,
+            ParamError,
+        }
+
+        impl FakeMode {
+            pub fn is_bypass(&self) -> bool {
+                match self {
+                    FakeMode::Bypass => true,
+                    _ => false,
+                }
+            }
+
+            pub fn is_param_error(&self) -> bool {
+                match self {
+                    FakeMode::ParamError => true,
+                    _ => false,
+                }
+            }
+        }
+    }
+}
+
 /// Local Service Context
 pub struct ServiceContext {
     context: SharedContext,
@@ -62,6 +88,9 @@ pub struct ServiceContext {
 
     #[cfg(feature = "transport")]
     transport: Option<TransportConnectorConfig>,
+
+    #[cfg(feature = "local-fake-mode")]
+    fake_mode: spin::Mutex<Option<FakeMode>>,
 }
 
 impl Default for ServiceContext {
@@ -90,6 +119,8 @@ impl ServiceContext {
             protocol_action: HashMap::new(),
             #[cfg(feature = "transport")]
             transport: None,
+            #[cfg(feature = "local-fake-mode")]
+            fake_mode: spin::Mutex::new(None),
         }
     }
 
@@ -254,5 +285,16 @@ impl ServiceContext {
     #[cfg(feature = "transport")]
     pub fn transport(&self) -> Option<&TransportConnectorConfig> {
         self.transport.as_ref()
+    }
+}
+
+#[cfg(feature = "local-fake-mode")]
+impl ServiceContext {
+    pub fn fake_mode(&self) -> Option<FakeMode> {
+        self.fake_mode.lock().clone()
+    }
+
+    pub fn set_fake_mode(&self, mode: Option<FakeMode>) {
+        *self.fake_mode.lock() = mode;
     }
 }

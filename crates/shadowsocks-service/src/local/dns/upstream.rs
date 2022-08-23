@@ -94,6 +94,8 @@ impl DnsClient {
             Some(flow_stat),
             #[cfg(feature = "rate-limit")]
             None,
+            #[cfg(feature = "local-fake-mode")]
+            None,
         )
         .await?;
         Ok(DnsClient::TcpRemote { stream })

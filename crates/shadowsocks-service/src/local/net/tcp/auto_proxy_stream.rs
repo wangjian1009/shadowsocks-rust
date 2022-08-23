@@ -35,6 +35,9 @@ use crate::{
     net::MonProxyStream,
 };
 
+#[cfg(feature = "local-fake-mode")]
+use crate::local::context::FakeMode;
+
 use super::auto_proxy_io::AutoProxyIo;
 
 /// Unified stream for bypassed and proxied connections
@@ -58,6 +61,11 @@ impl AutoProxyClientStream {
         server: &ServerIdent,
         addr: &Address,
     ) -> io::Result<AutoProxyClientStream> {
+        #[cfg(feature = "local-fake-mode")]
+        if context.fake_mode().map_or(false, |e| e.is_bypass()) {
+            return AutoProxyClientStream::connect_bypassed(context, addr).await;
+        }
+
         if context.check_target_bypassed(&addr).await {
             AutoProxyClientStream::connect_bypassed(context, addr).await
         } else {
@@ -92,6 +100,8 @@ impl AutoProxyClientStream {
             Some(context.flow_stat()),
             #[cfg(feature = "rate-limit")]
             Some(context.rate_limiter()),
+            #[cfg(feature = "local-fake-mode")]
+            context.fake_mode(),
         )
         .await
         {
@@ -110,17 +120,31 @@ impl AutoProxyClientStream {
         addr: &Address,
         flow_stat: Option<Arc<FlowStat>>,
         #[cfg(feature = "rate-limit")] rate_limit: Option<Arc<RateLimiter>>,
+        #[cfg(feature = "local-fake-mode")] fake_mode: Option<FakeMode>,
     ) -> io::Result<AutoProxyClientStream> {
         let svr_cfg = svr.server_config();
         create_connector_then!(Some(context.clone()), svr_cfg.connector_transport(), |connector| {
             let connector = Arc::new(connector);
             match svr_cfg.protocol() {
                 shadowsocks::config::ServerProtocol::SS(ss_cfg) => {
+                    #[cfg(feature = "local-fake-mode")]
+                    let mut _ss_cfg_buf = None;
+
+                    #[allow(unused_mut)]
+                    let mut effect_ss_cfg = ss_cfg;
+
+                    #[cfg(feature = "local-fake-mode")]
+                    if fake_mode.map_or(false, |e| e.is_param_error()) {
+                        _ss_cfg_buf = Some(ss_cfg.clone());
+                        _ss_cfg_buf.as_mut().unwrap().set_password("aaaaaaaa");
+                        effect_ss_cfg = _ss_cfg_buf.as_ref().unwrap();
+                    }
+
                     let stream = ProxyClientStream::connect_with_opts_map(
                         context,
                         connector.as_ref(),
                         svr_cfg,
-                        ss_cfg,
+                        effect_ss_cfg,
                         addr,
                         connect_opts,
                         |#[allow(unused_mut)] stream| {
@@ -140,10 +164,23 @@ impl AutoProxyClientStream {
                 }
                 #[cfg(feature = "trojan")]
                 shadowsocks::config::ServerProtocol::Trojan(trojan_cfg) => {
+                    #[cfg(feature = "local-fake-mode")]
+                    let mut _trojan_cfg_buf = None;
+
+                    #[allow(unused_mut)]
+                    let mut effect_trojan_cfg = trojan_cfg;
+
+                    #[cfg(feature = "local-fake-mode")]
+                    if fake_mode.map_or(false, |e| e.is_param_error()) {
+                        _trojan_cfg_buf = Some(trojan_cfg.clone());
+                        _trojan_cfg_buf.as_mut().unwrap().set_password("aaaaaaaa");
+                        effect_trojan_cfg = _trojan_cfg_buf.as_ref().unwrap();
+                    }
+
                     let stream = trojan::ClientStream::connect_stream(
                         connector.as_ref(),
                         svr_cfg,
-                        trojan_cfg,
+                        effect_trojan_cfg,
                         addr.clone(),
                         connect_opts,
                         |stream| {
@@ -163,10 +200,28 @@ impl AutoProxyClientStream {
                 }
                 #[cfg(feature = "vless")]
                 shadowsocks::config::ServerProtocol::Vless(vless_cfg) => {
+                    #[cfg(feature = "local-fake-mode")]
+                    let mut _vless_cfg_buf = None;
+
+                    #[allow(unused_mut)]
+                    let mut effect_vless_cfg = vless_cfg;
+
+                    #[cfg(feature = "local-fake-mode")]
+                    if fake_mode.map_or(false, |e| e.is_param_error()) {
+                        _vless_cfg_buf = Some(vless_cfg.clone());
+
+                        for client in _vless_cfg_buf.as_mut().unwrap().clients.iter_mut() {
+                            client.account.id =
+                                shadowsocks::vless::UUID::parse_bytes("abcdefghijklmnop".as_bytes()).unwrap();
+                        }
+
+                        effect_vless_cfg = _vless_cfg_buf.as_ref().unwrap();
+                    }
+
                     let stream = vless::ClientStream::connect(
                         connector.as_ref(),
                         svr_cfg,
-                        vless_cfg,
+                        effect_vless_cfg,
                         vless::protocol::RequestCommand::TCP,
                         Some(addr.clone()),
                         connect_opts,

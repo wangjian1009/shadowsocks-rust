@@ -28,6 +28,7 @@ default = [
     "local-socks4",
     "local-maintain",
     "local-signed-info",
+    "local-fake-mode",
     "server-maintain",
     "server-limit",
     "server-mock",
@@ -74,6 +75,7 @@ full = [
 local = []
 local-maintain = ["hyper"]
 local-signed-info = ["cryptographic-message-syntax", "x509-certificate", "zip"]
+local-fake-mode = []
 
 # Enable remote server
 server = []
