@@ -135,6 +135,7 @@ impl AutoProxyClientStream {
 
                     #[cfg(feature = "local-fake-mode")]
                     if fake_mode.map_or(false, |e| e.is_param_error()) {
+                        // log::error!("xxxxx: fake: is error");
                         _ss_cfg_buf = Some(ss_cfg.clone());
                         _ss_cfg_buf.as_mut().unwrap().set_password("aaaaaaaa");
                         effect_ss_cfg = _ss_cfg_buf.as_ref().unwrap();

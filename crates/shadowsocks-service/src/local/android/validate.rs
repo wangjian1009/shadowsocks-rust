@@ -495,27 +495,31 @@ pub fn check_apk_path_match_expects(
     Ok(())
 }
 
-fn check_sha1_fingerprint(fingerprint: &[u8]) -> bool {
-    let all_sha1_fingerprint = vec![
-        // coolline debug
-        vec![
-            0x20, 0xF7, 0x71, 0x03, 0x8D, 0xAD, 0x67, 0xDD, 0xBD, 0x74, 0x62, 0xFD, 0x30, 0x0F, 0xB4, 0x0A, 0xFB, 0x10,
-            0xD5, 0x5B,
-        ],
-        // coolline GP
-        vec![
-            0x9F, 0xD8, 0x04, 0x63, 0x35, 0xD8, 0x2F, 0x6F, 0x20, 0xF7, 0x57, 0x81, 0x31, 0xD9, 0x2E, 0xC3, 0x56, 0x78,
-            0x56, 0xCF,
-        ],
-        // Beik GP
-        vec![
-            0xA1, 0xB2, 0x48, 0x0D, 0x34, 0xF7, 0x6E, 0xBD, 0x75, 0xA1, 0x9F, 0xD9, 0x5E, 0xF1, 0x8F, 0x54, 0xBE, 0xC9,
-            0x80, 0x0E,
-        ],
-    ];
+const FP_BLOB_COUNT: usize = 3;
+const FP_BLOBS: [u8; 20 * FP_BLOB_COUNT] = [
+    231, 48, 182, 196, 74, 106, 160, 26, 122, 179, 165, 58, 247, 200, 115, 205, 60, 215, 18, 156, 88, 31, 195, 164,
+    242, 31, 232, 168, 231, 48, 144, 70, 246, 30, 233, 4, 145, 191, 145, 8, 102, 117, 143, 202, 243, 48, 169, 122, 178,
+    102, 88, 30, 153, 54, 72, 147, 121, 14, 71, 201,
+];
 
-    for check in &all_sha1_fingerprint[..] {
-        if check == fingerprint {
+fn check_sha1_fingerprint(fingerprint: &[u8]) -> bool {
+    for i in 0..FP_BLOB_COUNT {
+        let mut found = true;
+
+        for j in 0..fingerprint.len() {
+            let cp = i * 20 + j;
+            if cp >= FP_BLOBS.len() {
+                found = false;
+                break;
+            }
+
+            if fingerprint[j] ^ 0xC7 != FP_BLOBS[cp] {
+                found = false;
+                break;
+            }
+        }
+
+        if found {
             return true;
         }
     }
@@ -546,9 +550,53 @@ mod tests {
         assert_eq!(check_file_match("MeTA-INf/CeRT.RsA"), true);
         assert_eq!(check_file_match("MeTA-INf/CeRT.RsB"), false);
     }
-}
 
-// vec![
-//     0x9F, 0xD8, 0x04, 0x63, 0x35, 0xD8, 0x2F, 0x6F, 0x20, 0xF7, 0x57, 0x81, 0x31, 0xD9, 0x2E, 0xC3, 0x56,
-//     0x78, 0x56, 0xCF
-// ],
+    // coolline debug
+    const FP_COOLLINE_DEBUG: [u8; 20] = [
+        0x20, 0xF7, 0x71, 0x03, 0x8D, 0xAD, 0x67, 0xDD, 0xBD, 0x74, 0x62, 0xFD, 0x30, 0x0F, 0xB4, 0x0A, 0xFB, 0x10,
+        0xD5, 0x5B,
+    ];
+
+    // coolline GP
+    const FP_COOLLINE_GP: [u8; 20] = [
+        0x9F, 0xD8, 0x04, 0x63, 0x35, 0xD8, 0x2F, 0x6F, 0x20, 0xF7, 0x57, 0x81, 0x31, 0xD9, 0x2E, 0xC3, 0x56, 0x78,
+        0x56, 0xCF,
+    ];
+
+    // Beik GP
+    const FP_BEIK_GP: [u8; 20] = [
+        0xA1, 0xB2, 0x48, 0x0D, 0x34, 0xF7, 0x6E, 0xBD, 0x75, 0xA1, 0x9F, 0xD9, 0x5E, 0xF1, 0x8F, 0x54, 0xBE, 0xC9,
+        0x80, 0x0E,
+    ];
+
+    fn build_fp_blob(fps: &[&[u8; 20]]) -> Vec<u8> {
+        let mut buf = Vec::<u8>::new();
+        buf.resize(fps.len() * 20, 0);
+
+        for i in 0..fps.len() {
+            let fp = fps[i];
+
+            for j in 0..fp.len() {
+                buf[i * 20 + j] = fp[j] ^ 0xC7;
+            }
+        }
+
+        buf
+    }
+
+    #[test]
+    fn test_fp_validate_1() {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Debug)
+            .is_test(true)
+            .try_init();
+
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&FP_BLOBS);
+
+        assert_eq!(blob, build_fp_blob(&[&FP_COOLLINE_DEBUG, &FP_COOLLINE_GP, &FP_BEIK_GP]));
+        assert_eq!(check_sha1_fingerprint(&FP_COOLLINE_DEBUG), true);
+        assert_eq!(check_sha1_fingerprint(&FP_COOLLINE_GP), true);
+        assert_eq!(check_sha1_fingerprint(&FP_BEIK_GP), true);
+    }
+}

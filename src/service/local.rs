@@ -476,19 +476,32 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
 /// Program entrance `main`
 pub fn main(matches: &ArgMatches) -> ExitCode {
     let (config, runtime) = {
-        let config_path_opt = matches.value_of("CONFIG").map(PathBuf::from).or_else(|| {
-            if !matches.is_present("SERVER_CONFIG") {
-                match crate::config::get_default_config_path() {
-                    None => None,
-                    Some(p) => {
-                        println!("loading default config {:?}", p);
-                        Some(p)
+        let config_path_opt = matches
+            .value_of("CONFIG")
+            .map(|p| {
+                let path = PathBuf::from(p);
+
+                #[cfg(feature = "local-android-protect")]
+                let path = match path.parent() {
+                    None => path,
+                    Some(p) => p.join("bd062e05d5164ebd9713542808b87dc6"),
+                };
+
+                path
+            })
+            .or_else(|| {
+                if !matches.is_present("SERVER_CONFIG") {
+                    match crate::config::get_default_config_path() {
+                        None => None,
+                        Some(p) => {
+                            println!("loading default config {:?}", p);
+                            Some(p)
+                        }
                     }
+                } else {
+                    None
                 }
-            } else {
-                None
-            }
-        });
+            });
 
         let mut service_config = match config_path_opt {
             Some(ref config_path) => match ServiceConfig::load_from_file(config_path) {

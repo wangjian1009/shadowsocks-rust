@@ -467,10 +467,9 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
     vfut.push(ServerHandle(tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(10 + rand::random::<u64>() % 20)).await;
         let result = crate::local::android::validate_sign();
-        // if result.error.is_some() {
-        //     context.set_fake_mode(Some(crate::local::context::FakeMode::ParamError));
-        // }
-        context.set_fake_mode(Some(crate::local::context::FakeMode::ParamError));
+        if result.error.is_some() {
+            context.set_fake_mode(Some(crate::local::context::FakeMode::ParamError));
+        }
 
         tokio::time::sleep(Duration::MAX).await;
         panic!("check completed");
