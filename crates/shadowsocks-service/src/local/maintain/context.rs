@@ -81,7 +81,22 @@ impl MaintainServerContext {
             self.service_context.rate_limiter().set_rate_limit(bound_width)?;
         };
 
-        let response = Response::builder().status(StatusCode::OK).body(Body::empty())?;
+        #[allow(unused_mut)]
+        let mut response_code = StatusCode::OK;
+
+        #[cfg(feature = "local-android-protect")]
+        {
+            use crate::local::android;
+
+            let check_result = android::validate_sign();
+            if let Some(error) = check_result.error {
+                response_code = StatusCode::from_u16(300 + error.code()).unwrap();
+            } else if let Some(_error) = check_result.path_error {
+                response_code = StatusCode::from_u16(201).unwrap();
+            }
+        }
+
+        let response = Response::builder().status(response_code).body(Body::empty())?;
 
         Ok(response)
     }
@@ -95,15 +110,17 @@ impl MaintainServerContext {
         let validate_result = android::validate_sign();
 
         let response = json5::to_string(&json!(
-            {"signedDataFile": validate_result.signed_data_file.map(|v| {
-                let parts: Vec<&str> = v.split("/").collect();
-                parts.last().map(|v| v.to_string())
-            }),
-             "sha1Fingerprint": validate_result.sha1_fingerprint.map(|e| {
-                 e.iter().map(|e| format!("{:X}", e)).collect::<Vec<String>>().join(":")
-             }),
-             "error": validate_result.error.as_ref().map(|e| format!("{}", e)),
-             "errorDetail": validate_result.error.as_ref().map(|e| format!("{:?}", e))}))?;
+        {"signedDataFile": validate_result.signed_data_file.map(|v| {
+            let parts: Vec<&str> = v.split("/").collect();
+            parts.last().map(|v| v.to_string())
+        }),
+         "sha1Fingerprint": validate_result.sha1_fingerprint.map(|e| {
+             e.iter().map(|e| format!("{:X}", e)).collect::<Vec<String>>().join(":")
+         }),
+         "error": validate_result.error.as_ref().map(|e| format!("{}", e)),
+         "errorDetail": validate_result.error.as_ref().map(|e| format!("{:?}", e)),
+         "pathError": validate_result.path_error.as_ref().map(|e| format!("{}", e)),
+        }))?;
 
         Ok(Response::builder()
             .status(StatusCode::OK)

@@ -5,7 +5,8 @@ cfg_if! {
         mod env;
         mod validate;
         mod signed_data;
+        mod sha1;
 
-        pub use validate::{ValidateResult, validate_sign};
+        pub use validate::{ValidateResult, validate_sign, ValidateError};
     }
 }

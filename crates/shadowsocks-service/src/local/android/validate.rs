@@ -23,42 +23,48 @@ pub enum ValidateError {
     PathCheckFailed(Option<String>, io::Error),
 }
 
+impl ValidateError {
+    pub fn code(&self) -> u16 {
+        match self {
+            Self::FindApkFail(..) => 1,
+            Self::OpenApkFail(..) => 2,
+            Self::UnzipApkFail(..) => 3,
+            Self::SignedDataLoadFail(..) => 4,
+            Self::SignedDataNotFound => 5,
+            Self::SignedDataDecodeFail(..) => 6,
+            Self::SignedDataNoCert => 7,
+            Self::CertNotFound => 8,
+            Self::CertDuplicate(..) => 9,
+            Self::CertCheckFailed => 10,
+            Self::PathCheckFailed(..) => 11,
+        }
+    }
+}
+
 impl std::fmt::Display for ValidateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::FindApkFail(..) => write!(f, "package not found"),
-            Self::OpenApkFail(..) => write!(f, "package open fail"),
-            Self::UnzipApkFail(..) => write!(f, "package unzip fail"),
-            Self::SignedDataLoadFail(..) => write!(f, "signed data load fail"),
-            Self::SignedDataNotFound => write!(f, "signed data not found"),
-            Self::SignedDataDecodeFail(..) => write!(f, "signed data decode fail"),
-            Self::SignedDataNoCert => write!(f, "signed data no cert"),
-            Self::CertNotFound => write!(f, "cert not found"),
-            Self::CertDuplicate(..) => write!(f, "cert duplicate"),
-            Self::CertCheckFailed => write!(f, "cert check failed"),
-            Self::PathCheckFailed(..) => write!(f, "path check failed"),
-        }
+        write!(f, "E{:4}", self.code())
     }
 }
 
 impl std::fmt::Debug for ValidateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::FindApkFail(e) => write!(f, "package not found({:?}", e),
-            Self::OpenApkFail(e) => write!(f, "package open fail({:?}", e),
-            Self::UnzipApkFail(e) => write!(f, "package unzip fail({:?})", e),
-            Self::SignedDataLoadFail(e) => write!(f, "cert load fail({:?})", e),
-            Self::SignedDataNotFound => write!(f, "cert not found"),
-            Self::SignedDataDecodeFail(e) => write!(f, "cert decode fail({:?})", e),
-            Self::SignedDataNoCert => write!(f, "signed data no cert"),
-            Self::CertNotFound => write!(f, "cert not found"),
-            Self::CertDuplicate(a, b) => write!(f, "cert duplicate, {} and {}", a, b),
-            Self::CertCheckFailed => write!(f, "cert check failed"),
+            Self::FindApkFail(e) => write!(f, "E{:4}({:?})", self.code(), e),
+            Self::OpenApkFail(e) => write!(f, "E{:4}({:?})", self.code(), e),
+            Self::UnzipApkFail(e) => write!(f, "E{:4}({:?})", self.code(), e),
+            Self::SignedDataLoadFail(e) => write!(f, "E{:4}({:?})", self.code(), e),
+            Self::SignedDataNotFound => write!(f, "E{:4}", self.code()),
+            Self::SignedDataDecodeFail(e) => write!(f, "E{:4}({:?})", self.code(), e),
+            Self::SignedDataNoCert => write!(f, "E{:4}", self.code()),
+            Self::CertNotFound => write!(f, "E{:4}", self.code()),
+            Self::CertDuplicate(a, b) => write!(f, "E{:4}({},{})", self.code(), a, b),
+            Self::CertCheckFailed => write!(f, "E{:4}", self.code()),
             Self::PathCheckFailed(ef, e) => {
                 if let Some(ef) = ef {
-                    write!(f, "path {} check failed: {:?}", ef, e)
+                    write!(f, "E{:4}({},{:?})", self.code(), ef, e)
                 } else {
-                    write!(f, "path check failed: {:?}", e)
+                    write!(f, "E{:4}({:?})", self.code(), e)
                 }
             }
         }
@@ -71,6 +77,7 @@ pub struct ValidateResult {
     pub signed_data: Option<SignedData>,
     pub sha1_fingerprint: Option<Vec<u8>>,
     pub error: Option<ValidateError>,
+    pub path_error: Option<ValidateError>,
 }
 
 pub fn validate_sign() -> ValidateResult {
@@ -80,6 +87,7 @@ pub fn validate_sign() -> ValidateResult {
         signed_data: None,
         sha1_fingerprint: None,
         error: None,
+        path_error: None,
     };
 
     // 获取apk路径
@@ -172,7 +180,15 @@ fn validate_sign_apk_path(result: &mut ValidateResult) {
         }
     }
 
-    let apk_path_infos = match load_path_infos(result.apk_path.as_ref().unwrap()) {
+    let path = result.apk_path.as_ref().unwrap();
+    if std::path::Path::new(path.as_str()).starts_with("/data/data") {
+        result.error = Some(ValidateError::PathCheckFailed(
+            Some(path.to_owned()),
+            io::Error::new(io::ErrorKind::Other, "path prefix error"),
+        ));
+    }
+
+    let apk_path_infos = match load_path_infos(path) {
         Ok(path_infos) => path_infos,
         Err((path, err)) => {
             result.error = Some(ValidateError::PathCheckFailed(Some(path), err));
@@ -180,13 +196,10 @@ fn validate_sign_apk_path(result: &mut ValidateResult) {
         }
     };
 
-    match apk_path_infos.len() {
+    result.path_error = match apk_path_infos.len() {
         6 => match check_apk_path_match_expects(result.apk_path.as_ref().unwrap(), &apk_path_infos, &S_PERM_6) {
-            Ok(()) => {}
-            Err((f, e)) => {
-                result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
-                return;
-            }
+            Ok(()) => None,
+            Err((f, e)) => Some(ValidateError::PathCheckFailed(Some(f), e)),
         },
         5 => {
             //__ANDROID_API_P__ 28
@@ -197,11 +210,8 @@ fn validate_sign_apk_path(result: &mut ValidateResult) {
                     &apk_path_infos,
                     &S_PERM_5_9_BEFORE,
                 ) {
-                    Ok(()) => {}
-                    Err((f, e)) => {
-                        result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
-                        return;
-                    }
+                    Ok(()) => None,
+                    Err((f, e)) => Some(ValidateError::PathCheckFailed(Some(f), e)),
                 }
             } else {
                 match check_apk_path_match_expects(
@@ -209,24 +219,19 @@ fn validate_sign_apk_path(result: &mut ValidateResult) {
                     &apk_path_infos,
                     &S_PERM_5_10_AFTER,
                 ) {
-                    Ok(()) => {}
-                    Err((f, e)) => {
-                        result.error = Some(ValidateError::PathCheckFailed(Some(f), e));
-                        return;
-                    }
+                    Ok(()) => None,
+                    Err((f, e)) => Some(ValidateError::PathCheckFailed(Some(f), e)),
                 }
             }
         }
-        _ => {
-            result.error = Some(ValidateError::PathCheckFailed(
-                Some(result.apk_path.as_ref().unwrap().to_owned()),
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("path level {} unknown", apk_path_infos.len()),
-                ),
-            ));
-        }
-    }
+        _ => Some(ValidateError::PathCheckFailed(
+            Some(path.to_owned()),
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("path level {} unknown", apk_path_infos.len()),
+            ),
+        )),
+    };
 }
 
 const S_SEED: [u8; 8] = [0x33, 0x34, 0x52, 0x58, 0x11, 0x73, 0x94, 0x38];

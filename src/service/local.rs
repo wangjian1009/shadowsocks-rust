@@ -1,6 +1,13 @@
 //! Local server launchers
 
-use std::{net::IpAddr, path::PathBuf, process::ExitCode, time::Duration};
+use std::fs::OpenOptions;
+use std::io::{self, Read};
+use std::{
+    net::IpAddr,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    time::Duration,
+};
 
 use clap::{Arg, ArgGroup, ArgMatches, Command, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
@@ -475,6 +482,15 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
 
 /// Program entrance `main`
 pub fn main(matches: &ArgMatches) -> ExitCode {
+    // logging::init_with_config(
+    //     "sslocal",
+    //     &crate::config::LogConfig {
+    //         level: 4,
+    //         format: crate::config::LogFormatConfig::default(),
+    //         config_path: None,
+    //     },
+    // );
+
     let (config, runtime) = {
         let config_path_opt = matches
             .value_of("CONFIG")
@@ -503,11 +519,22 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 }
             });
 
-        let mut service_config = match config_path_opt {
-            Some(ref config_path) => match ServiceConfig::load_from_file(config_path) {
+        let config_opt = match config_path_opt.as_ref() {
+            Some(p) => match load_config_from_file(p) {
+                Err(err) => {
+                    eprintln!("loading config {:?}, {}", p, err);
+                    return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
+                }
+                Ok(s) => Some(s),
+            },
+            None => None,
+        };
+
+        let mut service_config = match config_opt.as_ref() {
+            Some(config) => match ServiceConfig::load_from_str(config) {
                 Ok(c) => c,
                 Err(err) => {
-                    eprintln!("loading config {:?}, {}", config_path, err);
+                    eprintln!("loading config {:?}, {}", config_path_opt, err);
                     return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
                 }
             },
@@ -527,11 +554,11 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
         log::trace!("{:?}", service_config);
 
-        let mut config = match config_path_opt {
-            Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Local) {
+        let mut config = match config_opt {
+            Some(config) => match Config::load_from_str(&config, ConfigType::Local) {
                 Ok(cfg) => cfg,
                 Err(err) => {
-                    eprintln!("loading config {:?}, {}", cpath, err);
+                    eprintln!("loading config {:?}, {}", config_path_opt, err);
                     return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
                 }
             },
@@ -1080,6 +1107,41 @@ fn launch_reload_server_task(config_path: PathBuf, balancer: PingBalancer) {
             }
         }
     });
+}
+
+#[cfg(not(feature = "local-android-protect"))]
+pub fn load_config_from_file<P: AsRef<Path>>(filename: &P) -> io::Result<String> {
+    let filename = filename.as_ref();
+
+    let mut reader = OpenOptions::new().read(true).open(filename)?;
+    let mut content = String::new();
+    reader.read_to_string(&mut content)?;
+
+    Ok(content)
+}
+
+#[cfg(feature = "local-android-protect")]
+pub fn load_config_from_file<P: AsRef<Path>>(filename: &P) -> io::Result<String> {
+    let filename = filename.as_ref();
+
+    let mut reader = OpenOptions::new().read(true).open(filename)?;
+
+    let mut ib = Vec::new();
+    reader.read_to_end(&mut ib)?;
+
+    let len = ib.len();
+    for i in 0..len {
+        let p = len - i - 1;
+        if p == 0 {
+            ib[p] ^= 0x83;
+        } else {
+            ib[p] ^= ib[p - 1];
+        }
+    }
+
+    let content = String::from_utf8(ib).map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+
+    Ok(content)
 }
 
 #[cfg(not(unix))]

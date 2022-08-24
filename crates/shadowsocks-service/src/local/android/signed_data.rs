@@ -1,6 +1,5 @@
 use cryptographic_message_syntax::SignedData;
 use std::io;
-use x509_certificate::algorithm::DigestAlgorithm;
 
 pub fn load_signed_data(_data: &[u8]) -> io::Result<SignedData> {
     let signed_data = SignedData::parse_ber(_data).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
@@ -10,7 +9,10 @@ pub fn load_signed_data(_data: &[u8]) -> io::Result<SignedData> {
 
 pub fn get_signed_data_sha1_fingerprint(signed_data: &SignedData) -> Option<Vec<u8>> {
     for cert in signed_data.certificates() {
-        return Some(DigestAlgorithm::Sha1.digest_data(cert.constructed_data()));
+        let digest = super::sha1::sha1(cert.constructed_data());
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&digest);
+        return Some(buf);
     }
 
     None
