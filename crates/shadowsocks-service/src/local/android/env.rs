@@ -11,7 +11,7 @@ cfg_if! {
 
 const S_SEED: [u8; 8] = [0x33, 0x34, 0x52, 0x58, 0x11, 0x73, 0x94, 0x38];
 
-#[inline]
+#[inline(never)]
 fn string_decode(input: &[u8]) -> String {
     let mut buf: Vec<u8> = vec![0u8; input.len()];
 
@@ -122,24 +122,33 @@ cfg_if! {
     if #[cfg(target_os = "android")] {
         use std::ffi::CString;
         use std::os::raw;
+        use dlopen::raw::Library;
 
-        #[link(name = "android")]
-        extern "C" {
-            fn __system_property_get(name: *const raw::c_char, value: *mut raw::c_char) -> raw::c_int;
-        }
+        const S_ANDROID_SDK_VERSION_KEY: [u8; 20] = [
+            65, 91, 124, 58, 100, 26, 248, 92, 29, 66, 55, 42, 98, 26, 251, 86, 29, 71, 54, 51,
+        ];
+        const S_ANDROID_LIB: [u8; 13] = [95, 93, 48, 57, 127, 23, 230, 87, 90, 80, 124, 43, 126];
+        const S_ANDROID_FN_GET_PROPERTY: [u8; 21] = [
+            108, 107, 33, 33, 98, 7, 241, 85, 108, 68, 32, 55, 97, 22, 230, 76, 74, 107, 53, 61, 101,
+        ];
 
         pub fn get_sdk_version_code() -> u32 {
+            let android_lib = Library::open(string_decode(&S_ANDROID_LIB).as_str()).unwrap();
+            let fname = string_decode(&S_ANDROID_FN_GET_PROPERTY);
+            let fname = CString::new(fname).unwrap();
+
+            let system_property_get: fn(name: *const raw::c_char, value: *mut raw::c_char) -> raw::c_int =
+                unsafe { android_lib.symbol_cstr(&fname) }.unwrap();
+
             // 获取 SDK 版本号
             let mut sdk_version = vec![0u8; 128];
-            let c_key = CString::new("ro.build.version.sdk").unwrap();
-            unsafe {
-                __system_property_get(c_key.as_ptr(), sdk_version.as_mut_ptr() as *mut raw::c_char);
+            let c_key = CString::new(string_decode(&S_ANDROID_SDK_VERSION_KEY).as_str()).unwrap();
+            system_property_get(c_key.as_ptr(), sdk_version.as_mut_ptr() as *mut raw::c_char);
 
-                for n in 1..sdk_version.len() {
-                    if sdk_version[n] == 0 {
-                        sdk_version.truncate(n);
-                        break;
-                    }
+            for n in 1..sdk_version.len() {
+                if sdk_version[n] == 0 {
+                    sdk_version.truncate(n);
+                    break;
                 }
             }
 
@@ -154,7 +163,7 @@ pub fn get_sdk_version_code() -> u32 {
     0
 }
 
-const S_DATA: [u8; 8] = [0x33, 0x34, 0x52, 0x58, 0x11, 0x73, 0x94, 0x38];
+const S_DATA: [u8; 5] = [28, 80, 51, 44, 112];
 
 #[inline(never)]
 pub fn apk_path_prefix() -> String {
@@ -178,6 +187,16 @@ mod tests {
         let _dir_infos = load_path_infos(current_dir.to_str().unwrap());
     }
 
+    #[test]
+    fn test_apk_path_prefix() {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Debug)
+            .is_test(true)
+            .try_init();
+
+        assert_eq!(apk_path_prefix().as_str(), "/data/data");
+    }
+
     #[inline]
     fn string_encode(str: &str) -> Vec<u8> {
         let input = str.as_bytes();
@@ -197,11 +216,25 @@ mod tests {
             .is_test(true)
             .try_init();
 
-        log::error!("xxxx: {:?}", string_encode("/proc/self/cmdline"));
+        log::error!("xxxx: {:?}", string_encode("__system_property_get"));
 
         assert_eq!(string_decode(&S_CMDLINE).as_str(), "/proc/self/cmdline");
         assert_eq!(string_decode(&S_LIB).as_str(), "lib");
         assert_eq!(string_decode(&S_BASE_APK).as_str(), "base.apk");
         assert_eq!(string_decode(&S_DATA).as_str(), "/data");
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn test_encrypt_str() {
+        assert_eq!(
+            string_decode(&S_ANDROID_SDK_VERSION_KEY).as_str(),
+            "ro.build.version.sdk"
+        );
+        assert_eq!(string_decode(&S_ANDROID_LIB).as_str(), "libandroid.so");
+        assert_eq!(
+            string_decode(&S_ANDROID_FN_GET_PROPERTY).as_str(),
+            "__system_property_get"
+        )
     }
 }

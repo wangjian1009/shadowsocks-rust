@@ -230,6 +230,9 @@ shadowsocks = { version = "1.15.0", path = "../shadowsocks", default-features = 
 [target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 nix = "0.24"
 
+[target.'cfg(target_os = "android")'.dependencies]
+dlopen = "0.1.8"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.36", features = ["Win32_Networking_WinSock"] }
 
