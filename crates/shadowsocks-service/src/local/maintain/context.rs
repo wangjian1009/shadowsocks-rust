@@ -66,7 +66,9 @@ impl MaintainServerContext {
         let whole_body = hyper::body::to_bytes(req.into_body()).await?;
         if !whole_body.is_empty() {
             let str_speed_limit = std::str::from_utf8(&whole_body[..])?;
-            bound_width = Some(BoundWidth::from_str(str_speed_limit)?);
+            if str_speed_limit != "0" {
+                bound_width = Some(BoundWidth::from_str(str_speed_limit)?);
+            }
         }
 
         let rate_limiter = self.service_context.rate_limiter();

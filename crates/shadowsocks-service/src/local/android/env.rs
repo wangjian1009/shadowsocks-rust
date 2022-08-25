@@ -52,10 +52,7 @@ pub fn get_apk_path() -> io::Result<String> {
             return Ok(apk.to_str().unwrap().to_string());
         } else {
             if !apk.pop() {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("can`t rebuild cmd to apk, cmd={}", cmd),
-                ));
+                return Err(io::Error::new(io::ErrorKind::Other, format!("c={}", cmd)));
             }
         }
     }
@@ -157,6 +154,14 @@ pub fn get_sdk_version_code() -> u32 {
     0
 }
 
+const S_DATA: [u8; 8] = [0x33, 0x34, 0x52, 0x58, 0x11, 0x73, 0x94, 0x38];
+
+#[inline(never)]
+pub fn apk_path_prefix() -> String {
+    let a = string_decode(&S_DATA);
+    format!("{}{}", a, a)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +202,6 @@ mod tests {
         assert_eq!(string_decode(&S_CMDLINE).as_str(), "/proc/self/cmdline");
         assert_eq!(string_decode(&S_LIB).as_str(), "lib");
         assert_eq!(string_decode(&S_BASE_APK).as_str(), "base.apk");
+        assert_eq!(string_decode(&S_DATA).as_str(), "/data");
     }
 }

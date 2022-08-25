@@ -23,6 +23,44 @@ const K4: u32 = 1455298587;
 // const INITIAL_STATE: [u32; 5] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0];
 const INITIAL_STATE: [u32; 5] = [1930523204, 2631719373, 73794867, 341070149, 3615928501];
 
+#[inline(never)]
+fn isv(i: usize) -> u32 {
+    INITIAL_STATE[i]
+}
+
+#[inline(never)]
+fn build_is(data: &[u32; 5]) -> [u32; 5] {
+    let mut data = data.clone();
+
+    for i in 1..5 {
+        data[5 - i] ^= data[5 - i - 1];
+    }
+
+    data[0] ^= 0x14545145;
+
+    data
+}
+
+#[inline(never)]
+fn build_k1(i: u32) -> u32 {
+    i ^ isv(2)
+}
+
+#[inline(never)]
+fn build_k2(i: u32) -> u32 {
+    i ^ isv(3)
+}
+
+#[inline(never)]
+fn build_k3(i: u32) -> u32 {
+    i ^ isv(0)
+}
+
+#[inline(never)]
+fn build_k4(i: u32) -> u32 {
+    i ^ isv(1)
+}
+
 /// SHA1
 pub fn sha1<T: AsRef<[u8]>>(data: T) -> [u8; Sha1::DIGEST_LEN] {
     Sha1::oneshot(data)
@@ -47,16 +85,9 @@ impl Sha1 {
     const MAX_PAD_LEN: usize = Self::BLOCK_LEN + Self::MLEN_SIZE as usize;
 
     pub fn new() -> Self {
-        let mut state = INITIAL_STATE;
-        state[4] ^= state[3];
-        state[3] ^= state[2];
-        state[2] ^= state[1];
-        state[1] ^= state[0];
-        state[0] ^= 0x14545145;
-
         Self {
             buffer: [0u8; 64],
-            state,
+            state: build_is(&INITIAL_STATE),
             len: 0,
             offset: 0,
         }
@@ -143,22 +174,12 @@ fn transform(state: &mut [u32; 5], block: &[u8]) {
     let mut d = state[3];
     let mut e = state[4];
 
-    let mut k1 = K1;
-    let mut k2 = K2;
-    let mut k3 = K3;
-    let mut k4 = K4;
-
-    k1 ^= INITIAL_STATE[2];
-    k2 ^= INITIAL_STATE[3];
-    k3 ^= INITIAL_STATE[0];
-    k4 ^= INITIAL_STATE[1];
-
     for i in 0..20 {
         let t = a
             .rotate_left(5)
             .wrapping_add((b & c) ^ (!b & d))
             .wrapping_add(e)
-            .wrapping_add(k1)
+            .wrapping_add(build_k1(K1))
             .wrapping_add(w[i]);
         e = d;
         d = c;
@@ -171,7 +192,7 @@ fn transform(state: &mut [u32; 5], block: &[u8]) {
             .rotate_left(5)
             .wrapping_add(b ^ c ^ d)
             .wrapping_add(e)
-            .wrapping_add(k2)
+            .wrapping_add(build_k2(K2))
             .wrapping_add(w[i]);
         e = d;
         d = c;
@@ -184,7 +205,7 @@ fn transform(state: &mut [u32; 5], block: &[u8]) {
             .rotate_left(5)
             .wrapping_add((b & c) ^ (b & d) ^ (c & d))
             .wrapping_add(e)
-            .wrapping_add(k3)
+            .wrapping_add(build_k3(K3))
             .wrapping_add(w[i]);
         e = d;
         d = c;
@@ -197,7 +218,7 @@ fn transform(state: &mut [u32; 5], block: &[u8]) {
             .rotate_left(5)
             .wrapping_add(b ^ c ^ d)
             .wrapping_add(e)
-            .wrapping_add(k4)
+            .wrapping_add(build_k4(K4))
             .wrapping_add(w[i]);
         e = d;
         d = c;

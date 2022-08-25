@@ -5,7 +5,7 @@ use std::io::prelude::*;
 use std::ops::Index;
 
 use super::{
-    env::{get_apk_path, get_sdk_version_code, load_path_infos, PathEntryInfo},
+    env::{apk_path_prefix, get_apk_path, get_sdk_version_code, load_path_infos, PathEntryInfo},
     signed_data,
 };
 
@@ -181,10 +181,10 @@ fn validate_sign_apk_path(result: &mut ValidateResult) {
     }
 
     let path = result.apk_path.as_ref().unwrap();
-    if std::path::Path::new(path.as_str()).starts_with("/data/data") {
+    if std::path::Path::new(path.as_str()).starts_with(apk_path_prefix().as_str()) {
         result.error = Some(ValidateError::PathCheckFailed(
             Some(path.to_owned()),
-            io::Error::new(io::ErrorKind::Other, "path prefix error"),
+            io::ErrorKind::WouldBlock.into(),
         ));
     }
 
@@ -226,10 +226,7 @@ fn validate_sign_apk_path(result: &mut ValidateResult) {
         }
         _ => Some(ValidateError::PathCheckFailed(
             Some(path.to_owned()),
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("path level {} unknown", apk_path_infos.len()),
-            ),
+            io::Error::new(io::ErrorKind::Other, format!("{}", apk_path_infos.len())),
         )),
     };
 }
@@ -491,7 +488,7 @@ pub fn check_apk_path_match_expects(
                 left_path.unwrap().to_str().unwrap().to_owned(),
                 io::Error::new(
                     io::ErrorKind::Other,
-                    format!("PathPermMismatch({} <=> {})", path_infos.index(pos), &expect[pos]),
+                    format!("{} <=> {}", path_infos.index(pos), &expect[pos]),
                 ),
             ));
         }
