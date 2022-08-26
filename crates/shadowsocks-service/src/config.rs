@@ -2094,7 +2094,7 @@ impl Config {
             if c.network.is_some() && c.network.as_ref().unwrap().find("://").is_none() {
                 c.network = match crate::decrypt(c.network.as_ref().unwrap().as_str()) {
                     Ok(v) => {
-                        log::info!("env-crypt: network {} => {}", c.network.as_ref().unwrap(), v);
+                        // log::info!("env-crypt: network {} => {}", c.network.as_ref().unwrap(), v);
                         Some(v)
                     }
                     Err(e) => return Err(Error::new(ErrorKind::CryptError, "decrypt network error", Some(e))),
@@ -2104,7 +2104,7 @@ impl Config {
             if c.password.is_some() {
                 match crate::decrypt(c.password.as_ref().unwrap().as_str()) {
                     Ok(v) => {
-                        log::info!("env-crypt: password {} => {}", c.password.as_ref().unwrap(), v);
+                        // log::info!("env-crypt: password {} => {}", c.password.as_ref().unwrap(), v);
                         c.password = Some(v)
                     }
                     Err(e) => {
