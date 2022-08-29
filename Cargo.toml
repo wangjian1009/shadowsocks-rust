@@ -99,7 +99,7 @@ local = ["shadowsocks-service/local"]
 local-maintain = ["shadowsocks-service/local-maintain"]
 local-signed-info = ["shadowsocks-service/local-signed-info"]
 local-fake-mode = ["shadowsocks-service/local-fake-mode"]
-local-android-protect = []
+local-android-protect = ["shadowsocks-service/local-android-protect"]
 
 # Enable env-crypt
 env-crypt = ["shadowsocks-service/env-crypt"]

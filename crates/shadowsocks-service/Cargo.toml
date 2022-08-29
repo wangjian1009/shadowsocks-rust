@@ -29,6 +29,7 @@ default = [
     "local-maintain",
     "local-signed-info",
     "local-fake-mode",
+    "local-android-protect",
     "server-maintain",
     "server-limit",
     "server-mock",
@@ -76,6 +77,7 @@ local = []
 local-maintain = ["hyper"]
 local-signed-info = ["cryptographic-message-syntax", "x509-certificate", "zip"]
 local-fake-mode = []
+local-android-protect = []
 
 # Enable remote server
 server = []
