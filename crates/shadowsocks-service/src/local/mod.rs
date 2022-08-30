@@ -257,7 +257,9 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
     #[cfg(feature = "tuic")]
     for runing_server in balancer.servers() {
         if let ServerProtocol::Tuic(tuic_config) = runing_server.server_config().protocol() {
-            let tuic_run_fut = runing_server.tuic_run(context.context(), tuic_config).await?;
+            let tuic_run_fut = runing_server
+                .tuic_run(context.context(), context.connect_opts_ref().clone(), tuic_config)
+                .await?;
             vfut.push(ServerHandle(tokio::spawn(tuic_run_fut)));
         }
     }

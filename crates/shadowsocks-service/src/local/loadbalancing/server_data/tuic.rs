@@ -1,6 +1,7 @@
 use shadowsocks::{
     config::TuicConfig,
     context::SharedContext,
+    net::ConnectOpts,
     tuic::client::{relay_init, Config, Request, ServerAddr},
 };
 use std::{future::Future, io};
@@ -18,6 +19,7 @@ impl ServerIdent {
     pub async fn tuic_run(
         &self,
         context: SharedContext,
+        connect_opts: ConnectOpts,
         tuic_config: &TuicConfig,
     ) -> io::Result<impl Future<Output = std::io::Result<()>>> {
         let tuic_config = match tuic_config {
@@ -48,6 +50,7 @@ impl ServerIdent {
             context,
             config.client_config,
             server_addr,
+            connect_opts,
             config.token_digest,
             config.heartbeat_interval,
             config.reduce_rtt,

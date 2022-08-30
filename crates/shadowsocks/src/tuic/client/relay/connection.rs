@@ -7,12 +7,12 @@ use super::{
 };
 use bytes::Bytes;
 use parking_lot::Mutex;
-use quinn::{ClientConfig, Connection as QuinnConnection, Datagrams, Endpoint, NewConnection};
+use quinn::{ClientConfig, Connection as QuinnConnection, Datagrams, Endpoint, EndpointConfig, NewConnection};
 use std::{
     collections::HashMap,
     future::Future,
     io::{Error, ErrorKind, Result},
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::SocketAddr,
     ops::{Deref, DerefMut},
     pin::Pin,
     sync::{
@@ -27,8 +27,12 @@ use tokio::{
     time,
 };
 
+use crate::net::sys::create_outbound_udp_socket;
+use crate::net::{AddrFamily, ConnectOpts};
+
 pub async fn manage_connection(
     context: crate::context::SharedContext,
+    connect_opts: ConnectOpts,
     config: ConnectionConfig,
     conn: Arc<AsyncMutex<Option<Connection>>>,
     lock: OwnedMutexGuard<Option<Connection>>,
@@ -44,7 +48,7 @@ pub async fn manage_connection(
             wait_req.clone().await;
 
             // try to establish a new connection
-            let (new_conn, dg, uni) = match Connection::connect(context.as_ref(), &config).await {
+            let (new_conn, dg, uni) = match Connection::connect(context.as_ref(), &config, &connect_opts).await {
                 Ok(conn) => conn,
                 Err(err) => {
                     log::error!("[relay] [connection] {err}");
@@ -106,6 +110,7 @@ impl Connection {
     async fn connect(
         context: &crate::context::Context,
         config: &ConnectionConfig,
+        connect_opts: &ConnectOpts,
     ) -> Result<(Self, Datagrams, IncomingUniStreams)> {
         //lookup_then!(context, dname, port, |remote_addr|
 
@@ -120,20 +125,23 @@ impl Connection {
             }
         };
 
-        Self::connect_addr(config, addr, name).await
+        Self::connect_addr(config, addr, connect_opts, name).await
     }
 
     async fn connect_addr(
         config: &ConnectionConfig,
         addr: SocketAddr,
+        connect_opts: &ConnectOpts,
         name: &str,
     ) -> Result<(Self, Datagrams, IncomingUniStreams)> {
-        let bind_addr = match addr {
-            SocketAddr::V4(_) => SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
-            SocketAddr::V6(_) => SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)),
+        let socket = match addr {
+            SocketAddr::V4(_) => create_outbound_udp_socket(AddrFamily::Ipv4, connect_opts).await?,
+            SocketAddr::V6(_) => create_outbound_udp_socket(AddrFamily::Ipv6, connect_opts).await?,
         };
 
-        let endpoint = Endpoint::client(bind_addr)?;
+        let socket: tokio::net::UdpSocket = socket.into();
+
+        let (endpoint, _) = Endpoint::new(EndpointConfig::default(), None, socket.into_std()?)?;
         let conn = endpoint
             .connect_with(config.quinn_config.clone(), addr, name)
             .map_err(|err| Error::new(ErrorKind::Other, err))?;

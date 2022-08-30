@@ -31,6 +31,7 @@ pub async fn init(
     context: crate::context::SharedContext,
     quinn_config: ClientConfig,
     server_addr: ServerAddr,
+    connect_opts: crate::net::ConnectOpts,
     token_digest: [u8; 32],
     heartbeat_interval: u64,
     reduce_rtt: bool,
@@ -67,7 +68,8 @@ pub async fn init(
     let (listen_requests, wait_req) = request::listen_requests(conn.clone(), req_rx, req_timeout);
     let listen_incoming = incoming::listen_incoming(incoming_rx);
 
-    let manage_connection = connection::manage_connection(context, config, conn, conn_lock, incoming_tx, wait_req);
+    let manage_connection =
+        connection::manage_connection(context, connect_opts, config, conn, conn_lock, incoming_tx, wait_req);
 
     let task = async move {
         log::info!("[relay] Started. Target server: {server_addr}");
