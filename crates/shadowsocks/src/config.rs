@@ -50,7 +50,7 @@ cfg_if! {
         #[derive(Clone, Debug, PartialEq)]
         pub enum TuicConfig {
             Client(crate::tuic::client::RawConfig),
-            Server(crate::tuic::server::RawConfig),
+            Server((crate::tuic::server::RawConfig, bool)),
         }
     }
 }

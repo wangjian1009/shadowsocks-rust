@@ -257,6 +257,13 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                     .help("tuic tls alpn config"),
             )
             .arg(
+                Arg::new("TUIC_SHADOW_TCP")
+                    .long("tuic-shadow-tcp")
+                    .takes_value(false)
+                    .requires("PROTOCOL_TUIC")
+                    .help("tuic server's start shadow tcp server"),
+            )
+            .arg(
                 Arg::new("TUIC_CONGESTION_CONTROLLER")
                     .long("tuic-congestion-controller")
                     .takes_value(true)
@@ -551,7 +558,10 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                     tuic_config.congestion_controller = congestion_controller.clone();
                 }
 
-                protocol = Some(ServerProtocol::Tuic(TuicConfig::Server(tuic_config)));
+                protocol = Some(ServerProtocol::Tuic(TuicConfig::Server((
+                    tuic_config,
+                    matches.is_present("TUIC_SHADOW_TCP"),
+                ))));
             }
 
             if protocol.is_none() && matches.is_present("PROTOCOL_SS") {

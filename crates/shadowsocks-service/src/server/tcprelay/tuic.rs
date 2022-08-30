@@ -12,7 +12,7 @@ impl TcpServer {
         }
 
         let runtime_cfg = tuic::server::Config::new(match tuic_cfg {
-            TuicConfig::Server(c) => c,
+            TuicConfig::Server((c, _)) => c,
             TuicConfig::Client(_c) => {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,

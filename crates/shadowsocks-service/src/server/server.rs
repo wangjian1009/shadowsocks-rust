@@ -18,7 +18,7 @@ use shadowsocks::{
     transport::direct::TcpConnector,
     ServerAddr,
 };
-use tokio::time;
+use tokio::{io::AsyncReadExt, time};
 
 use crate::{acl::AccessControl, config::SecurityConfig};
 
@@ -238,6 +238,15 @@ impl Server {
         if self.svr_cfg.if_not_ss() {
             let tcp_fut = self.run_tcp_server(connector.clone()).boxed();
             vfut.push(tcp_fut);
+
+            #[cfg(feature = "tuic")]
+            if let ServerProtocol::Tuic(tuic_cfg) = self.svr_cfg.protocol() {
+                if let shadowsocks::config::TuicConfig::Server((_, run_noop_tcp)) = tuic_cfg {
+                    if *run_noop_tcp {
+                        vfut.push(self.tuic_run_shadow_tcp().boxed());
+                    }
+                }
+            }
         }
 
         if self.manager_addr.is_some() {
@@ -330,6 +339,54 @@ impl Server {
 
             // Report every 10 seconds
             time::sleep(Duration::from_secs(10)).await;
+        }
+    }
+
+    pub async fn tuic_run_shadow_tcp(&self) -> io::Result<()> {
+        use bytes::BytesMut;
+        use shadowsocks::transport::{direct::TcpAcceptor, Acceptor, Connection};
+
+        log::info!("tuic shadow server listening on {}", self.svr_cfg.external_addr());
+
+        let mut listener = TcpAcceptor::bind_server_with_opts(
+            self.context.context().as_ref(),
+            self.svr_cfg.external_addr(),
+            self.accept_opts.clone(),
+        )
+        .await?;
+
+        loop {
+            let (s, peer_addr) = listener.accept().await?;
+
+            let mut s = match s {
+                Connection::Stream(s) => s,
+                Connection::Packet { .. } => unreachable!(),
+            };
+
+            let peer_addr = match peer_addr.unwrap() {
+                ServerAddr::SocketAddr(addr) => addr,
+                ServerAddr::DomainName(..) => unreachable!(),
+            };
+
+            tokio::spawn(async move {
+                log::info!("tuic shadow connection from {}", peer_addr);
+
+                tokio::time::timeout(tokio::time::Duration::from_secs(1), async move {
+                    let mut buffer = BytesMut::with_capacity(10);
+                    loop {
+                        let n = s.read_buf(&mut buffer).await?;
+                        if n == 0 {
+                            log::info!("tuic shadow connection from {} closed", peer_addr);
+                            // connection was closed
+                            return io::Result::Ok(());
+                        }
+                        log::info!("tuic shadow connection from {} ignore {} data", peer_addr, n);
+                    }
+                })
+                .await
+
+                // read 20 bytes at a time from stream echoing back to stream
+            });
         }
     }
 }
