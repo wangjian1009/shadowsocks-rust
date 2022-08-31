@@ -2,6 +2,7 @@
 
 use std::{
     fmt::{self, Debug},
+    io,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc,
@@ -9,12 +10,15 @@ use std::{
     time::Duration,
 };
 
-use shadowsocks::{config::ServerProtocol, ServerConfig};
+use shadowsocks::ServerConfig;
 use tokio::sync::Mutex;
 
 use super::server_stat::{Score, ServerStat};
 
 use crate::local::context::ServiceContext;
+
+#[cfg(all(feature = "tuic", feature = "tuic-global"))]
+use shadowsocks::{config::ServerProtocol, tuic::client as tuic};
 
 /// Server's statistic score
 pub struct ServerScore {
@@ -61,9 +65,6 @@ impl Debug for ServerScore {
     }
 }
 
-#[cfg(feature = "tuic")]
-mod tuic;
-
 /// Identifer for a server
 #[derive(Debug)]
 pub struct ServerIdent {
@@ -71,32 +72,66 @@ pub struct ServerIdent {
     udp_score: ServerScore,
     svr_cfg: ServerConfig,
 
-    #[cfg(feature = "tuic")]
-    tuic_ctx: Option<Arc<tuic::TuicServerContext>>,
+    #[cfg(all(feature = "tuic", feature = "tuic-global"))]
+    tuic_dispatcher: Option<Arc<tuic::Dispatcher>>,
 }
 
 impl ServerIdent {
     /// Create a `ServerIdent`
     pub fn new(
-        context: Arc<ServiceContext>,
+        _context: Arc<ServiceContext>,
         svr_cfg: ServerConfig,
         max_server_rtt: Duration,
         check_window: Duration,
-    ) -> ServerIdent {
-        #[cfg(feature = "tuic")]
-        let tuic_ctx = if let ServerProtocol::Tuic(tuic_config) = svr_cfg.protocol() {
-            Some(Arc::new(tuic::TuicServerContext::new(context, tuic_config.clone())))
+    ) -> io::Result<ServerIdent> {
+        #[cfg(all(feature = "tuic", feature = "tuic-global"))]
+        let tuic_dispatcher = if let ServerProtocol::Tuic(tuic_config) = svr_cfg.protocol() {
+            let tuic_config = match tuic_config {
+                shadowsocks::config::TuicConfig::Client(c) => c,
+                shadowsocks::config::TuicConfig::Server(..) => unreachable!(),
+            };
+
+            let server_addr = match svr_cfg.addr() {
+                shadowsocks::ServerAddr::DomainName(domain, port) => tuic::ServerAddr::DomainAddr {
+                    domain: domain.clone(),
+                    port: port.clone(),
+                },
+                shadowsocks::ServerAddr::SocketAddr(addr) => {
+                    let sni = match tuic_config.sni.as_ref() {
+                        Some(sni) => sni,
+                        None => {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "server sni is not spected",
+                            ))
+                        }
+                    };
+                    tuic::ServerAddr::SocketAddr {
+                        addr: addr.clone(),
+                        name: sni.clone(),
+                    }
+                }
+            };
+
+            let config = tuic::Config::new(tuic_config)?;
+
+            Some(Arc::new(tuic::Dispatcher::new(
+                _context.context(),
+                server_addr,
+                config,
+                _context.connect_opts_ref().clone(),
+            )))
         } else {
             None
         };
 
-        ServerIdent {
+        Ok(ServerIdent {
             tcp_score: ServerScore::new(svr_cfg.weight().tcp_weight(), max_server_rtt, check_window),
             udp_score: ServerScore::new(svr_cfg.weight().udp_weight(), max_server_rtt, check_window),
             svr_cfg,
-            #[cfg(feature = "tuic")]
-            tuic_ctx,
-        }
+            #[cfg(all(feature = "tuic", feature = "tuic-global"))]
+            tuic_dispatcher,
+        })
     }
 
     pub fn server_config(&self) -> &ServerConfig {
@@ -113,5 +148,10 @@ impl ServerIdent {
 
     pub fn udp_score(&self) -> &ServerScore {
         &self.udp_score
+    }
+
+    #[cfg(all(feature = "tuic", feature = "tuic-global"))]
+    pub fn tuic_dispatcher(&self) -> Option<&Arc<tuic::Dispatcher>> {
+        self.tuic_dispatcher.as_ref()
     }
 }

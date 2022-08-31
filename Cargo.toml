@@ -91,6 +91,7 @@ default = [
     "trojan",
     "vless",
     "tuic",
+    "tuic-global",
     "aead-cipher-2022",
 ]
 
@@ -116,6 +117,7 @@ transport-skcp = ["shadowsocks-service/transport-skcp", "transport"]
 trojan = ["shadowsocks-service/trojan"]
 vless = ["shadowsocks-service/vless"]
 tuic = ["shadowsocks-service/tuic"]
+tuic-global = ["shadowsocks-service/tuic-global"]
 
 # Enable remote server
 server = ["shadowsocks-service/server"]

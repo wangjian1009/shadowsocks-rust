@@ -675,9 +675,9 @@ where
                         .await?,
                     ),
                     #[cfg(feature = "tuic")]
-                    ServerProtocol::Tuic(..) => self
+                    ServerProtocol::Tuic(tuic_config) => self
                         .proxied_socket
-                        .insert(self.tuic_create_context(server.as_ref()).await?),
+                        .insert(self.tuic_create_context(server.as_ref(), tuic_config).await?),
                 }
             }
         };

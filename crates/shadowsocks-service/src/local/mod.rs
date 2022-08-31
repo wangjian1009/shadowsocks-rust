@@ -239,7 +239,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
         }
 
         for server in config.server {
-            balancer_builder.add_server(server);
+            balancer_builder.add_server(server)?;
         }
 
         balancer_builder.build().await?

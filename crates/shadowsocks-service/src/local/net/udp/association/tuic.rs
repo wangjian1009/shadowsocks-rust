@@ -4,13 +4,14 @@ use tokio::sync::mpsc::error::TrySendError;
 use crate::local::loadbalancing::ServerIdent;
 use crate::net::UDP_ASSOCIATION_SEND_CHANNEL_SIZE;
 
-use shadowsocks::tuic::client::{
-    Address as RelayAddress, AssociateRecvPacketReceiver, AssociateSendPacketSender, Request,
-};
+use shadowsocks::tuic::client as tuic;
+use tuic::{Address as RelayAddress, AssociateRecvPacketReceiver, AssociateSendPacketSender, Request};
 
 pub struct TuicUdpContext {
     packet_sender: AssociateSendPacketSender,
     packet_receiver: AssociateRecvPacketReceiver,
+    #[cfg(not(feature = "tuic-global"))]
+    _dispatcher: Arc<tuic::Dispatcher>,
 }
 
 impl TuicUdpContext {
@@ -82,13 +83,64 @@ impl<W> UdpAssociationContext<W>
 where
     W: UdpInboundWrite + Send + Sync + Unpin + 'static,
 {
-    pub async fn tuic_create_context(&self, server: &ServerIdent) -> io::Result<MultiProtocolProxySocket> {
+    pub async fn tuic_create_context(
+        &self,
+        server: &ServerIdent,
+        _tuic_cfg: &shadowsocks::config::TuicConfig,
+    ) -> io::Result<MultiProtocolProxySocket> {
         let (relay_req, pkt_send_tx, pkt_recv_rx) = Request::new_associate(UDP_ASSOCIATION_SEND_CHANNEL_SIZE);
-        server.tuic_send_req(relay_req).await?;
+
+        #[cfg(not(feature = "tuic-global"))]
+        let dispatcher = {
+            let tuic_config = match _tuic_cfg {
+                shadowsocks::config::TuicConfig::Client(c) => c,
+                shadowsocks::config::TuicConfig::Server(..) => unreachable!(),
+            };
+
+            let server_addr = match server.server_config().addr() {
+                shadowsocks::ServerAddr::DomainName(domain, port) => tuic::ServerAddr::DomainAddr {
+                    domain: domain.clone(),
+                    port: port.clone(),
+                },
+                shadowsocks::ServerAddr::SocketAddr(addr) => {
+                    let sni = match tuic_config.sni.as_ref() {
+                        Some(sni) => sni,
+                        None => {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "server sni is not spected",
+                            ))
+                        }
+                    };
+                    tuic::ServerAddr::SocketAddr {
+                        addr: addr.clone(),
+                        name: sni.clone(),
+                    }
+                }
+            };
+
+            let config = tuic::Config::new(tuic_config)?;
+
+            let dispatcher = Arc::new(tuic::Dispatcher::new(
+                self.context.context(),
+                server_addr,
+                config,
+                self.context.connect_opts_ref().clone(),
+            ));
+
+            dispatcher.clone().send_req(relay_req).await?;
+
+            dispatcher
+        };
+
+        #[cfg(feature = "tuic-global")]
+        server.tuic_dispatcher().unwrap().send_req(relay_req).await?;
 
         Ok(MultiProtocolProxySocket::Tuic(TuicUdpContext {
             packet_sender: pkt_send_tx,
             packet_receiver: pkt_recv_rx,
+            #[cfg(not(feature = "tuic-global"))]
+            _dispatcher: dispatcher,
         }))
     }
 }

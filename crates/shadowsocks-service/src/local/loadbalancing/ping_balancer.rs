@@ -81,14 +81,15 @@ impl PingBalancerBuilder {
         }
     }
 
-    pub fn add_server(&mut self, server: ServerConfig) {
+    pub fn add_server(&mut self, server: ServerConfig) -> io::Result<()> {
         let ident = ServerIdent::new(
             self.context.clone(),
             server,
             self.max_server_rtt,
             self.check_interval * EXPECTED_CHECK_POINTS_IN_CHECK_WINDOW,
-        );
+        )?;
         self.servers.push(Arc::new(ident));
+        Ok(())
     }
 
     pub fn max_server_rtt(&mut self, rtt: Duration) {
@@ -734,20 +735,18 @@ impl PingBalancer {
     pub async fn reset_servers(&self, servers: Vec<ServerConfig>) -> io::Result<()> {
         let old_context = self.inner.context.load();
 
-        let servers = servers
-            .into_iter()
-            .map(|s| {
-                Arc::new(ServerIdent::new(
-                    self.context(),
-                    s,
-                    old_context.max_server_rtt,
-                    old_context.check_interval * EXPECTED_CHECK_POINTS_IN_CHECK_WINDOW,
-                ))
-            })
-            .collect::<Vec<Arc<ServerIdent>>>();
+        let mut server_idents: Vec<Arc<ServerIdent>> = Vec::new();
+        for s in servers.iter() {
+            server_idents.push(Arc::new(ServerIdent::new(
+                self.context(),
+                s.clone(),
+                old_context.max_server_rtt,
+                old_context.check_interval * EXPECTED_CHECK_POINTS_IN_CHECK_WINDOW,
+            )?));
+        }
 
         let (shared_context, task_abortable) = PingBalancerContext::new(
-            servers,
+            server_idents,
             old_context.context.clone(),
             old_context.mode,
             old_context.max_server_rtt,
