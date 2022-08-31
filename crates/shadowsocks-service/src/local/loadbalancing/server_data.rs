@@ -2,14 +2,19 @@
 
 use std::{
     fmt::{self, Debug},
-    sync::atomic::{AtomicU32, Ordering},
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
-use shadowsocks::ServerConfig;
+use shadowsocks::{config::ServerProtocol, ServerConfig};
 use tokio::sync::Mutex;
 
 use super::server_stat::{Score, ServerStat};
+
+use crate::local::context::ServiceContext;
 
 /// Server's statistic score
 pub struct ServerScore {
@@ -67,18 +72,30 @@ pub struct ServerIdent {
     svr_cfg: ServerConfig,
 
     #[cfg(feature = "tuic")]
-    tuic_ctx: spin::Mutex<Option<tuic::TuicServerContext>>,
+    tuic_ctx: Option<Arc<tuic::TuicServerContext>>,
 }
 
 impl ServerIdent {
     /// Create a `ServerIdent`
-    pub fn new(svr_cfg: ServerConfig, max_server_rtt: Duration, check_window: Duration) -> ServerIdent {
+    pub fn new(
+        context: Arc<ServiceContext>,
+        svr_cfg: ServerConfig,
+        max_server_rtt: Duration,
+        check_window: Duration,
+    ) -> ServerIdent {
+        #[cfg(feature = "tuic")]
+        let tuic_ctx = if let ServerProtocol::Tuic(tuic_config) = svr_cfg.protocol() {
+            Some(Arc::new(tuic::TuicServerContext::new(context, tuic_config.clone())))
+        } else {
+            None
+        };
+
         ServerIdent {
             tcp_score: ServerScore::new(svr_cfg.weight().tcp_weight(), max_server_rtt, check_window),
             udp_score: ServerScore::new(svr_cfg.weight().udp_weight(), max_server_rtt, check_window),
             svr_cfg,
             #[cfg(feature = "tuic")]
-            tuic_ctx: spin::Mutex::new(None),
+            tuic_ctx,
         }
     }
 

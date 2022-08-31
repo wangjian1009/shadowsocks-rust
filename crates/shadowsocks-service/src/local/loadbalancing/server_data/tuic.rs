@@ -1,33 +1,58 @@
 use shadowsocks::{
     config::TuicConfig,
-    context::SharedContext,
-    net::ConnectOpts,
     tuic::client::{relay_init, Config, Request, ServerAddr},
 };
-use std::{future::Future, io};
+use std::io;
+use std::{fmt, sync::Arc};
 
-use tokio::sync::mpsc::Sender;
+use tokio::{
+    sync::{mpsc::Sender, RwLock},
+    task::JoinHandle,
+};
 
 use super::*;
 
-#[derive(Debug)]
-pub struct TuicServerContext {
+use crate::local::context::ServiceContext;
+
+pub struct TuicServerRuning {
+    task: JoinHandle<()>,
     req_tx: Sender<Request>,
 }
 
-impl ServerIdent {
-    pub async fn tuic_run(
-        &self,
-        context: SharedContext,
-        connect_opts: ConnectOpts,
-        tuic_config: &TuicConfig,
-    ) -> io::Result<impl Future<Output = std::io::Result<()>>> {
-        let tuic_config = match tuic_config {
+impl Drop for TuicServerRuning {
+    fn drop(&mut self) {
+        self.task.abort()
+    }
+}
+
+pub struct TuicServerContext {
+    context: Arc<ServiceContext>,
+    tuic_config: TuicConfig,
+    runing: RwLock<Option<TuicServerRuning>>,
+}
+
+impl Debug for TuicServerContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Tuic()")
+    }
+}
+
+impl TuicServerContext {
+    pub fn new(context: Arc<ServiceContext>, tuic_config: TuicConfig) -> Self {
+        Self {
+            context,
+            tuic_config,
+            runing: RwLock::new(None),
+        }
+    }
+
+    async fn run(self: Arc<TuicServerContext>, addr: &shadowsocks::ServerAddr) -> io::Result<TuicServerRuning> {
+        let tuic_config = match &self.tuic_config {
             TuicConfig::Client(c) => c,
             TuicConfig::Server(..) => unreachable!(),
         };
 
-        let server_addr = match self.server_config().addr() {
+        let server_addr = match addr {
             shadowsocks::ServerAddr::DomainName(domain, port) => ServerAddr::DomainAddr {
                 domain: domain.clone(),
                 port: port.clone(),
@@ -47,10 +72,10 @@ impl ServerIdent {
         let config = Config::new(tuic_config)?;
 
         let (relay, req_tx) = relay_init(
-            context,
+            self.context.context(),
             config.client_config,
             server_addr,
-            connect_opts,
+            self.context.connect_opts_ref().clone(),
             config.token_digest,
             config.heartbeat_interval,
             config.reduce_rtt,
@@ -60,44 +85,75 @@ impl ServerIdent {
         )
         .await;
 
-        let mut tuic_ctx = self.tuic_ctx.lock();
-        if tuic_ctx.is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!(
-                    "tuic: server {}: local relay task already runing",
-                    self.server_config().addr()
-                ),
-            ));
+        let addr = addr.clone();
+        let task = tokio::spawn(async move {
+            log::info!("tuic: server {}: serve begin", addr);
+            tokio::pin!(relay);
+            match relay.await {
+                Ok(()) => log::info!("tuic: server {}: serve complete success", addr),
+                Err(err) => log::error!("tuic: server {}: serve complete error, {:?}", addr, err),
+            }
+        });
+        Ok(TuicServerRuning { task, req_tx })
+    }
+}
+
+impl ServerIdent {
+    pub async fn tuic_send_req(&self, req: Request) -> io::Result<()> {
+        let left_req = self.tuic_try_send_req(req).await?;
+        if left_req.is_none() {
+            return Ok(());
         }
 
-        *tuic_ctx = Some(TuicServerContext { req_tx });
+        self.tuic_start_svr().await?;
 
-        Ok(relay)
+        let left_req = self.tuic_try_send_req(left_req.unwrap()).await?;
+        if left_req.is_none() {
+            return Ok(());
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!(
+                "tuic: server {}: start server unknown error",
+                self.server_config().addr()
+            ),
+        ))
     }
 
-    pub async fn tuic_send_req(&self, req: Request) -> io::Result<()> {
-        let tuic_ctx = self.tuic_ctx.lock();
-        let tuic_ctx = match tuic_ctx.as_ref() {
-            Some(ctx) => ctx,
-            None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!(
-                        "tuic: server {}: send req: local relay task not runing",
-                        self.server_config().addr()
-                    ),
-                ))
-            }
+    async fn tuic_start_svr(&self) -> io::Result<()> {
+        let tuic_ctx = self.tuic_ctx.as_ref().unwrap();
+        let mut runing = tuic_ctx.runing.write().await;
+
+        if runing.is_some() {
+            return Ok(());
+        }
+
+        log::error!("tuic: server start: sleep begin");
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        log::error!("tuic: server start: sleep end");
+
+        *runing = Some(tuic_ctx.clone().run(self.server_config().addr()).await?);
+
+        Ok(())
+    }
+
+    async fn tuic_try_send_req(&self, req: Request) -> io::Result<Option<Request>> {
+        let runing = self.tuic_ctx.as_ref().unwrap().runing.read().await;
+
+        let runing = match *runing {
+            Some(ref runing) => runing,
+            None => return Ok(Some(req)),
         };
 
-        tuic_ctx.req_tx.send(req).await.map_err(|e| {
+        log::error!("tuic: server {}: ==> {} ", self.server_config().addr(), req);
+        runing.req_tx.send(req).await.map_err(|e| {
             io::Error::new(
                 io::ErrorKind::Other,
                 format!("tuic: server {}: send req: {} ", self.server_config().addr(), e),
             )
         })?;
 
-        Ok(())
+        return Ok(None);
     }
 }

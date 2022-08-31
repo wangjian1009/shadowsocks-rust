@@ -12,7 +12,7 @@ use std::{
 use futures::{future, ready};
 use log::trace;
 use shadowsocks::{
-    config::{Mode, ServerProtocol, ServerType},
+    config::{Mode, ServerType},
     context::Context,
     net::{AcceptOpts, ConnectOpts},
 };
@@ -251,17 +251,6 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
 
         let report_fut = flow_report_task(stat_addr, context.flow_stat());
         vfut.push(ServerHandle(tokio::spawn(report_fut)));
-    }
-
-    // 部分协议需要针对每一个server启动一个task
-    #[cfg(feature = "tuic")]
-    for runing_server in balancer.servers() {
-        if let ServerProtocol::Tuic(tuic_config) = runing_server.server_config().protocol() {
-            let tuic_run_fut = runing_server
-                .tuic_run(context.context(), context.connect_opts_ref().clone(), tuic_config)
-                .await?;
-            vfut.push(ServerHandle(tokio::spawn(tuic_run_fut)));
-        }
     }
 
     // 启动一个维护服务，接受运行时控制

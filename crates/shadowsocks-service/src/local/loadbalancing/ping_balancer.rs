@@ -83,6 +83,7 @@ impl PingBalancerBuilder {
 
     pub fn add_server(&mut self, server: ServerConfig) {
         let ident = ServerIdent::new(
+            self.context.clone(),
             server,
             self.max_server_rtt,
             self.check_interval * EXPECTED_CHECK_POINTS_IN_CHECK_WINDOW,
@@ -737,6 +738,7 @@ impl PingBalancer {
             .into_iter()
             .map(|s| {
                 Arc::new(ServerIdent::new(
+                    self.context(),
                     s,
                     old_context.max_server_rtt,
                     old_context.check_interval * EXPECTED_CHECK_POINTS_IN_CHECK_WINDOW,

@@ -477,7 +477,7 @@ async fn socks5_tcp_relay_tuic() {
     server_config.token.push("token1".to_owned());
 
     socks5_tcp_relay_test(
-        ServerProtocol::Tuic(TuicConfig::Server(server_config)),
+        ServerProtocol::Tuic(TuicConfig::Server((server_config, false))),
         #[cfg(feature = "transport")]
         None,
         ServerProtocol::Tuic(TuicConfig::Client(client_config)),
@@ -499,7 +499,7 @@ async fn socks5_udp_relay_tuic() {
     server_config.token.push("token1".to_owned());
 
     socks5_udp_relay_test(
-        ServerProtocol::Tuic(TuicConfig::Server(server_config)),
+        ServerProtocol::Tuic(TuicConfig::Server((server_config, false))),
         #[cfg(feature = "transport")]
         None,
         ServerProtocol::Tuic(TuicConfig::Client(client_config)),

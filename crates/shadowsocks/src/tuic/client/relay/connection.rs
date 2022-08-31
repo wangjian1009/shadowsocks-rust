@@ -112,8 +112,6 @@ impl Connection {
         config: &ConnectionConfig,
         connect_opts: &ConnectOpts,
     ) -> Result<(Self, Datagrams, IncomingUniStreams)> {
-        //lookup_then!(context, dname, port, |remote_addr|
-
         let (addr, name) = match &config.server_addr {
             ServerAddr::SocketAddr { addr, name } => (addr.clone(), name),
             ServerAddr::DomainAddr { domain, port } => {
