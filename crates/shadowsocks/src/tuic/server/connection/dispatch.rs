@@ -10,6 +10,7 @@ impl Connection {
         let rmt_addr = self.controller.remote_address();
         let cmd = Command::read_from(&mut stream).await?;
 
+        log::error!("xxxxx: process_uni_stream");
         if let Command::Authenticate { digest } = cmd {
             if self.token.contains(&digest) {
                 log::debug!("[{rmt_addr}] [authentication]");
@@ -78,6 +79,8 @@ impl Connection {
         let cmd = Command::read_from(&mut recv).await?;
         let rmt_addr = self.controller.remote_address();
 
+        log::error!("xxxxx: process_bi_stream");
+
         if self.is_authenticated.clone().await {
             match cmd {
                 Command::Connect { addr } => {
@@ -104,6 +107,8 @@ impl Connection {
         let cmd = Command::read_from(&mut datagram.as_ref()).await?;
         let rmt_addr = self.controller.remote_address();
         let cmd_len = cmd.serialized_len();
+
+        log::error!("xxxxx: process_datagram");
 
         if self.is_authenticated.clone().await {
             match cmd {
@@ -148,6 +153,8 @@ impl Connection {
     ) -> Result<(), DispatchError> {
         let rmt_addr = self.controller.remote_address();
         let dst_addr = addr.to_string();
+
+        log::error!("xxxxx: process_received_udp_packet");
 
         match self.udp_packet_from.check().unwrap() {
             UdpPacketSource::UniStream => {

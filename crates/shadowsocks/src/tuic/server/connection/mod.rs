@@ -1,14 +1,11 @@
 use self::{
     authenticate::IsAuthenticated,
     dispatch::DispatchError,
-    udp::{RecvPacketReceiver, UdpPacketFrom, UdpPacketSource, UdpSessionMap},
+    udp::{UdpPacketFrom, UdpPacketSource, UdpSessionMap},
 };
 use futures_util::StreamExt;
 use parking_lot::Mutex;
-use quinn::{
-    Connecting, Connection as QuinnConnection, ConnectionError, Datagrams, IncomingBiStreams, IncomingUniStreams,
-    NewConnection,
-};
+use quinn::{Connecting, Connection as QuinnConnection, ConnectionError, NewConnection};
 use std::{
     collections::HashSet,
     future::Future,
@@ -20,7 +17,6 @@ use std::{
     task::{Context, Poll, Waker},
     time::Duration,
 };
-use tokio::time;
 
 use super::UdpSocketCreator;
 
@@ -47,158 +43,158 @@ impl Connection {
     ) {
         let rmt_addr = conn.remote_address();
 
-        match conn.await {
+        let (connection, mut uni_streams, mut bi_streams, mut datagrams) = match conn.await {
             Ok(NewConnection {
                 connection,
                 uni_streams,
                 bi_streams,
                 datagrams,
                 ..
-            }) => {
-                log::debug!("[{rmt_addr}] [establish]");
-
-                let (udp_sessions, recv_pkt_rx) = UdpSessionMap::new(udp_socket_creator);
-                let is_closed = IsClosed::new();
-                let is_authed = IsAuthenticated::new(is_closed.clone());
-
-                let conn = Self {
-                    controller: connection,
-                    udp_packet_from: UdpPacketFrom::new(),
-                    udp_sessions: Arc::new(udp_sessions),
-                    token,
-                    is_authenticated: is_authed,
-                };
-
-                let res = tokio::select! {
-                    res = Self::listen_uni_streams(conn.clone(), uni_streams) => res,
-                    res = Self::listen_bi_streams(conn.clone(), bi_streams) => res,
-                    res = Self::listen_datagrams(conn.clone(), datagrams) => res,
-                    res = Self::listen_received_udp_packet(conn.clone(), recv_pkt_rx) => res,
-                    Err(err) = Self::handle_authentication_timeout(conn, auth_timeout) => Err(err),
-                };
-
-                match res {
-                    Ok(()) => unreachable!(),
-                    Err(err) => {
-                        is_closed.set_closed();
-
-                        match err {
-                            ConnectionError::TimedOut => {
-                                log::debug!("[{rmt_addr}] [disconnect] [connection timeout]")
-                            }
-                            ConnectionError::LocallyClosed => {
-                                log::debug!("[{rmt_addr}] [disconnect] [locally closed]")
-                            }
-                            err => log::error!("[{rmt_addr}] [disconnect] {err}"),
-                        }
-                    }
-                }
+            }) => (connection, uni_streams, bi_streams, datagrams),
+            Err(err) => {
+                log::error!("[{rmt_addr}] [connecting] {err}");
+                return;
             }
-            Err(err) => log::error!("[{rmt_addr}] {err}"),
-        }
-    }
-
-    async fn listen_uni_streams(self, mut uni_streams: IncomingUniStreams) -> Result<(), ConnectionError> {
-        while let Some(stream) = uni_streams.next().await {
-            let stream = stream?;
-            let conn = self.clone();
-
-            tokio::spawn(async move {
-                match conn.process_uni_stream(stream).await {
-                    Ok(()) => {}
-                    Err(err) => {
-                        conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
-
-                        let rmt_addr = conn.controller.remote_address();
-                        log::error!("[{rmt_addr}] {err}");
-                    }
-                }
-            });
-        }
-
-        Err(ConnectionError::LocallyClosed)
-    }
-
-    async fn listen_bi_streams(self, mut bi_streams: IncomingBiStreams) -> Result<(), ConnectionError> {
-        while let Some(stream) = bi_streams.next().await {
-            let (send, recv) = stream?;
-            let conn = self.clone();
-
-            tokio::spawn(async move {
-                match conn.process_bi_stream(send, recv).await {
-                    Ok(()) => {}
-                    Err(err) => {
-                        conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
-
-                        let rmt_addr = conn.controller.remote_address();
-                        log::error!("[{rmt_addr}] {err}");
-                    }
-                }
-            });
-        }
-
-        Err(ConnectionError::LocallyClosed)
-    }
-
-    async fn listen_datagrams(self, mut datagrams: Datagrams) -> Result<(), ConnectionError> {
-        while let Some(datagram) = datagrams.next().await {
-            let datagram = datagram?;
-            let conn = self.clone();
-
-            tokio::spawn(async move {
-                match conn.process_datagram(datagram).await {
-                    Ok(()) => {}
-                    Err(err) => {
-                        conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
-
-                        let rmt_addr = conn.controller.remote_address();
-                        log::error!("[{rmt_addr}] {err}");
-                    }
-                }
-            });
-        }
-
-        Err(ConnectionError::LocallyClosed)
-    }
-
-    async fn listen_received_udp_packet(self, mut recv_pkt_rx: RecvPacketReceiver) -> Result<(), ConnectionError> {
-        while let Some((assoc_id, pkt, addr)) = recv_pkt_rx.recv().await {
-            let conn = self.clone();
-
-            tokio::spawn(async move {
-                match conn.process_received_udp_packet(assoc_id, pkt, addr).await {
-                    Ok(()) => {}
-                    Err(err) => {
-                        conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
-
-                        let rmt_addr = conn.controller.remote_address();
-                        log::error!("[{rmt_addr}] {err}");
-                    }
-                }
-            });
-        }
-
-        Err(ConnectionError::LocallyClosed)
-    }
-
-    async fn handle_authentication_timeout(self, timeout: Duration) -> Result<(), ConnectionError> {
-        let is_timeout = tokio::select! {
-            _ = self.is_authenticated.clone() => false,
-            () = time::sleep(timeout) => true,
         };
 
-        if !is_timeout {
-            Ok(())
-        } else {
-            let err = DispatchError::AuthenticationTimeout;
+        let auth_deadline = tokio::time::Instant::now() + auth_timeout;
 
-            self.controller.close(err.as_error_code(), err.to_string().as_bytes());
-            self.is_authenticated.wake();
+        log::info!("[{rmt_addr}] [establish]");
 
-            let rmt_addr = self.controller.remote_address();
-            log::error!("[{rmt_addr}] {err}");
+        let (udp_sessions, mut recv_pkt_rx) = UdpSessionMap::new(udp_socket_creator);
+        let is_closed = IsClosed::new();
+        let is_authed = IsAuthenticated::new(is_closed.clone());
 
-            Err(ConnectionError::LocallyClosed)
+        let conn = Self {
+            controller: connection,
+            udp_packet_from: UdpPacketFrom::new(),
+            udp_sessions: Arc::new(udp_sessions),
+            token,
+            is_authenticated: is_authed,
+        };
+
+        let mut is_authed = false;
+        let err = loop {
+            tokio::select! {
+                // listen_uni_streams
+                r = uni_streams.next() => {
+                    let stream = match r {
+                        Some(r) => match r {
+                            Ok(s) => s,
+                            Err(err) => break err,
+                        },
+                        None => break ConnectionError::LocallyClosed,
+                    };
+
+                    let conn = conn.clone();
+                    tokio::spawn(async move {
+                        match conn.process_uni_stream(stream).await {
+                            Ok(()) => {}
+                            Err(err) => {
+                                conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
+
+                                let rmt_addr = conn.controller.remote_address();
+                                log::error!("[{rmt_addr}] {err}");
+                            }
+                        }
+                    });
+                },
+                // listen_bi_streams
+                r = bi_streams.next() => {
+                    let (send, recv) = match r {
+                        Some(r) => match r {
+                            Ok(s) => s,
+                            Err(err) => break err,
+                        },
+                        None => break ConnectionError::LocallyClosed,
+                    };
+
+                    let conn = conn.clone();
+                    tokio::spawn(async move {
+                        match conn.process_bi_stream(send, recv).await {
+                            Ok(()) => {}
+                            Err(err) => {
+                                conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
+
+                                let rmt_addr = conn.controller.remote_address();
+                                log::error!("[{rmt_addr}] {err}");
+                            }
+                        }
+                    });
+                },
+                // listen_datagrams
+                r = datagrams.next() => {
+                    let datagram = match r {
+                        Some(r) => match r {
+                            Ok(s) => s,
+                            Err(err) => break err,
+                        },
+                        None => break ConnectionError::LocallyClosed,
+                    };
+
+                    let conn = conn.clone();
+                    tokio::spawn(async move {
+                        match conn.process_datagram(datagram).await {
+                            Ok(()) => {}
+                            Err(err) => {
+                                conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
+
+                                let rmt_addr = conn.controller.remote_address();
+                                log::error!("[{rmt_addr}] {err}");
+                            }
+                        }
+                    });
+                },
+                // listen_received_udp_packet
+                r = recv_pkt_rx.recv() => {
+                    let (assoc_id, pkt, addr) = match r {
+                        Some((assoc_id, pkt, addr)) => (assoc_id, pkt, addr),
+                        None => break ConnectionError::LocallyClosed,
+                    };
+
+                    let conn = conn.clone();
+                    tokio::spawn(async move {
+                        match conn.process_received_udp_packet(assoc_id, pkt, addr).await {
+                            Ok(()) => {}
+                            Err(err) => {
+                                conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
+
+                                let rmt_addr = conn.controller.remote_address();
+                                log::error!("[{rmt_addr}] {err}");
+                            }
+                        }
+                    });
+                }
+                // auth
+                _r = conn.is_authenticated.clone(), if !is_authed => {
+                    is_authed = true;
+                },
+                // auth timeout
+                _r = tokio::time::sleep_until(auth_deadline), if !is_authed => {
+                    let err = DispatchError::AuthenticationTimeout;
+
+                    conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
+                    conn.is_authenticated.wake();
+
+                    let rmt_addr = conn.controller.remote_address();
+                    log::error!("[{rmt_addr}] {err}");
+
+                    is_authed = true;
+                    // break ConnectionError::LocallyClosed;
+                },
+            }
+        };
+
+        is_closed.set_closed();
+
+        match err {
+            ConnectionError::TimedOut => {
+                log::debug!("[{rmt_addr}] [disconnect] [connection timeout]")
+            }
+            ConnectionError::LocallyClosed => {
+                log::debug!("[{rmt_addr}] [disconnect] [locally closed]")
+            }
+            err => log::error!("[{rmt_addr}] [disconnect] {err}"),
         }
     }
 }

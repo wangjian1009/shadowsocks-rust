@@ -51,23 +51,6 @@ impl Dispatcher {
     }
 
     async fn run(self: Arc<Dispatcher>) -> io::Result<Runing> {
-        // let server_addr = match addr {
-        //     ServerAddr::DomainName(domain, port) => TuicServerAddr::DomainAddr {
-        //         domain: domain.clone(),
-        //         port: port.clone(),
-        //     },
-        //     ServerAddr::SocketAddr(addr) => {
-        //         let sni = match self.config.sni.as_ref() {
-        //             Some(sni) => sni,
-        //             None => return Err(io::Error::new(io::ErrorKind::Other, "server sni is not spected")),
-        //         };
-        //         TuicServerAddr::SocketAddr {
-        //             addr: addr.clone(),
-        //             name: sni.clone(),
-        //         }
-        //     }
-        // };
-
         let (relay, req_tx) = relay_init(
             self.context.clone(),
             self.config.client_config.clone(),
