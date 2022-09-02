@@ -60,6 +60,7 @@ strip = true
 [features]
 default = [
     "logging",
+    "tracing",
     "trust-dns",
     "stream-cipher",
     "local",
@@ -141,6 +142,7 @@ dns-over-https = ["shadowsocks-service/dns-over-https"]
 
 # Enable logging output
 logging = ["log4rs"]
+tracing = ["tracing-futures", "tracing-subscriber"]
 
 # Enable DNS-relay
 local-dns = ["local", "shadowsocks-service/local-dns"]
@@ -210,6 +212,10 @@ log4rs = { version = "1.1.1", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
 thiserror = "1.0"
+
+tracing = { version = "0.1.35" }
+tracing-futures = { version = "0.2.0", features = ["std-future"], optional = true }
+tracing-subscriber = { version = "0.3.0", features = ["env-filter", "fmt", "time", "local-time"], default-features = false, optional = true }
 
 clap = { version = "3.2", features = ["wrap_help", "suggestions"] }
 cfg-if = "1"

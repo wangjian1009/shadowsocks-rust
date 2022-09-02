@@ -9,6 +9,8 @@ use std::{
     time::Duration,
 };
 
+use cfg_if::cfg_if;
+
 use clap::{Arg, ArgGroup, ArgMatches, Command, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
 use log::info;
@@ -552,6 +554,24 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             }
         }
 
+        #[cfg(all(feature = "logging", feature = "tracing"))]
+        {
+            let format = tracing_subscriber::fmt::format().with_level(true).with_target(true);
+
+            // 初始化并设置日志格式(定制和筛选日志)
+            match tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(io::stdout) // 写入标准输出
+                .event_format(format)
+                .try_init()  // 初始化并将SubScriber设置为全局SubScriber
+            {
+                Ok(()) => {},
+                Err(err) => log::error!("tracing init fail, {:?}", err),
+            }
+        }
+
+        tracing::error!("xxxxx new endpoint 1");
+
         log::trace!("{:?}", service_config);
 
         let mut config = match config_opt {
@@ -1078,6 +1098,25 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             Either::Right(_) => ExitCode::SUCCESS,
         }
     })
+}
+
+cfg_if! {
+    if #[cfg(all(feature = "logging", feature = "tracing"))] {
+        struct TracingWriter;
+
+        impl std::io::Write for TracingWriter {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                print!(
+                    "{}",
+                    std::str::from_utf8(buf).expect("tried to log invalid UTF-8")
+                );
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                io::stdout().flush()
+            }
+        }
+    }
 }
 
 #[cfg(unix)]

@@ -99,8 +99,10 @@ impl Dispatcher {
     async fn start_svr(self: &Arc<Self>) -> io::Result<()> {
         let mut runing = self.runing.write().await;
 
-        if runing.is_some() {
-            return Ok(());
+        if let Some(runing) = (*runing).as_mut() {
+            if !runing.task.is_finished() {
+                return Ok(());
+            }
         }
 
         // log::error!("tuic: server start: sleep begin");
@@ -119,6 +121,10 @@ impl Dispatcher {
             Some(ref runing) => runing,
             None => return Ok(Some(req)),
         };
+
+        if runing.task.is_finished() {
+            return Ok(Some(req));
+        }
 
         log::error!("tuic: server {}: ==> {} ", self.addr, req);
         runing.req_tx.send(req).await.map_err(|e| {
