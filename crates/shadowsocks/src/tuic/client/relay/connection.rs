@@ -7,12 +7,12 @@ use super::{
 };
 use bytes::Bytes;
 use parking_lot::Mutex;
-use quinn::{ClientConfig, Connection as QuinnConnection, Datagrams, Endpoint, EndpointConfig, NewConnection};
+use quinn::{ClientConfig, Connection as QuinnConnection, Datagrams, Endpoint, NewConnection};
 use std::{
     collections::HashMap,
     future::Future,
     io::{Error, ErrorKind, Result},
-    net::SocketAddr,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::{Deref, DerefMut},
     pin::Pin,
     sync::{
@@ -48,6 +48,7 @@ pub async fn manage_connection(
             wait_req.clone().await;
 
             // try to establish a new connection
+            log::debug!("xxxxxx: connect begin");
             let (new_conn, dg, uni) = match Connection::connect(context.as_ref(), &config, &connect_opts).await {
                 Ok(conn) => conn,
                 Err(err) => {
@@ -59,6 +60,7 @@ pub async fn manage_connection(
                     continue;
                 }
             };
+            log::debug!("xxxxxx: connect success");
 
             // renew the connection mutex
             // safety: the mutex must be locked before, so this container must have a lock guard inside
@@ -132,6 +134,12 @@ impl Connection {
         connect_opts: &ConnectOpts,
         name: &str,
     ) -> Result<(Self, Datagrams, IncomingUniStreams)> {
+        let endpoint = Endpoint::client(match addr {
+            SocketAddr::V4(_) => SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0),
+            SocketAddr::V6(_) => SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 0),
+        })?;
+
+        // 设置真正需要使用的socket
         let socket = match addr {
             SocketAddr::V4(_) => create_outbound_udp_socket(AddrFamily::Ipv4, connect_opts).await?,
             SocketAddr::V6(_) => create_outbound_udp_socket(AddrFamily::Ipv6, connect_opts).await?,
@@ -139,7 +147,8 @@ impl Connection {
 
         let socket: tokio::net::UdpSocket = socket.into();
 
-        let (endpoint, _) = Endpoint::new(EndpointConfig::default(), None, socket.into_std()?)?;
+        endpoint.rebind(socket.into_std()?)?;
+
         let conn = endpoint
             .connect_with(config.quinn_config.clone(), addr, name)
             .map_err(|err| Error::new(ErrorKind::Other, err))?;

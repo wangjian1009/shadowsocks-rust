@@ -1,3 +1,4 @@
+use futures::Future;
 use futures_util::Stream;
 use quinn::{
     ConnectionError, Endpoint, IncomingUniStreams as QuinnIncomingUniStreams, RecvStream as QuinnRecvStream,
@@ -177,9 +178,10 @@ impl Stream for IncomingUniStreams {
     #[inline]
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         if let Some(reg) = self.reg.get_register() {
-            Pin::new(&mut self.incoming)
-                .poll_next(cx)
-                .map_ok(|recv| RecvStream::new(recv, reg))
+            let poll_next = self.incoming.next();
+            tokio::pin!(poll_next);
+            poll_next.poll(cx).map_ok(|recv| RecvStream::new(recv, reg))
+            //&mut; self.incoming.poll(cx).map_ok(|recv| RecvStream::new(recv, reg))
         } else {
             // the connection is already dropped
             Poll::Ready(None)

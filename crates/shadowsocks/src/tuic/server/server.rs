@@ -1,6 +1,6 @@
 use super::{connection::Connection, UdpSocketCreator};
-use futures_util::StreamExt;
-use quinn::{Endpoint, EndpointConfig, Incoming, ServerConfig};
+use quinn::{Endpoint, Incoming, ServerConfig};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{collections::HashSet, io::Result, sync::Arc, time::Duration};
 
 pub struct Server {
@@ -18,7 +18,14 @@ impl Server {
         auth_timeout: Duration,
         udp_socket_creator: Box<dyn UdpSocketCreator>,
     ) -> Result<Self> {
-        let (_, incoming) = Endpoint::new(EndpointConfig::default(), Some(config), socket)?;
+        let (endpoint, incoming) = Endpoint::server(
+            config,
+            match socket.local_addr()? {
+                SocketAddr::V4(_) => SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0),
+                SocketAddr::V6(_) => SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 0),
+            },
+        )?;
+        endpoint.rebind(socket)?;
 
         Ok(Self {
             incoming,

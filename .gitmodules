@@ -1,0 +1,3 @@
+[submodule "depends/quinn"]
+	path = depends/quinn
+	url = git@github.com:wangjian1009/quinn.git

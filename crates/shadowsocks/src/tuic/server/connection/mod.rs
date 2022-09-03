@@ -3,7 +3,6 @@ use self::{
     dispatch::DispatchError,
     udp::{UdpPacketFrom, UdpPacketSource, UdpSessionMap},
 };
-use futures_util::StreamExt;
 use parking_lot::Mutex;
 use quinn::{Connecting, Connection as QuinnConnection, ConnectionError, NewConnection};
 use std::{

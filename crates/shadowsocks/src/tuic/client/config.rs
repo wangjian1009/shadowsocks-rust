@@ -1,6 +1,6 @@
 use quinn::{
     congestion::{BbrConfig, CubicConfig, NewRenoConfig},
-    ClientConfig,
+    ClientConfig, TransportConfig,
 };
 use rustls::version::TLS13;
 use std::{io, str::FromStr, sync::Arc};
@@ -37,8 +37,8 @@ impl Config {
             crypto.enable_sni = !raw.disable_sni;
 
             let mut config = ClientConfig::new(Arc::new(crypto));
-            let transport = Arc::get_mut(&mut config.transport).unwrap();
 
+            let mut transport = TransportConfig::default();
             match raw.congestion_controller {
                 CongestionController::Bbr => {
                     transport.congestion_controller_factory(Arc::new(BbrConfig::default()));
@@ -52,6 +52,8 @@ impl Config {
             }
 
             transport.max_idle_timeout(None);
+
+            config.transport_config(Arc::new(transport));
 
             config
         };
