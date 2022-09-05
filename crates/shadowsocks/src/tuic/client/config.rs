@@ -27,9 +27,17 @@ impl Config {
                 .with_safe_default_cipher_suites()
                 .with_safe_default_kx_groups()
                 .with_protocol_versions(&[&TLS13])
-                .unwrap()
-                .with_root_certificates(certs)
-                .with_no_client_auth();
+                .map(|b| {
+                    if certs.is_empty() {
+                        b.with_custom_certificate_verifier(
+                            Arc::new(NoVerifier {}) as Arc<dyn rustls::client::ServerCertVerifier>
+                        )
+                        .with_no_client_auth()
+                    } else {
+                        b.with_root_certificates(certs).with_no_client_auth()
+                    }
+                })
+                .unwrap();
 
             crypto.alpn_protocols = raw.alpn.iter().map(|alpn| alpn.clone().into_bytes()).collect();
 
@@ -124,5 +132,21 @@ impl FromStr for UdpRelayMode<(), ()> {
                 format!("not support UdpRelayMode {}", s),
             ))
         }
+    }
+}
+
+pub(crate) struct NoVerifier;
+
+impl rustls::client::ServerCertVerifier for NoVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::Certificate,
+        _intermediates: &[rustls::Certificate],
+        _server_name: &rustls::ServerName,
+        _scts: &mut dyn Iterator<Item = &[u8]>,
+        _ocsp_response: &[u8],
+        _now: std::time::SystemTime,
+    ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::ServerCertVerified::assertion())
     }
 }
