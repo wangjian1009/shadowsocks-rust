@@ -7,6 +7,8 @@ use std::{
     task::{self, Poll},
 };
 
+use cfg_if::cfg_if;
+
 use pin_project::pin_project;
 use shadowsocks::{
     context::SharedContext,
@@ -35,26 +37,38 @@ use crate::{
     net::MonProxyStream,
 };
 
-#[cfg(feature = "local-fake-mode")]
-use crate::local::context::FakeMode;
+cfg_if! {
+    if #[cfg(feature = "local-fake-mode")] {
+        use crate::local::context::FakeMode;
+        use futures::Future;
+        type CloseWaiter = Pin<Box<dyn Future<Output = ()> + Send + Sync>>;
+    }
+}
 
 use super::auto_proxy_io::AutoProxyIo;
 
 /// Unified stream for bypassed and proxied connections
 #[allow(clippy::large_enum_variant)]
-#[pin_project(project = AutoProxyClientStreamProj)]
-pub enum AutoProxyClientStream {
+#[pin_project(project = AutoProxyClientStreamStreamProj)]
+enum AutoProxyClientStreamStream {
     Proxied(#[pin] ProxyClientStream<Box<dyn StreamConnection>>),
     #[cfg(feature = "trojan")]
     ProxiedTrojan(#[pin] trojan::ClientStream<Box<dyn StreamConnection>>),
     #[cfg(feature = "vless")]
     ProxiedVless(#[pin] vless::ClientStream<Box<dyn StreamConnection>>),
     #[cfg(feature = "tuic")]
-    ProxiedTuic(
-        #[pin] Box<dyn StreamConnection>,
-        #[cfg(not(feature = "tuic-global"))] Arc<tuic::client::Dispatcher>,
-    ),
+    ProxiedTuic(#[pin] Box<dyn StreamConnection>),
     Bypassed(#[pin] Box<dyn StreamConnection>),
+}
+
+#[pin_project(project = AutoProxyClientStreamProj)]
+pub struct AutoProxyClientStream {
+    #[pin]
+    s: AutoProxyClientStreamStream,
+
+    #[cfg(feature = "local-fake-mode")]
+    #[pin]
+    c: Option<CloseWaiter>,
 }
 
 impl AutoProxyClientStream {
@@ -65,7 +79,7 @@ impl AutoProxyClientStream {
         addr: &Address,
     ) -> io::Result<AutoProxyClientStream> {
         #[cfg(feature = "local-fake-mode")]
-        if context.fake_mode().map_or(false, |e| e.is_bypass()) {
+        if context.fake_mode().is_bypass() {
             return AutoProxyClientStream::connect_bypassed(context, addr).await;
         }
 
@@ -86,7 +100,10 @@ impl AutoProxyClientStream {
         )
         .await?;
 
-        Ok(AutoProxyClientStream::Bypassed(Box::new(stream)))
+        Ok(AutoProxyClientStream {
+            s: AutoProxyClientStreamStream::Bypassed(Box::new(stream)),
+            c: None,
+        })
     }
 
     /// Connect via server to target `addr`
@@ -123,7 +140,7 @@ impl AutoProxyClientStream {
         addr: &Address,
         flow_stat: Option<Arc<FlowStat>>,
         #[cfg(feature = "rate-limit")] rate_limit: Option<Arc<RateLimiter>>,
-        #[cfg(feature = "local-fake-mode")] fake_mode: Option<FakeMode>,
+        #[cfg(feature = "local-fake-mode")] fake_mode: FakeMode,
     ) -> io::Result<AutoProxyClientStream> {
         let svr_cfg = svr.server_config();
         create_connector_then!(Some(context.clone()), svr_cfg.connector_transport(), |connector| {
@@ -137,7 +154,7 @@ impl AutoProxyClientStream {
                     let mut effect_ss_cfg = ss_cfg;
 
                     #[cfg(feature = "local-fake-mode")]
-                    if fake_mode.map_or(false, |e| e.is_param_error()) {
+                    if fake_mode.is_param_error() {
                         // log::error!("xxxxx: fake: is error");
                         _ss_cfg_buf = Some(ss_cfg.clone());
                         _ss_cfg_buf.as_mut().unwrap().set_password("aaaaaaaa");
@@ -164,7 +181,11 @@ impl AutoProxyClientStream {
                         },
                     )
                     .await?;
-                    Ok(AutoProxyClientStream::Proxied(stream))
+                    Ok(AutoProxyClientStream {
+                        s: AutoProxyClientStreamStream::Proxied(stream),
+                        #[cfg(feature = "local-fake-mode")]
+                        c: Self::create_fake_closer(fake_mode),
+                    })
                 }
                 #[cfg(feature = "trojan")]
                 shadowsocks::config::ServerProtocol::Trojan(trojan_cfg) => {
@@ -175,7 +196,7 @@ impl AutoProxyClientStream {
                     let mut effect_trojan_cfg = trojan_cfg;
 
                     #[cfg(feature = "local-fake-mode")]
-                    if fake_mode.map_or(false, |e| e.is_param_error()) {
+                    if fake_mode.is_param_error() {
                         _trojan_cfg_buf = Some(trojan_cfg.clone());
                         _trojan_cfg_buf.as_mut().unwrap().set_password("aaaaaaaa");
                         effect_trojan_cfg = _trojan_cfg_buf.as_ref().unwrap();
@@ -200,7 +221,11 @@ impl AutoProxyClientStream {
                         },
                     )
                     .await?;
-                    Ok(AutoProxyClientStream::ProxiedTrojan(stream))
+                    Ok(AutoProxyClientStream {
+                        s: AutoProxyClientStreamStream::ProxiedTrojan(stream),
+                        #[cfg(feature = "local-fake-mode")]
+                        c: Self::create_fake_closer(fake_mode),
+                    })
                 }
                 #[cfg(feature = "vless")]
                 shadowsocks::config::ServerProtocol::Vless(vless_cfg) => {
@@ -211,7 +236,7 @@ impl AutoProxyClientStream {
                     let mut effect_vless_cfg = vless_cfg;
 
                     #[cfg(feature = "local-fake-mode")]
-                    if fake_mode.map_or(false, |e| e.is_param_error()) {
+                    if fake_mode.is_param_error() {
                         _vless_cfg_buf = Some(vless_cfg.clone());
 
                         for client in _vless_cfg_buf.as_mut().unwrap().clients.iter_mut() {
@@ -242,7 +267,11 @@ impl AutoProxyClientStream {
                         },
                     )
                     .await?;
-                    Ok(AutoProxyClientStream::ProxiedVless(stream))
+                    Ok(AutoProxyClientStream {
+                        s: AutoProxyClientStreamStream::ProxiedVless(stream),
+                        #[cfg(feature = "local-fake-mode")]
+                        c: Self::create_fake_closer(fake_mode),
+                    })
                 }
                 #[cfg(feature = "tuic")]
                 shadowsocks::config::ServerProtocol::Tuic(_tuic_cfg) => {
@@ -256,52 +285,9 @@ impl AutoProxyClientStream {
                         Address::SocketAddress(addr) => RelayAddress::SocketAddress(addr.clone()),
                     };
 
-                    #[cfg(not(feature = "tuic-global"))]
-                    let dispatcher = {
-                        let tuic_config = match _tuic_cfg {
-                            shadowsocks::config::TuicConfig::Client(c) => c,
-                            shadowsocks::config::TuicConfig::Server(..) => unreachable!(),
-                        };
-
-                        let server_addr = match svr_cfg.addr() {
-                            shadowsocks::ServerAddr::DomainName(domain, port) => tuic::client::ServerAddr::DomainAddr {
-                                domain: domain.clone(),
-                                port: port.clone(),
-                            },
-                            shadowsocks::ServerAddr::SocketAddr(addr) => {
-                                let sni = match tuic_config.sni.as_ref() {
-                                    Some(sni) => sni,
-                                    None => {
-                                        return Err(std::io::Error::new(
-                                            std::io::ErrorKind::Other,
-                                            "server sni is not spected",
-                                        ))
-                                    }
-                                };
-                                tuic::client::ServerAddr::SocketAddr {
-                                    addr: addr.clone(),
-                                    name: sni.clone(),
-                                }
-                            }
-                        };
-
-                        let config = tuic::client::Config::new(tuic_config)?;
-
-                        Arc::new(tuic::client::Dispatcher::new(
-                            context,
-                            server_addr,
-                            config,
-                            connect_opts.clone(),
-                        ))
-                    };
-
                     let (relay_req, relay_resp_rx) = RelayRequest::new_connect(target_addr);
 
-                    #[cfg(feature = "tuic-global")]
                     svr.tuic_dispatcher().unwrap().send_req(relay_req).await?;
-
-                    #[cfg(not(feature = "tuic-global"))]
-                    dispatcher.clone().send_req(relay_req).await?;
 
                     let stream = match relay_resp_rx.await {
                         Ok(stream) => stream,
@@ -319,21 +305,50 @@ impl AutoProxyClientStream {
                         Box::new(stream) as Box<dyn StreamConnection>
                     };
 
-                    Ok(AutoProxyClientStream::ProxiedTuic(
-                        stream,
-                        #[cfg(not(feature = "tuic-global"))]
-                        dispatcher,
-                    ))
+                    Ok(AutoProxyClientStream {
+                        s: AutoProxyClientStreamStream::ProxiedTuic(stream),
+                        #[cfg(feature = "local-fake-mode")]
+                        c: Self::create_fake_closer(fake_mode),
+                    })
                 }
             }
         })
+    }
+
+    #[cfg(feature = "local-fake-mode")]
+    fn create_fake_closer(fake_mode: FakeMode) -> Option<CloseWaiter> {
+        match fake_mode {
+            FakeMode::None(Some(close_notify)) => {
+                let f = async move {
+                    close_notify.notified().await;
+                };
+
+                Some(Box::pin(f) as CloseWaiter)
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "local-fake-mode")]
+    fn is_fake_closed(c: Pin<&mut Option<CloseWaiter>>, cx: &mut task::Context<'_>) -> io::Result<()> {
+        let c = c.as_pin_mut();
+        if let Some(c) = c {
+            match c.poll(cx) {
+                Poll::Ready(()) => {
+                    return Err(io::Error::new(io::ErrorKind::Other, "fc"));
+                }
+                Poll::Pending => {}
+            }
+        }
+
+        Ok(())
     }
 }
 
 impl AutoProxyIo for AutoProxyClientStream {
     fn is_proxied(&self) -> bool {
-        match *self {
-            Self::Bypassed(..) => false,
+        match self.s {
+            AutoProxyClientStreamStream::Bypassed(..) => false,
             _ => true,
         }
     }
@@ -341,56 +356,100 @@ impl AutoProxyIo for AutoProxyClientStream {
 
 impl AsyncRead for AutoProxyClientStream {
     fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
-        match self.project() {
-            AutoProxyClientStreamProj::Proxied(s) => s.poll_read(cx, buf),
+        let AutoProxyClientStreamProj {
+            s,
+            #[cfg(feature = "local-fake-mode")]
+            c,
+        } = self.project();
+
+        #[cfg(feature = "local-fake-mode")]
+        if let Err(err) = Self::is_fake_closed(c, cx) {
+            return Poll::Ready(Err(err));
+        }
+
+        match s.project() {
+            AutoProxyClientStreamStreamProj::Proxied(s) => s.poll_read(cx, buf),
             #[cfg(feature = "trojan")]
-            AutoProxyClientStreamProj::ProxiedTrojan(s) => s.poll_read(cx, buf),
+            AutoProxyClientStreamStreamProj::ProxiedTrojan(s) => s.poll_read(cx, buf),
             #[cfg(feature = "vless")]
-            AutoProxyClientStreamProj::ProxiedVless(s) => s.poll_read(cx, buf),
+            AutoProxyClientStreamStreamProj::ProxiedVless(s) => s.poll_read(cx, buf),
             #[cfg(feature = "tuic")]
-            AutoProxyClientStreamProj::ProxiedTuic(s, ..) => s.poll_read(cx, buf),
-            AutoProxyClientStreamProj::Bypassed(s) => s.poll_read(cx, buf),
+            AutoProxyClientStreamStreamProj::ProxiedTuic(s, ..) => s.poll_read(cx, buf),
+            AutoProxyClientStreamStreamProj::Bypassed(s) => s.poll_read(cx, buf),
         }
     }
 }
 
 impl AsyncWrite for AutoProxyClientStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        match self.project() {
-            AutoProxyClientStreamProj::Proxied(s) => s.poll_write(cx, buf),
+        let AutoProxyClientStreamProj {
+            s,
+            #[cfg(feature = "local-fake-mode")]
+            c,
+        } = self.project();
+
+        #[cfg(feature = "local-fake-mode")]
+        if let Err(err) = Self::is_fake_closed(c, cx) {
+            return Poll::Ready(Err(err));
+        }
+
+        match s.project() {
+            AutoProxyClientStreamStreamProj::Proxied(s) => s.poll_write(cx, buf),
             #[cfg(feature = "trojan")]
-            AutoProxyClientStreamProj::ProxiedTrojan(s) => s.poll_write(cx, buf),
+            AutoProxyClientStreamStreamProj::ProxiedTrojan(s) => s.poll_write(cx, buf),
             #[cfg(feature = "vless")]
-            AutoProxyClientStreamProj::ProxiedVless(s) => s.poll_write(cx, buf),
+            AutoProxyClientStreamStreamProj::ProxiedVless(s) => s.poll_write(cx, buf),
             #[cfg(feature = "tuic")]
-            AutoProxyClientStreamProj::ProxiedTuic(s, ..) => s.poll_write(cx, buf),
-            AutoProxyClientStreamProj::Bypassed(s) => s.poll_write(cx, buf),
+            AutoProxyClientStreamStreamProj::ProxiedTuic(s, ..) => s.poll_write(cx, buf),
+            AutoProxyClientStreamStreamProj::Bypassed(s) => s.poll_write(cx, buf),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
-        match self.project() {
-            AutoProxyClientStreamProj::Proxied(s) => s.poll_flush(cx),
+        let AutoProxyClientStreamProj {
+            s,
+            #[cfg(feature = "local-fake-mode")]
+            c,
+        } = self.project();
+
+        #[cfg(feature = "local-fake-mode")]
+        if let Err(err) = Self::is_fake_closed(c, cx) {
+            return Poll::Ready(Err(err));
+        }
+
+        match s.project() {
+            AutoProxyClientStreamStreamProj::Proxied(s) => s.poll_flush(cx),
             #[cfg(feature = "trojan")]
-            AutoProxyClientStreamProj::ProxiedTrojan(s) => s.poll_flush(cx),
+            AutoProxyClientStreamStreamProj::ProxiedTrojan(s) => s.poll_flush(cx),
             #[cfg(feature = "vless")]
-            AutoProxyClientStreamProj::ProxiedVless(s) => s.poll_flush(cx),
+            AutoProxyClientStreamStreamProj::ProxiedVless(s) => s.poll_flush(cx),
             #[cfg(feature = "tuic")]
-            AutoProxyClientStreamProj::ProxiedTuic(s, ..) => s.poll_flush(cx),
-            AutoProxyClientStreamProj::Bypassed(s) => s.poll_flush(cx),
+            AutoProxyClientStreamStreamProj::ProxiedTuic(s, ..) => s.poll_flush(cx),
+            AutoProxyClientStreamStreamProj::Bypassed(s) => s.poll_flush(cx),
         }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
-        match self.project() {
-            AutoProxyClientStreamProj::Proxied(s) => s.poll_shutdown(cx),
+        let AutoProxyClientStreamProj {
+            s,
+            #[cfg(feature = "local-fake-mode")]
+            c,
+        } = self.project();
+
+        #[cfg(feature = "local-fake-mode")]
+        if let Err(err) = Self::is_fake_closed(c, cx) {
+            return Poll::Ready(Err(err));
+        }
+
+        match s.project() {
+            AutoProxyClientStreamStreamProj::Proxied(s) => s.poll_shutdown(cx),
             #[cfg(feature = "trojan")]
-            AutoProxyClientStreamProj::ProxiedTrojan(s) => s.poll_shutdown(cx),
+            AutoProxyClientStreamStreamProj::ProxiedTrojan(s) => s.poll_shutdown(cx),
             #[cfg(feature = "vless")]
-            AutoProxyClientStreamProj::ProxiedVless(s) => s.poll_shutdown(cx),
+            AutoProxyClientStreamStreamProj::ProxiedVless(s) => s.poll_shutdown(cx),
             #[cfg(feature = "tuic")]
-            AutoProxyClientStreamProj::ProxiedTuic(s, ..) => s.poll_shutdown(cx),
-            AutoProxyClientStreamProj::Bypassed(s) => s.poll_shutdown(cx),
+            AutoProxyClientStreamStreamProj::ProxiedTuic(s, ..) => s.poll_shutdown(cx),
+            AutoProxyClientStreamStreamProj::Bypassed(s) => s.poll_shutdown(cx),
         }
     }
 
@@ -399,15 +458,26 @@ impl AsyncWrite for AutoProxyClientStream {
         cx: &mut task::Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        match self.project() {
-            AutoProxyClientStreamProj::Proxied(s) => s.poll_write_vectored(cx, bufs),
+        let AutoProxyClientStreamProj {
+            s,
+            #[cfg(feature = "local-fake-mode")]
+            c,
+        } = self.project();
+
+        #[cfg(feature = "local-fake-mode")]
+        if let Err(err) = Self::is_fake_closed(c, cx) {
+            return Poll::Ready(Err(err));
+        }
+
+        match s.project() {
+            AutoProxyClientStreamStreamProj::Proxied(s) => s.poll_write_vectored(cx, bufs),
             #[cfg(feature = "trojan")]
-            AutoProxyClientStreamProj::ProxiedTrojan(s) => s.poll_write_vectored(cx, bufs),
+            AutoProxyClientStreamStreamProj::ProxiedTrojan(s) => s.poll_write_vectored(cx, bufs),
             #[cfg(feature = "vless")]
-            AutoProxyClientStreamProj::ProxiedVless(s) => s.poll_write_vectored(cx, bufs),
+            AutoProxyClientStreamStreamProj::ProxiedVless(s) => s.poll_write_vectored(cx, bufs),
             #[cfg(feature = "tuic")]
-            AutoProxyClientStreamProj::ProxiedTuic(s, ..) => s.poll_write_vectored(cx, bufs),
-            AutoProxyClientStreamProj::Bypassed(s) => s.poll_write_vectored(cx, bufs),
+            AutoProxyClientStreamStreamProj::ProxiedTuic(s, ..) => s.poll_write_vectored(cx, bufs),
+            AutoProxyClientStreamStreamProj::Bypassed(s) => s.poll_write_vectored(cx, bufs),
         }
     }
 }
@@ -420,50 +490,50 @@ impl AsyncWrite for AutoProxyClientStream {
 
 impl StreamConnection for AutoProxyClientStream {
     fn check_connected(&self) -> bool {
-        match *self {
-            AutoProxyClientStream::Proxied(ref s) => s.check_connected(),
+        match self.s {
+            AutoProxyClientStreamStream::Proxied(ref s) => s.check_connected(),
             #[cfg(feature = "trojan")]
-            AutoProxyClientStream::ProxiedTrojan(ref s) => s.check_connected(),
+            AutoProxyClientStreamStream::ProxiedTrojan(ref s) => s.check_connected(),
             #[cfg(feature = "vless")]
-            AutoProxyClientStream::ProxiedVless(ref s) => s.check_connected(),
+            AutoProxyClientStreamStream::ProxiedVless(ref s) => s.check_connected(),
             #[cfg(feature = "tuic")]
-            AutoProxyClientStream::ProxiedTuic(ref s, ..) => s.check_connected(),
-            AutoProxyClientStream::Bypassed(ref s) => s.check_connected(),
+            AutoProxyClientStreamStream::ProxiedTuic(ref s, ..) => s.check_connected(),
+            AutoProxyClientStreamStream::Bypassed(ref s) => s.check_connected(),
         }
     }
 
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, rate_limit: Option<Arc<shadowsocks::transport::RateLimiter>>) {
-        match self {
-            AutoProxyClientStream::Proxied(ref mut s) => {
+        match self.s {
+            AutoProxyClientStreamStream::Proxied(ref mut s) => {
                 s.set_rate_limit(rate_limit);
             }
             #[cfg(feature = "trojan")]
-            AutoProxyClientStream::ProxiedTrojan(ref mut s) => {
+            AutoProxyClientStreamStream::ProxiedTrojan(ref mut s) => {
                 s.set_rate_limit(rate_limit);
             }
             #[cfg(feature = "vless")]
-            AutoProxyClientStream::ProxiedVless(ref mut s) => {
+            AutoProxyClientStreamStream::ProxiedVless(ref mut s) => {
                 s.set_rate_limit(rate_limit);
             }
             #[cfg(feature = "tuic")]
-            AutoProxyClientStream::ProxiedTuic(ref mut s, ..) => {
+            AutoProxyClientStreamStream::ProxiedTuic(ref mut s, ..) => {
                 s.set_rate_limit(rate_limit);
             }
-            AutoProxyClientStream::Bypassed(ref _s) => {}
+            AutoProxyClientStreamStream::Bypassed(ref _s) => {}
         }
     }
 
     fn physical_device(&self) -> DeviceOrGuard<'_> {
-        match *self {
-            AutoProxyClientStream::Proxied(ref s) => s.physical_device(),
+        match self.s {
+            AutoProxyClientStreamStream::Proxied(ref s) => s.physical_device(),
             #[cfg(feature = "trojan")]
-            AutoProxyClientStream::ProxiedTrojan(ref s) => s.physical_device(),
+            AutoProxyClientStreamStream::ProxiedTrojan(ref s) => s.physical_device(),
             #[cfg(feature = "vless")]
-            AutoProxyClientStream::ProxiedVless(ref s) => s.physical_device(),
+            AutoProxyClientStreamStream::ProxiedVless(ref s) => s.physical_device(),
             #[cfg(feature = "tuic")]
-            AutoProxyClientStream::ProxiedTuic(ref s, ..) => s.physical_device(),
-            AutoProxyClientStream::Bypassed(ref s) => s.physical_device(),
+            AutoProxyClientStreamStream::ProxiedTuic(ref s, ..) => s.physical_device(),
+            AutoProxyClientStreamStream::Bypassed(ref s) => s.physical_device(),
         }
     }
 }

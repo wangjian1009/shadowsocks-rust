@@ -456,10 +456,10 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
 
     #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
     vfut.push(ServerHandle(tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(10 + rand::random::<u64>() % 20)).await;
+        tokio::time::sleep(Duration::from_millis(500 + rand::random::<u64>() % 1500)).await;
         let result = crate::local::android::validate_sign();
         if result.error.is_some() {
-            context.set_fake_mode(Some(crate::local::context::FakeMode::ParamError));
+            context.set_fake_mode(crate::local::context::FakeMode::ParamError);
         }
 
         tokio::time::sleep(Duration::MAX).await;

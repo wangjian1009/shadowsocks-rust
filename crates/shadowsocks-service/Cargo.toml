@@ -43,7 +43,6 @@ default = [
     "trojan",
     "vless",
     "tuic",
-    "tuic-global",
 ]
 
 full = [
@@ -71,7 +70,6 @@ full = [
     "trojan",
     "vless",
     "tuic",
-    "tuic-global",
 ]
 
 # Enable local server
@@ -113,7 +111,6 @@ transport-skcp = ["transport", "shadowsocks/transport-skcp"]
 trojan = ["shadowsocks/trojan"]
 vless = ["shadowsocks/vless"]
 tuic = ["shadowsocks/tuic"]
-tuic-global = ["tuic"]
 
 # Enables trust-dns for replacing tokio's builtin DNS resolver
 trust-dns = ["trust-dns-resolver", "shadowsocks/trust-dns"]

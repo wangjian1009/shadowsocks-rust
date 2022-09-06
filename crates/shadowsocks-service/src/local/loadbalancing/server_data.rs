@@ -17,7 +17,7 @@ use super::server_stat::{Score, ServerStat};
 
 use crate::local::context::ServiceContext;
 
-#[cfg(all(feature = "tuic", feature = "tuic-global"))]
+#[cfg(feature = "tuic")]
 use shadowsocks::{config::ServerProtocol, tuic::client as tuic};
 
 /// Server's statistic score
@@ -72,7 +72,7 @@ pub struct ServerIdent {
     udp_score: ServerScore,
     svr_cfg: ServerConfig,
 
-    #[cfg(all(feature = "tuic", feature = "tuic-global"))]
+    #[cfg(feature = "tuic")]
     tuic_dispatcher: Option<Arc<tuic::Dispatcher>>,
 }
 
@@ -84,7 +84,7 @@ impl ServerIdent {
         max_server_rtt: Duration,
         check_window: Duration,
     ) -> io::Result<ServerIdent> {
-        #[cfg(all(feature = "tuic", feature = "tuic-global"))]
+        #[cfg(feature = "tuic")]
         let tuic_dispatcher = if let ServerProtocol::Tuic(tuic_config) = svr_cfg.protocol() {
             let tuic_config = match tuic_config {
                 shadowsocks::config::TuicConfig::Client(c) => c,
@@ -129,7 +129,7 @@ impl ServerIdent {
             tcp_score: ServerScore::new(svr_cfg.weight().tcp_weight(), max_server_rtt, check_window),
             udp_score: ServerScore::new(svr_cfg.weight().udp_weight(), max_server_rtt, check_window),
             svr_cfg,
-            #[cfg(all(feature = "tuic", feature = "tuic-global"))]
+            #[cfg(feature = "tuic")]
             tuic_dispatcher,
         })
     }
@@ -150,7 +150,7 @@ impl ServerIdent {
         &self.udp_score
     }
 
-    #[cfg(all(feature = "tuic", feature = "tuic-global"))]
+    #[cfg(feature = "tuic")]
     pub fn tuic_dispatcher(&self) -> Option<&Arc<tuic::Dispatcher>> {
         self.tuic_dispatcher.as_ref()
     }

@@ -10,8 +10,6 @@ use tuic::{Address as RelayAddress, AssociateRecvPacketReceiver, AssociateSendPa
 pub struct TuicUdpContext {
     packet_sender: AssociateSendPacketSender,
     packet_receiver: AssociateRecvPacketReceiver,
-    #[cfg(not(feature = "tuic-global"))]
-    _dispatcher: Arc<tuic::Dispatcher>,
 }
 
 impl TuicUdpContext {
@@ -90,57 +88,11 @@ where
     ) -> io::Result<MultiProtocolProxySocket> {
         let (relay_req, pkt_send_tx, pkt_recv_rx) = Request::new_associate(UDP_ASSOCIATION_SEND_CHANNEL_SIZE);
 
-        #[cfg(not(feature = "tuic-global"))]
-        let dispatcher = {
-            let tuic_config = match _tuic_cfg {
-                shadowsocks::config::TuicConfig::Client(c) => c,
-                shadowsocks::config::TuicConfig::Server(..) => unreachable!(),
-            };
-
-            let server_addr = match server.server_config().addr() {
-                shadowsocks::ServerAddr::DomainName(domain, port) => tuic::ServerAddr::DomainAddr {
-                    domain: domain.clone(),
-                    port: port.clone(),
-                },
-                shadowsocks::ServerAddr::SocketAddr(addr) => {
-                    let sni = match tuic_config.sni.as_ref() {
-                        Some(sni) => sni,
-                        None => {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "server sni is not spected",
-                            ))
-                        }
-                    };
-                    tuic::ServerAddr::SocketAddr {
-                        addr: addr.clone(),
-                        name: sni.clone(),
-                    }
-                }
-            };
-
-            let config = tuic::Config::new(tuic_config)?;
-
-            let dispatcher = Arc::new(tuic::Dispatcher::new(
-                self.context.context(),
-                server_addr,
-                config,
-                self.context.connect_opts_ref().clone(),
-            ));
-
-            dispatcher.clone().send_req(relay_req).await?;
-
-            dispatcher
-        };
-
-        #[cfg(feature = "tuic-global")]
         server.tuic_dispatcher().unwrap().send_req(relay_req).await?;
 
         Ok(MultiProtocolProxySocket::Tuic(TuicUdpContext {
             packet_sender: pkt_send_tx,
             packet_receiver: pkt_recv_rx,
-            #[cfg(not(feature = "tuic-global"))]
-            _dispatcher: dispatcher,
         }))
     }
 }

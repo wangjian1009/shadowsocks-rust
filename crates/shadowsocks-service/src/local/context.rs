@@ -1,8 +1,8 @@
 //! Shadowsocks Local Server Context
 
-use std::sync::Arc;
 #[cfg(feature = "local-dns")]
 use std::{net::IpAddr, time::Duration};
+use std::{ops::DerefMut, sync::Arc};
 
 #[cfg(feature = "local-dns")]
 use lru_time_cache::LruCache;
@@ -42,11 +42,16 @@ cfg_if! {
     if #[cfg(feature = "local-fake-mode")] {
         #[derive(Debug, Clone)]
         pub enum FakeMode {
+            None(Option<Arc<tokio::sync::Notify>>),
             Bypass,
             ParamError,
         }
 
         impl FakeMode {
+            pub fn none_with_closer() -> Self {
+                Self::None(Some(Arc::new(tokio::sync::Notify::new())))
+            }
+
             pub fn is_bypass(&self) -> bool {
                 match self {
                     FakeMode::Bypass => true,
@@ -90,7 +95,7 @@ pub struct ServiceContext {
     transport: Option<TransportConnectorConfig>,
 
     #[cfg(feature = "local-fake-mode")]
-    fake_mode: spin::Mutex<Option<FakeMode>>,
+    fake_mode: spin::Mutex<FakeMode>,
 }
 
 impl Default for ServiceContext {
@@ -120,7 +125,7 @@ impl ServiceContext {
             #[cfg(feature = "transport")]
             transport: None,
             #[cfg(feature = "local-fake-mode")]
-            fake_mode: spin::Mutex::new(None),
+            fake_mode: spin::Mutex::new(FakeMode::none_with_closer()),
         }
     }
 
@@ -290,11 +295,18 @@ impl ServiceContext {
 
 #[cfg(feature = "local-fake-mode")]
 impl ServiceContext {
-    pub fn fake_mode(&self) -> Option<FakeMode> {
+    pub fn fake_mode(&self) -> FakeMode {
         self.fake_mode.lock().clone()
     }
 
-    pub fn set_fake_mode(&self, mode: Option<FakeMode>) {
-        *self.fake_mode.lock() = mode;
+    pub fn set_fake_mode(&self, mode: FakeMode) {
+        let mut old_mode = self.fake_mode.lock();
+        let old_mode = old_mode.deref_mut();
+
+        if let FakeMode::None(ref mut close_notify) = *old_mode {
+            close_notify.as_mut().map(|c| c.notify_waiters());
+        }
+
+        *old_mode = mode;
     }
 }

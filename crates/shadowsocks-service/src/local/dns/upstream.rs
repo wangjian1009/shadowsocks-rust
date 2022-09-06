@@ -95,7 +95,7 @@ impl DnsClient {
             #[cfg(feature = "rate-limit")]
             None,
             #[cfg(feature = "local-fake-mode")]
-            None,
+            crate::local::context::FakeMode::None(None),
         )
         .await?;
         Ok(DnsClient::TcpRemote { stream })
