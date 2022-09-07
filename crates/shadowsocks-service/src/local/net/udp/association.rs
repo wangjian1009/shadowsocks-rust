@@ -51,6 +51,13 @@ cfg_if! {
     }
 }
 
+cfg_if! {
+    if #[cfg(feature = "rate-limit")] {
+        use nonzero_ext::*;
+        use shadowsocks::transport::{NegativeMultiDecision};
+    }
+}
+
 /// Writer for sending packets back to client
 ///
 /// Currently it requires `async-trait` for `async fn` in trait, which will allocate a `Box`ed `Future` every call of `send_to`.
@@ -347,6 +354,40 @@ where
         (handle, sender)
     }
 
+    #[inline]
+    fn update_rate_limit(&self, rate_limited: &mut Option<time::Interval>, processed_size: usize) {
+        assert!(rate_limited.is_none());
+
+        #[cfg(feature = "rate-limit")]
+        {
+            let limiter = self.context.rate_limiter();
+
+            match limiter.check_n((processed_size as u32).into_nonzero().unwrap()) {
+                Err(err) => match err {
+                    // 检测不通过，需要处理错误情况
+                    NegativeMultiDecision::BatchNonConforming(duration) => {
+                        *rate_limited = Some(time::interval(duration));
+                    }
+                    NegativeMultiDecision::InsufficientCapacity => {
+                        // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个情况
+                        unreachable!()
+                    }
+                },
+                Ok(..) => {}
+            }
+        }
+    }
+
+    #[inline]
+    async fn wait_rate_limit_complete(rate_limited: Option<&mut time::Interval>) {
+        match rate_limited {
+            Some(interval) => {
+                interval.tick().await;
+            }
+            None => future::pending().await,
+        }
+    }
+
     async fn dispatch_packet(&mut self, mut receiver: mpsc::Receiver<(Address, Bytes)>) {
         let mut bypassed_ipv4_buffer = Vec::new();
         let mut bypassed_ipv6_buffer = Vec::new();
@@ -354,8 +395,14 @@ where
         let mut keepalive_interval = time::interval(Duration::from_secs(1));
         let close_notify = self.context.connection_close_notify();
 
+        let mut rate_limited: Option<time::Interval> = None;
+
         loop {
             tokio::select! {
+                _ = Self::wait_rate_limit_complete(rate_limited.as_mut()), if rate_limited.is_some() => {
+                    rate_limited = None;
+                }
+
                 packet_received_opt = receiver.recv() => {
                     let (target_addr, data) = match packet_received_opt {
                         Some(d) => d,
@@ -365,10 +412,10 @@ where
                         }
                     };
 
-                    self.dispatch_received_packet(&target_addr, &data).await;
+                    self.dispatch_received_packet(&target_addr, &data, &mut rate_limited).await
                 }
 
-                received_opt = receive_from_bypassed_opt(&self.bypassed_ipv4_socket, &mut bypassed_ipv4_buffer), if self.bypassed_ipv4_socket.is_some() => {
+                received_opt = receive_from_bypassed_opt(&self.bypassed_ipv4_socket, &mut bypassed_ipv4_buffer), if rate_limited.is_none() && self.bypassed_ipv4_socket.is_some() => {
                     let (n, addr) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -380,10 +427,10 @@ where
                     };
 
                     let addr = Address::from(addr);
-                    self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true).await;
+                    self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true, &mut rate_limited).await;
                 }
 
-                received_opt = receive_from_bypassed_opt(&self.bypassed_ipv6_socket, &mut bypassed_ipv6_buffer), if self.bypassed_ipv6_socket.is_some() => {
+                received_opt = receive_from_bypassed_opt(&self.bypassed_ipv6_socket, &mut bypassed_ipv6_buffer), if rate_limited.is_none() && self.bypassed_ipv6_socket.is_some() => {
                     let (n, addr) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -395,7 +442,7 @@ where
                     };
 
                     let addr = Address::from(addr);
-                    self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true).await;
+                    self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut rate_limited).await;
                 }
 
                 received_opt = receive_from_proxied_opt(&mut self.proxied_socket, &self.peer_addr, &mut proxied_buffer), if self.proxied_socket.is_some() => {
@@ -438,7 +485,7 @@ where
                         }
                     }
 
-                    self.send_received_respond_packet(&addr, &proxied_buffer[..n], false).await;
+                    self.send_received_respond_packet(&addr, &proxied_buffer[..n], false, &mut rate_limited).await;
                 }
 
                 _ = keepalive_interval.tick() => {
@@ -505,7 +552,12 @@ where
         }
     }
 
-    async fn dispatch_received_packet(&mut self, target_addr: &Address, data: &[u8]) {
+    async fn dispatch_received_packet(
+        &mut self,
+        target_addr: &Address,
+        data: &[u8],
+        rate_limited: &mut Option<time::Interval>,
+    ) {
         // Check if target should be bypassed. If so, send packets directly.
         #[allow(unused_mut)]
         let mut bypassed = self.balancer.is_empty() || self.context.check_target_bypassed(target_addr).await;
@@ -542,6 +594,8 @@ where
                     data.len(),
                     err
                 );
+            } else {
+                self.update_rate_limit(rate_limited, data.len());
             }
         }
     }
@@ -779,7 +833,13 @@ where
         Ok(())
     }
 
-    async fn send_received_respond_packet(&mut self, addr: &Address, data: &[u8], bypassed: bool) {
+    async fn send_received_respond_packet(
+        &mut self,
+        addr: &Address,
+        data: &[u8],
+        bypassed: bool,
+        rate_limited: &mut Option<time::Interval>,
+    ) {
         trace!(
             "udp relay {} <- {} ({}) received {} bytes",
             self.peer_addr,
@@ -809,6 +869,10 @@ where
                 if bypassed { "bypassed" } else { "proxied" },
                 data.len()
             );
+
+            if !bypassed {
+                self.update_rate_limit(rate_limited, data.len());
+            }
         }
     }
 }

@@ -2850,7 +2850,6 @@ dependencies = [
  "futures",
  "futures-timer",
  "futures-util",
- "governor",
  "hyper",
  "idna",
  "ipnet",

@@ -29,10 +29,7 @@ pub use mut_packet::MutPacketWriter;
 cfg_if! {
     if #[cfg(feature = "rate-limit")] {
         mod rate_limit;
-
-        pub use rate_limit::BoundWidth;
-        pub use rate_limit::RateLimiter;
-        pub use rate_limit::RateLimitedStream;
+        pub use rate_limit::{BoundWidth, RateLimiter, RateLimitedStream, NegativeMultiDecision};
     }
 }
 

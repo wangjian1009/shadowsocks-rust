@@ -43,12 +43,13 @@ use crate::{
 cfg_if! {
     if #[cfg(feature = "local-fake-mode")] {
         use crate::local::context::FakeMode;
-        use futures::Future;
-        type CloseWaiter = Pin<Box<dyn Future<Output = ()> + Send + Sync>>;
     }
 }
 
 use super::auto_proxy_io::AutoProxyIo;
+
+use futures::Future;
+type CloseWaiter = Pin<Box<dyn Future<Output = ()> + Send + Sync>>;
 
 /// Unified stream for bypassed and proxied connections
 #[allow(clippy::large_enum_variant)]
@@ -104,7 +105,6 @@ impl AutoProxyClientStream {
 
         Ok(AutoProxyClientStream {
             s: AutoProxyClientStreamStream::Bypassed(Box::new(stream)),
-            #[cfg(feature = "local-fake-mode")]
             c: None,
         })
     }
@@ -317,7 +317,6 @@ impl AutoProxyClientStream {
         })
     }
 
-    #[cfg(feature = "local-fake-mode")]
     fn is_fake_closed(c: Pin<&mut Option<CloseWaiter>>, cx: &mut task::Context<'_>) -> io::Result<()> {
         let c = c.as_pin_mut();
         if let Some(c) = c {
@@ -346,7 +345,6 @@ impl AsyncRead for AutoProxyClientStream {
     fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         let AutoProxyClientStreamProj { s, c } = self.project();
 
-        #[cfg(feature = "local-fake-mode")]
         if let Err(err) = Self::is_fake_closed(c, cx) {
             return Poll::Ready(Err(err));
         }
@@ -366,13 +364,8 @@ impl AsyncRead for AutoProxyClientStream {
 
 impl AsyncWrite for AutoProxyClientStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        let AutoProxyClientStreamProj {
-            s,
-            #[cfg(feature = "local-fake-mode")]
-            c,
-        } = self.project();
+        let AutoProxyClientStreamProj { s, c } = self.project();
 
-        #[cfg(feature = "local-fake-mode")]
         if let Err(err) = Self::is_fake_closed(c, cx) {
             return Poll::Ready(Err(err));
         }
@@ -390,13 +383,8 @@ impl AsyncWrite for AutoProxyClientStream {
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
-        let AutoProxyClientStreamProj {
-            s,
-            #[cfg(feature = "local-fake-mode")]
-            c,
-        } = self.project();
+        let AutoProxyClientStreamProj { s, c } = self.project();
 
-        #[cfg(feature = "local-fake-mode")]
         if let Err(err) = Self::is_fake_closed(c, cx) {
             return Poll::Ready(Err(err));
         }
@@ -414,13 +402,8 @@ impl AsyncWrite for AutoProxyClientStream {
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
-        let AutoProxyClientStreamProj {
-            s,
-            #[cfg(feature = "local-fake-mode")]
-            c,
-        } = self.project();
+        let AutoProxyClientStreamProj { s, c } = self.project();
 
-        #[cfg(feature = "local-fake-mode")]
         if let Err(err) = Self::is_fake_closed(c, cx) {
             return Poll::Ready(Err(err));
         }
@@ -442,13 +425,8 @@ impl AsyncWrite for AutoProxyClientStream {
         cx: &mut task::Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        let AutoProxyClientStreamProj {
-            s,
-            #[cfg(feature = "local-fake-mode")]
-            c,
-        } = self.project();
+        let AutoProxyClientStreamProj { s, c } = self.project();
 
-        #[cfg(feature = "local-fake-mode")]
         if let Err(err) = Self::is_fake_closed(c, cx) {
             return Poll::Ready(Err(err));
         }
