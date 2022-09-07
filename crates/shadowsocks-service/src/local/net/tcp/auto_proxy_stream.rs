@@ -102,6 +102,7 @@ impl AutoProxyClientStream {
 
         Ok(AutoProxyClientStream {
             s: AutoProxyClientStreamStream::Bypassed(Box::new(stream)),
+            #[cfg(feature = "local-fake-mode")]
             c: None,
         })
     }
@@ -154,10 +155,8 @@ impl AutoProxyClientStream {
                     let mut effect_ss_cfg = ss_cfg;
 
                     #[cfg(feature = "local-fake-mode")]
-                    if fake_mode.is_param_error() {
-                        // log::error!("xxxxx: fake: is error");
-                        _ss_cfg_buf = Some(ss_cfg.clone());
-                        _ss_cfg_buf.as_mut().unwrap().set_password("aaaaaaaa");
+                    if let Some(fake_cfg) = fake_mode.is_param_error_for_ss(ss_cfg) {
+                        _ss_cfg_buf = Some(fake_cfg);
                         effect_ss_cfg = _ss_cfg_buf.as_ref().unwrap();
                     }
 
@@ -196,9 +195,8 @@ impl AutoProxyClientStream {
                     let mut effect_trojan_cfg = trojan_cfg;
 
                     #[cfg(feature = "local-fake-mode")]
-                    if fake_mode.is_param_error() {
-                        _trojan_cfg_buf = Some(trojan_cfg.clone());
-                        _trojan_cfg_buf.as_mut().unwrap().set_password("aaaaaaaa");
+                    if let Some(fake_cfg) = fake_mode.is_param_error_for_trojan(trojan_cfg) {
+                        _trojan_cfg_buf = Some(fake_cfg);
                         effect_trojan_cfg = _trojan_cfg_buf.as_ref().unwrap();
                     }
 
@@ -236,14 +234,8 @@ impl AutoProxyClientStream {
                     let mut effect_vless_cfg = vless_cfg;
 
                     #[cfg(feature = "local-fake-mode")]
-                    if fake_mode.is_param_error() {
-                        _vless_cfg_buf = Some(vless_cfg.clone());
-
-                        for client in _vless_cfg_buf.as_mut().unwrap().clients.iter_mut() {
-                            client.account.id =
-                                shadowsocks::vless::UUID::parse_bytes("abcdefghijklmnop".as_bytes()).unwrap();
-                        }
-
+                    if let Some(fake_cfg) = fake_mode.is_param_error_for_vless(vless_cfg) {
+                        _vless_cfg_buf = Some(fake_cfg);
                         effect_vless_cfg = _vless_cfg_buf.as_ref().unwrap();
                     }
 
@@ -317,16 +309,13 @@ impl AutoProxyClientStream {
 
     #[cfg(feature = "local-fake-mode")]
     fn create_fake_closer(fake_mode: FakeMode) -> Option<CloseWaiter> {
-        match fake_mode {
-            FakeMode::None(Some(close_notify)) => {
-                let f = async move {
-                    close_notify.notified().await;
-                };
+        fake_mode.close_notify().map(|c| {
+            let f = async move {
+                c.notified().await;
+            };
 
-                Some(Box::pin(f) as CloseWaiter)
-            }
-            _ => None,
-        }
+            Box::pin(f) as CloseWaiter
+        })
     }
 
     #[cfg(feature = "local-fake-mode")]

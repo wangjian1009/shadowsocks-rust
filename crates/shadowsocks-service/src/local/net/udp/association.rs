@@ -352,6 +352,13 @@ where
         let mut bypassed_ipv6_buffer = Vec::new();
         let mut proxied_buffer = Vec::new();
         let mut keepalive_interval = time::interval(Duration::from_secs(1));
+        #[allow(unused_mut, unused_assignments)]
+        let mut close_notify: Option<Arc<tokio::sync::Notify>> = None;
+
+        #[cfg(feature = "local-fake-mode")]
+        {
+            close_notify = self.context.fake_mode().close_notify();
+        }
 
         loop {
             tokio::select! {
@@ -449,6 +456,11 @@ where
                         }
                     }
                 }
+
+                _ = close_notify.as_mut().unwrap().notified(), if close_notify.is_some() => {
+                    // log::error!("xxxxxx: udp association for {} -> ... fake closed", self.peer_addr);
+                    break;
+                }
             }
         }
 
@@ -501,7 +513,13 @@ where
 
     async fn dispatch_received_packet(&mut self, target_addr: &Address, data: &[u8]) {
         // Check if target should be bypassed. If so, send packets directly.
-        let bypassed = self.balancer.is_empty() || self.context.check_target_bypassed(target_addr).await;
+        #[allow(unused_mut)]
+        let mut bypassed = self.balancer.is_empty() || self.context.check_target_bypassed(target_addr).await;
+
+        #[cfg(feature = "local-fake-mode")]
+        if !bypassed {
+            bypassed = self.context.fake_mode().is_bypass();
+        }
 
         trace!(
             "udp relay {} -> {} ({}) with {} bytes",
@@ -650,10 +668,25 @@ where
 
                 match svr_cfg.protocol() {
                     ServerProtocol::SS(svr_ss_cfg) => {
+                        #[cfg(feature = "local-fake-mode")]
+                        let mut _ss_cfg_buf = None;
+
+                        #[allow(unused_mut)]
+                        let mut effect_ss_cfg = svr_ss_cfg;
+
+                        #[cfg(feature = "local-fake-mode")]
+                        {
+                            let fake_mode = self.context.fake_mode();
+                            if let Some(fake_cfg) = fake_mode.is_param_error_for_ss(svr_ss_cfg) {
+                                _ss_cfg_buf = Some(fake_cfg);
+                                effect_ss_cfg = _ss_cfg_buf.as_ref().unwrap();
+                            }
+                        }
+
                         let socket = ProxySocket::connect_with_opts(
                             self.context.context(),
                             svr_cfg,
-                            svr_ss_cfg,
+                            effect_ss_cfg,
                             self.context.connect_opts_ref(),
                         )
                         .await?;
@@ -662,9 +695,25 @@ where
                         self.proxied_socket.insert(MultiProtocolProxySocket::SS(socket))
                     }
                     #[cfg(feature = "trojan")]
-                    ServerProtocol::Trojan(svr_trojan_cfg) => self
-                        .proxied_socket
-                        .insert(self.trojan_connect(svr_cfg, svr_trojan_cfg).await?),
+                    ServerProtocol::Trojan(svr_trojan_cfg) => {
+                        #[cfg(feature = "local-fake-mode")]
+                        let mut _trojan_cfg_buf = None;
+
+                        #[allow(unused_mut)]
+                        let mut effect_trojan_cfg = svr_trojan_cfg;
+
+                        #[cfg(feature = "local-fake-mode")]
+                        {
+                            let fake_mode = self.context.fake_mode();
+                            if let Some(fake_cfg) = fake_mode.is_param_error_for_trojan(svr_trojan_cfg) {
+                                _trojan_cfg_buf = Some(fake_cfg);
+                                effect_trojan_cfg = _trojan_cfg_buf.as_ref().unwrap();
+                            }
+                        }
+
+                        self.proxied_socket
+                            .insert(self.trojan_connect(svr_cfg, effect_trojan_cfg).await?)
+                    }
                     #[cfg(feature = "vless")]
                     ServerProtocol::Vless(..) => self.proxied_socket.insert(
                         self.vless_create_context(

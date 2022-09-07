@@ -74,10 +74,23 @@ impl VlessUdpContext {
 
         // use futures::TryFutureExt;
         let svr_cfg = self.server.server_config();
-        let svr_vless_cfg = match svr_cfg.protocol() {
+        #[allow(unused_mut)]
+        let mut svr_vless_cfg = match svr_cfg.protocol() {
             ServerProtocol::Vless(c) => c,
             _ => unreachable!(),
         };
+
+        #[cfg(feature = "local-fake-mode")]
+        let mut _vless_cfg_buf = None;
+
+        #[cfg(feature = "local-fake-mode")]
+        {
+            let fake_mode = self.context.fake_mode();
+            if let Some(fake_cfg) = fake_mode.is_param_error_for_vless(svr_vless_cfg) {
+                _vless_cfg_buf = Some(fake_cfg);
+                svr_vless_cfg = _vless_cfg_buf.as_ref().unwrap();
+            }
+        }
 
         let (mut r, w) = create_connector_then!(
             Some(self.context.context()),

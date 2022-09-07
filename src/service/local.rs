@@ -570,8 +570,6 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             }
         }
 
-        tracing::error!("xxxxx new endpoint 1");
-
         log::trace!("{:?}", service_config);
 
         let mut config = match config_opt {
