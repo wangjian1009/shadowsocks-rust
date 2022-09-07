@@ -355,38 +355,55 @@ where
     }
 
     #[inline]
-    fn update_rate_limit(&self, rate_limited: &mut Option<time::Interval>, mut processed_size: usize) {
+    fn update_rate_limit(&self, rate_limited: &mut Option<time::Interval>, processed_size: usize) {
         assert!(rate_limited.is_none());
 
         #[cfg(feature = "rate-limit")]
-        {
-            let limiter = self.context.rate_limiter();
+        if let Some(duration) = self.check_processed_size(processed_size) {
+            *rate_limited = Some(time::interval(duration));
+        }
+    }
 
-            limiter.max_receive_once().map(|max_once_size| {
-                if processed_size > max_once_size {
-                    log::error!(
-                        "rate limit update: max-once-size={}, packet-size={}",
-                        max_once_size,
-                        processed_size
-                    );
-                    processed_size = max_once_size;
-                }
-            });
+    #[cfg(feature = "rate-limit")]
+    fn check_processed_size(&self, mut processed_size: usize) -> Option<time::Duration> {
+        use std::ops::Add;
 
+        let limiter = self.context.rate_limiter();
+
+        let check_n = |processed_size: usize| {
             match limiter.check_n((processed_size as u32).into_nonzero().unwrap()) {
                 Err(err) => match err {
-                    // 检测不通过，需要处理错误情况
-                    NegativeMultiDecision::BatchNonConforming(duration) => {
-                        *rate_limited = Some(time::interval(duration));
-                    }
+                    NegativeMultiDecision::BatchNonConforming(duration) => Some(duration),
                     NegativeMultiDecision::InsufficientCapacity => {
                         // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个情况
                         unreachable!()
                     }
                 },
-                Ok(..) => {}
+                Ok(..) => None,
+            }
+        };
+
+        if let Some(max_once_size) = limiter.max_receive_once() {
+            if max_once_size < processed_size {
+                let mut all_duration = None;
+                while processed_size > 0 {
+                    let check_size = std::cmp::min(processed_size, max_once_size);
+                    let one_duration = check_n(check_size);
+
+                    one_duration.map(|one_duration| {
+                        if all_duration.is_none() {
+                            all_duration = Some(one_duration);
+                        } else {
+                            all_duration = Some(all_duration.unwrap().add(one_duration));
+                        }
+                    });
+                    processed_size -= check_size;
+                }
+                return all_duration;
             }
         }
+
+        check_n(processed_size)
     }
 
     #[inline]
@@ -426,7 +443,7 @@ where
                     self.dispatch_received_packet(&target_addr, &data, &mut rate_limited).await
                 }
 
-                received_opt = receive_from_bypassed_opt(&self.bypassed_ipv4_socket, &mut bypassed_ipv4_buffer), if rate_limited.is_none() && self.bypassed_ipv4_socket.is_some() => {
+                received_opt = receive_from_bypassed_opt(&self.bypassed_ipv4_socket, &mut bypassed_ipv4_buffer), if self.bypassed_ipv4_socket.is_some() => {
                     let (n, addr) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -441,7 +458,7 @@ where
                     self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true, &mut rate_limited).await;
                 }
 
-                received_opt = receive_from_bypassed_opt(&self.bypassed_ipv6_socket, &mut bypassed_ipv6_buffer), if rate_limited.is_none() && self.bypassed_ipv6_socket.is_some() => {
+                received_opt = receive_from_bypassed_opt(&self.bypassed_ipv6_socket, &mut bypassed_ipv6_buffer), if self.bypassed_ipv6_socket.is_some() => {
                     let (n, addr) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -456,7 +473,7 @@ where
                     self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut rate_limited).await;
                 }
 
-                received_opt = receive_from_proxied_opt(&mut self.proxied_socket, &self.peer_addr, &mut proxied_buffer), if self.proxied_socket.is_some() => {
+                received_opt = receive_from_proxied_opt(&mut self.proxied_socket, &self.peer_addr, &mut proxied_buffer), if rate_limited.is_none() && self.proxied_socket.is_some() => {
                     let (n, addr, control_opt) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -597,6 +614,16 @@ where
                 );
             }
         } else {
+            if rate_limited.is_some() {
+                log::info!(
+                    "udp relay {} -> {} (proxied) with {} bytes, error: rate-limited",
+                    self.peer_addr,
+                    target_addr,
+                    data.len(),
+                );
+                return;
+            }
+
             if let Err(err) = self.dispatch_received_proxied_packet(target_addr, data).await {
                 error!(
                     "udp relay {} -> {} (proxied) with {} bytes, error: {}",
