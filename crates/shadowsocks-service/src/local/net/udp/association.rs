@@ -355,12 +355,23 @@ where
     }
 
     #[inline]
-    fn update_rate_limit(&self, rate_limited: &mut Option<time::Interval>, processed_size: usize) {
+    fn update_rate_limit(&self, rate_limited: &mut Option<time::Interval>, mut processed_size: usize) {
         assert!(rate_limited.is_none());
 
         #[cfg(feature = "rate-limit")]
         {
             let limiter = self.context.rate_limiter();
+
+            limiter.max_receive_once().map(|max_once_size| {
+                if processed_size > max_once_size {
+                    log::error!(
+                        "rate limit update: max-once-size={}, packet-size={}",
+                        max_once_size,
+                        processed_size
+                    );
+                    processed_size = max_once_size;
+                }
+            });
 
             match limiter.check_n((processed_size as u32).into_nonzero().unwrap()) {
                 Err(err) => match err {

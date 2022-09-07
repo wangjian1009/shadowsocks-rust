@@ -7,6 +7,17 @@ pub enum FakeMode {
     ParamError,
 }
 
+const S_SS_PASSWORD: [u8; 8] = [112, 23, 191, 57, 112, 36, 251, 217];
+
+#[cfg(feature = "trojan")]
+const S_TROJAN_PASSWORD: [u8; 8] = [112, 23, 191, 57, 112, 36, 251, 217];
+
+#[cfg(feature = "vless")]
+const S_VLESS_TOKEN: [u8; 16] = [112, 20, 189, 60, 116, 35, 253, 208, 120, 28, 181, 52, 124, 43, 245, 200];
+
+#[cfg(feature = "tuic")]
+const S_TUIC_TOKEN: [u8; 8] = [112, 23, 191, 57, 112, 36, 251, 217];
+
 impl FakeMode {
     pub fn is_bypass(&self) -> bool {
         match self {
@@ -22,7 +33,7 @@ impl FakeMode {
         match self {
             FakeMode::ParamError => {
                 let mut new_cfg = cfg.clone();
-                new_cfg.set_password("aaaaaaaa");
+                new_cfg.set_password(string_decode(&S_SS_PASSWORD).as_str());
                 Some(new_cfg)
             }
             _ => None,
@@ -37,7 +48,7 @@ impl FakeMode {
         match self {
             FakeMode::ParamError => {
                 let mut new_cfg = cfg.clone();
-                new_cfg.set_password("aaaaaaaa");
+                new_cfg.set_password(string_decode(&S_TROJAN_PASSWORD).as_str());
                 Some(new_cfg)
             }
             _ => None,
@@ -54,7 +65,8 @@ impl FakeMode {
                 let mut new_cfg = cfg.clone();
 
                 for client in new_cfg.clients.iter_mut() {
-                    client.account.id = shadowsocks::vless::UUID::parse_bytes("abcdefghijklmnop".as_bytes()).unwrap();
+                    client.account.id =
+                        shadowsocks::vless::UUID::parse_bytes(string_decode(&S_VLESS_TOKEN).as_bytes()).unwrap();
                 }
 
                 Some(new_cfg)
@@ -72,7 +84,7 @@ impl FakeMode {
             FakeMode::ParamError => match cfg {
                 shadowsocks::config::TuicConfig::Client(cfg) => {
                     let mut new_cfg = cfg.clone();
-                    new_cfg.token = "aaaaaaaa".to_owned();
+                    new_cfg.token = string_decode(&S_TUIC_TOKEN);
                     Some(shadowsocks::config::TuicConfig::Client(new_cfg))
                 }
                 shadowsocks::config::TuicConfig::Server(..) => unreachable!(),
@@ -96,5 +108,56 @@ impl ServiceContext {
         } {
             self.close_connections()
         }
+    }
+}
+
+const S_SEED: [u8; 8] = [0x11, 0x76, 0xde, 0x58, 0x11, 0x45, 0x9a, 0xb8];
+
+#[inline(never)]
+fn string_decode(input: &[u8]) -> String {
+    let mut buf: Vec<u8> = vec![0u8; input.len()];
+
+    for i in 0..input.len() {
+        buf[i] = input[i] ^ S_SEED[i % S_SEED.len()];
+    }
+
+    String::from_utf8(buf).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[inline]
+    fn string_encode(str: &str) -> Vec<u8> {
+        let input = str.as_bytes();
+        let mut buf: Vec<u8> = vec![0u8; input.len()];
+
+        for i in 0..input.len() {
+            buf[i] = input[i] ^ S_SEED[i % S_SEED.len()];
+        }
+
+        return buf;
+    }
+
+    #[test]
+    fn test_strings() {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Debug)
+            .is_test(true)
+            .try_init();
+
+        log::error!("xxxx: {:?}", string_encode("abcdefghijklmnop"));
+
+        assert_eq!(string_decode(&S_SS_PASSWORD).as_str(), "aaaaaaaa");
+
+        #[cfg(feature = "trojan")]
+        assert_eq!(string_decode(&S_TROJAN_PASSWORD).as_str(), "aaaaaaaa");
+
+        #[cfg(feature = "vless")]
+        assert_eq!(string_decode(&S_VLESS_TOKEN).as_str(), "abcdefghijklmnop");
+
+        #[cfg(feature = "tuic")]
+        assert_eq!(string_decode(&S_TUIC_TOKEN).as_str(), "aaaaaaaa");
     }
 }

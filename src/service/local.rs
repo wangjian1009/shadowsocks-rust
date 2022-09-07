@@ -554,7 +554,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             }
         }
 
-        #[cfg(all(feature = "logging", feature = "tracing"))]
+        #[cfg(feature = "tracing")]
         {
             let format = tracing_subscriber::fmt::format().with_level(true).with_target(true);
 
@@ -1170,7 +1170,7 @@ pub fn load_config_from_file<P: AsRef<Path>>(filename: &P) -> io::Result<String>
     for i in 0..len {
         let p = len - i - 1;
         if p == 0 {
-            ib[p] ^= 0x83;
+            ib[p] ^= 0x84;
         } else {
             ib[p] ^= ib[p - 1];
         }
