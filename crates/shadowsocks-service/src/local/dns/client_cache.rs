@@ -131,6 +131,7 @@ impl DnsClientCache {
                         tcp_l,
                         context.unwrap().connect_opts_ref(),
                         context.unwrap().flow_stat(),
+                        context.unwrap().connection_close_notify(),
                     )
                     .await;
                 }

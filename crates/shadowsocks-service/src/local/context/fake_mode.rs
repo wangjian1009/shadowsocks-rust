@@ -1,18 +1,13 @@
 use super::*;
-use tokio::sync::Notify;
 
 #[derive(Debug, Clone)]
 pub enum FakeMode {
-    None(Option<Arc<Notify>>),
+    None,
     Bypass,
     ParamError,
 }
 
 impl FakeMode {
-    pub fn none_with_closer() -> Self {
-        Self::None(Some(Arc::new(Notify::new())))
-    }
-
     pub fn is_bypass(&self) -> bool {
         match self {
             FakeMode::Bypass => true,
@@ -85,13 +80,6 @@ impl FakeMode {
             _ => None,
         }
     }
-
-    pub fn close_notify(self) -> Option<Arc<Notify>> {
-        match self {
-            FakeMode::None(close_notify) => close_notify,
-            _ => None,
-        }
-    }
 }
 
 impl ServiceContext {
@@ -100,12 +88,13 @@ impl ServiceContext {
     }
 
     pub fn set_fake_mode(&self, mode: FakeMode) {
-        let mut old_mode = self.fake_mode.lock();
-
-        if let FakeMode::None(ref mut close_notify) = *old_mode {
-            close_notify.as_mut().map(|c| c.notify_waiters());
+        if {
+            let mut old_mode = self.fake_mode.lock();
+            let need_close_connections = if let FakeMode::None = *old_mode { true } else { false };
+            *old_mode = mode;
+            need_close_connections
+        } {
+            self.close_connections()
         }
-
-        *old_mode = mode;
     }
 }

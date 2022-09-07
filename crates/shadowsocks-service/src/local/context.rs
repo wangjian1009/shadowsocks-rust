@@ -1,6 +1,8 @@
 //! Shadowsocks Local Server Context
 
 use std::sync::Arc;
+use tokio::sync::Notify;
+
 #[cfg(feature = "local-dns")]
 use std::{net::IpAddr, time::Duration};
 
@@ -50,6 +52,7 @@ pub struct ServiceContext {
     context: SharedContext,
     connect_opts: ConnectOpts,
     accept_opts: AcceptOpts,
+    connection_close_notify: spin::Mutex<Arc<Notify>>,
 
     // Access Control
     acl: Option<AccessControl>,
@@ -87,6 +90,7 @@ impl ServiceContext {
             context,
             connect_opts: ConnectOpts::default(),
             accept_opts: AcceptOpts::default(),
+            connection_close_notify: spin::Mutex::new(Arc::new(Notify::new())),
             acl: None,
             flow_stat: Arc::new(FlowStat::new()),
             #[cfg(feature = "local-dns")]
@@ -101,7 +105,7 @@ impl ServiceContext {
             #[cfg(feature = "transport")]
             transport: None,
             #[cfg(feature = "local-fake-mode")]
-            fake_mode: spin::Mutex::new(FakeMode::none_with_closer()),
+            fake_mode: spin::Mutex::new(FakeMode::None),
         }
     }
 
@@ -225,6 +229,21 @@ impl ServiceContext {
     pub fn set_security_config(&mut self, security: &SecurityConfig) {
         let context = Arc::get_mut(&mut self.context).expect("cannot set security on a shared context");
         context.set_replay_attack_policy(security.replay_attack.policy);
+    }
+
+    pub fn connection_close_notify(&self) -> Arc<Notify> {
+        self.connection_close_notify.lock().clone()
+    }
+
+    pub fn close_connections(&self) {
+        let notify = {
+            let mut notify = self.connection_close_notify.lock();
+            let old_notify = notify.clone();
+            *notify = Arc::new(Notify::new());
+            old_notify
+        };
+
+        notify.notify_waiters()
     }
 
     /// rate limit

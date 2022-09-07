@@ -352,13 +352,7 @@ where
         let mut bypassed_ipv6_buffer = Vec::new();
         let mut proxied_buffer = Vec::new();
         let mut keepalive_interval = time::interval(Duration::from_secs(1));
-        #[allow(unused_mut, unused_assignments)]
-        let mut close_notify: Option<Arc<tokio::sync::Notify>> = None;
-
-        #[cfg(feature = "local-fake-mode")]
-        {
-            close_notify = self.context.fake_mode().close_notify();
-        }
+        let close_notify = self.context.connection_close_notify();
 
         loop {
             tokio::select! {
@@ -457,7 +451,7 @@ where
                     }
                 }
 
-                _ = close_notify.as_mut().unwrap().notified(), if close_notify.is_some() => {
+                _ = close_notify.notified() => {
                     // log::error!("xxxxxx: udp association for {} -> ... fake closed", self.peer_addr);
                     break;
                 }

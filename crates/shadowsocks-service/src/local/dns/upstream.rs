@@ -22,6 +22,7 @@ use tokio::net::UnixStream;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::UdpSocket,
+    sync::Notify,
     time,
 };
 
@@ -85,6 +86,7 @@ impl DnsClient {
         ns: &Address,
         connect_opts: &ConnectOpts,
         flow_stat: Arc<FlowStat>,
+        connection_close_notify: Arc<Notify>,
     ) -> io::Result<DnsClient> {
         let stream = AutoProxyClientStream::connect_proxied_no_score(
             context.clone(),
@@ -92,10 +94,11 @@ impl DnsClient {
             svr,
             ns,
             Some(flow_stat),
+            Some(connection_close_notify),
             #[cfg(feature = "rate-limit")]
             None,
             #[cfg(feature = "local-fake-mode")]
-            crate::local::context::FakeMode::None(None),
+            crate::local::context::FakeMode::None,
         )
         .await?;
         Ok(DnsClient::TcpRemote { stream })

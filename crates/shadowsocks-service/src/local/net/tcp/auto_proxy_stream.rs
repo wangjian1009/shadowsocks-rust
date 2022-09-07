@@ -30,7 +30,10 @@ use shadowsocks::vless;
 #[cfg(feature = "tuic")]
 use shadowsocks::tuic;
 
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    sync::Notify,
+};
 
 use crate::{
     local::{context::ServiceContext, loadbalancing::ServerIdent},
@@ -66,7 +69,6 @@ pub struct AutoProxyClientStream {
     #[pin]
     s: AutoProxyClientStreamStream,
 
-    #[cfg(feature = "local-fake-mode")]
     #[pin]
     c: Option<CloseWaiter>,
 }
@@ -119,6 +121,7 @@ impl AutoProxyClientStream {
             server,
             addr,
             Some(context.flow_stat()),
+            Some(context.connection_close_notify()),
             #[cfg(feature = "rate-limit")]
             Some(context.rate_limiter()),
             #[cfg(feature = "local-fake-mode")]
@@ -140,6 +143,7 @@ impl AutoProxyClientStream {
         svr: &ServerIdent,
         addr: &Address,
         flow_stat: Option<Arc<FlowStat>>,
+        connection_close_notify: Option<Arc<Notify>>,
         #[cfg(feature = "rate-limit")] rate_limit: Option<Arc<RateLimiter>>,
         #[cfg(feature = "local-fake-mode")] fake_mode: FakeMode,
     ) -> io::Result<AutoProxyClientStream> {
@@ -182,8 +186,7 @@ impl AutoProxyClientStream {
                     .await?;
                     Ok(AutoProxyClientStream {
                         s: AutoProxyClientStreamStream::Proxied(stream),
-                        #[cfg(feature = "local-fake-mode")]
-                        c: Self::create_fake_closer(fake_mode),
+                        c: Self::create_close_waiter(connection_close_notify),
                     })
                 }
                 #[cfg(feature = "trojan")]
@@ -221,8 +224,7 @@ impl AutoProxyClientStream {
                     .await?;
                     Ok(AutoProxyClientStream {
                         s: AutoProxyClientStreamStream::ProxiedTrojan(stream),
-                        #[cfg(feature = "local-fake-mode")]
-                        c: Self::create_fake_closer(fake_mode),
+                        c: Self::create_close_waiter(connection_close_notify),
                     })
                 }
                 #[cfg(feature = "vless")]
@@ -261,8 +263,7 @@ impl AutoProxyClientStream {
                     .await?;
                     Ok(AutoProxyClientStream {
                         s: AutoProxyClientStreamStream::ProxiedVless(stream),
-                        #[cfg(feature = "local-fake-mode")]
-                        c: Self::create_fake_closer(fake_mode),
+                        c: Self::create_close_waiter(connection_close_notify),
                     })
                 }
                 #[cfg(feature = "tuic")]
@@ -299,17 +300,15 @@ impl AutoProxyClientStream {
 
                     Ok(AutoProxyClientStream {
                         s: AutoProxyClientStreamStream::ProxiedTuic(stream),
-                        #[cfg(feature = "local-fake-mode")]
-                        c: Self::create_fake_closer(fake_mode),
+                        c: Self::create_close_waiter(connection_close_notify),
                     })
                 }
             }
         })
     }
 
-    #[cfg(feature = "local-fake-mode")]
-    fn create_fake_closer(fake_mode: FakeMode) -> Option<CloseWaiter> {
-        fake_mode.close_notify().map(|c| {
+    fn create_close_waiter(notify: Option<Arc<Notify>>) -> Option<CloseWaiter> {
+        notify.map(|c| {
             let f = async move {
                 c.notified().await;
             };
@@ -345,11 +344,7 @@ impl AutoProxyIo for AutoProxyClientStream {
 
 impl AsyncRead for AutoProxyClientStream {
     fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
-        let AutoProxyClientStreamProj {
-            s,
-            #[cfg(feature = "local-fake-mode")]
-            c,
-        } = self.project();
+        let AutoProxyClientStreamProj { s, c } = self.project();
 
         #[cfg(feature = "local-fake-mode")]
         if let Err(err) = Self::is_fake_closed(c, cx) {
