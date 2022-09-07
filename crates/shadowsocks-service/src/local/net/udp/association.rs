@@ -360,6 +360,7 @@ where
 
         #[cfg(feature = "rate-limit")]
         if let Some(duration) = self.check_processed_size(processed_size) {
+            // log::error!("xxxxx: rate limit wait begin, duration={:?}", duration);
             *rate_limited = Some(time::interval(duration));
         }
     }
@@ -376,6 +377,7 @@ where
                     NegativeMultiDecision::BatchNonConforming(duration) => Some(duration),
                     NegativeMultiDecision::InsufficientCapacity => {
                         // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个情况
+                        // log::error!("xxxxx: check_n size={} unexpected", processed_size);
                         unreachable!()
                     }
                 },
@@ -428,6 +430,7 @@ where
         loop {
             tokio::select! {
                 _ = Self::wait_rate_limit_complete(rate_limited.as_mut()), if rate_limited.is_some() => {
+                    // log::error!("xxxxx: rate limit wait complete");
                     rate_limited = None;
                 }
 
