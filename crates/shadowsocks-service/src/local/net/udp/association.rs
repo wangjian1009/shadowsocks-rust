@@ -354,24 +354,19 @@ where
         (handle, sender)
     }
 
+    #[cfg(not(feature = "rate-limit"))]
     #[inline]
-    fn update_rate_limit(&self, rate_limited: &mut Option<time::Instant>, processed_size: usize) {
-        assert!(rate_limited.is_none());
-
-        #[cfg(feature = "rate-limit")]
-        if let Some(duration) = self.check_processed_size(processed_size) {
-            // log::error!("xxxxx: rate limit wait begin, duration={:?}", duration);
-            if let Some(expire_at) = time::Instant::now().checked_add(duration) {
-                *rate_limited = Some(expire_at);
-            } else {
-                error!("udp relay {} : update rate limit fail", self.peer_addr);
-            }
-        }
+    fn check_rate_limit(&self, processed_size: &mut usize) -> Option<time::Duration> {
+        *processed_size = 0;
+        None
     }
 
     #[cfg(feature = "rate-limit")]
-    fn check_processed_size(&self, mut processed_size: usize) -> Option<time::Duration> {
-        use std::ops::Add;
+    #[inline]
+    fn check_rate_limit(&self, processed_size: &mut usize) -> Option<time::Duration> {
+        if *processed_size == 0 {
+            return None;
+        }
 
         let limiter = self.context.rate_limiter();
 
@@ -381,7 +376,7 @@ where
                     NegativeMultiDecision::BatchNonConforming(duration) => Some(duration),
                     NegativeMultiDecision::InsufficientCapacity => {
                         // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个情况
-                        // log::error!("xxxxx: check_n size={} unexpected", processed_size);
+                        log::error!("xxxxx: check_n size={} unexpected", processed_size);
                         unreachable!()
                     }
                 },
@@ -389,37 +384,46 @@ where
             }
         };
 
+        let mut duration = None;
         if let Some(max_once_size) = limiter.max_receive_once() {
-            if max_once_size < processed_size {
-                let mut all_duration = None;
-                while processed_size > 0 {
-                    let check_size = std::cmp::min(processed_size, max_once_size);
-                    let one_duration = check_n(check_size);
+            assert!(max_once_size > 0);
 
-                    one_duration.map(|one_duration| {
-                        if all_duration.is_none() {
-                            all_duration = Some(one_duration);
-                        } else {
-                            all_duration = Some(all_duration.unwrap().add(one_duration));
-                        }
-                    });
-                    processed_size -= check_size;
+            while *processed_size > 0 {
+                let check_size = std::cmp::min(*processed_size, max_once_size);
+                duration = check_n(check_size);
+
+                if duration.is_some() {
+                    break;
                 }
-                return all_duration;
+
+                *processed_size -= check_size;
+            }
+        } else {
+            duration = check_n(*processed_size);
+            if duration.is_none() {
+                *processed_size = 0;
             }
         }
 
-        check_n(processed_size)
+        assert!((duration.is_some() && *processed_size > 0) || duration.is_none() && *processed_size == 0);
+
+        // if duration.is_some() {
+        //     log::error!(
+        //         "xxxxx: rate-limit sleep begin: size={}, duration={:?}",
+        //         *processed_size,
+        //         duration.unwrap()
+        //     );
+        // } else {
+        //     log::error!("xxxxx: rate-limit sleep end");
+        // }
+
+        duration
     }
 
     #[inline]
-    async fn wait_rate_limit_complete(rate_limited: Option<&mut time::Instant>) {
-        match rate_limited {
-            Some(expire_at) => {
-                if let Some(duration) = expire_at.checked_duration_since(time::Instant::now()) {
-                    time::sleep(duration).await
-                }
-            }
+    async fn wait_rate_limit_complete(duration: Option<time::Duration>) {
+        match duration {
+            Some(duration) => time::sleep(duration).await,
             None => future::pending().await,
         }
     }
@@ -431,13 +435,17 @@ where
         let mut keepalive_interval = time::interval(Duration::from_secs(1));
         let close_notify = self.context.connection_close_notify();
 
-        let mut rate_limited: Option<time::Instant> = None;
+        let mut check_rate_limit_size: usize = 0;
 
         loop {
+            let rate_limit_duration = self.check_rate_limit(&mut check_rate_limit_size);
+            assert!(
+                (rate_limit_duration.is_some() && check_rate_limit_size > 0)
+                    || (rate_limit_duration.is_none() && check_rate_limit_size == 0)
+            );
+
             tokio::select! {
-                _ = Self::wait_rate_limit_complete(rate_limited.as_mut()), if rate_limited.is_some() => {
-                    // log::error!("xxxxx: rate limit wait complete");
-                    rate_limited = None;
+                _ = Self::wait_rate_limit_complete(rate_limit_duration), if check_rate_limit_size> 0 => {
                 }
 
                 packet_received_opt = receiver.recv() => {
@@ -449,7 +457,7 @@ where
                         }
                     };
 
-                    self.dispatch_received_packet(&target_addr, &data, &mut rate_limited).await
+                    self.dispatch_received_packet(&target_addr, &data, &mut check_rate_limit_size).await
                 }
 
                 received_opt = receive_from_bypassed_opt(&self.bypassed_ipv4_socket, &mut bypassed_ipv4_buffer), if self.bypassed_ipv4_socket.is_some() => {
@@ -464,7 +472,7 @@ where
                     };
 
                     let addr = Address::from(addr);
-                    self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true, &mut rate_limited).await;
+                    self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true, &mut check_rate_limit_size).await;
                 }
 
                 received_opt = receive_from_bypassed_opt(&self.bypassed_ipv6_socket, &mut bypassed_ipv6_buffer), if self.bypassed_ipv6_socket.is_some() => {
@@ -479,10 +487,10 @@ where
                     };
 
                     let addr = Address::from(addr);
-                    self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut rate_limited).await;
+                    self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut check_rate_limit_size).await;
                 }
 
-                received_opt = receive_from_proxied_opt(&mut self.proxied_socket, &self.peer_addr, &mut proxied_buffer), if rate_limited.is_none() && self.proxied_socket.is_some() => {
+                received_opt = receive_from_proxied_opt(&mut self.proxied_socket, &self.peer_addr, &mut proxied_buffer), if check_rate_limit_size == 0 && self.proxied_socket.is_some() => {
                     let (n, addr, control_opt) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -522,7 +530,7 @@ where
                         }
                     }
 
-                    self.send_received_respond_packet(&addr, &proxied_buffer[..n], false, &mut rate_limited).await;
+                    self.send_received_respond_packet(&addr, &proxied_buffer[..n], false, &mut check_rate_limit_size).await;
                 }
 
                 _ = keepalive_interval.tick() => {
@@ -593,7 +601,7 @@ where
         &mut self,
         target_addr: &Address,
         data: &[u8],
-        rate_limited: &mut Option<time::Instant>,
+        check_rate_limit_size: &mut usize,
     ) {
         // Check if target should be bypassed. If so, send packets directly.
         #[allow(unused_mut)]
@@ -623,7 +631,7 @@ where
                 );
             }
         } else {
-            if rate_limited.is_some() {
+            if *check_rate_limit_size > 0 {
                 log::info!(
                     "udp relay {} -> {} (proxied) with {} bytes, error: rate-limited",
                     self.peer_addr,
@@ -642,7 +650,7 @@ where
                     err
                 );
             } else {
-                self.update_rate_limit(rate_limited, data.len());
+                *check_rate_limit_size += data.len();
             }
         }
     }
@@ -885,7 +893,7 @@ where
         addr: &Address,
         data: &[u8],
         bypassed: bool,
-        rate_limited: &mut Option<time::Instant>,
+        check_rate_limit_size: &mut usize,
     ) {
         trace!(
             "udp relay {} <- {} ({}) received {} bytes",
@@ -918,7 +926,7 @@ where
             );
 
             if !bypassed {
-                self.update_rate_limit(rate_limited, data.len());
+                *check_rate_limit_size += data.len();
             }
         }
     }
