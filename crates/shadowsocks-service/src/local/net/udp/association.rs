@@ -355,13 +355,17 @@ where
     }
 
     #[inline]
-    fn update_rate_limit(&self, rate_limited: &mut Option<time::Interval>, processed_size: usize) {
+    fn update_rate_limit(&self, rate_limited: &mut Option<time::Instant>, processed_size: usize) {
         assert!(rate_limited.is_none());
 
         #[cfg(feature = "rate-limit")]
         if let Some(duration) = self.check_processed_size(processed_size) {
             // log::error!("xxxxx: rate limit wait begin, duration={:?}", duration);
-            *rate_limited = Some(time::interval(duration));
+            if let Some(expire_at) = time::Instant::now().checked_add(duration) {
+                *rate_limited = Some(expire_at);
+            } else {
+                error!("udp relay {} : update rate limit fail", self.peer_addr);
+            }
         }
     }
 
@@ -409,10 +413,12 @@ where
     }
 
     #[inline]
-    async fn wait_rate_limit_complete(rate_limited: Option<&mut time::Interval>) {
+    async fn wait_rate_limit_complete(rate_limited: Option<&mut time::Instant>) {
         match rate_limited {
-            Some(interval) => {
-                interval.tick().await;
+            Some(expire_at) => {
+                if let Some(duration) = expire_at.checked_duration_since(time::Instant::now()) {
+                    time::sleep(duration).await
+                }
             }
             None => future::pending().await,
         }
@@ -425,7 +431,7 @@ where
         let mut keepalive_interval = time::interval(Duration::from_secs(1));
         let close_notify = self.context.connection_close_notify();
 
-        let mut rate_limited: Option<time::Interval> = None;
+        let mut rate_limited: Option<time::Instant> = None;
 
         loop {
             tokio::select! {
@@ -587,7 +593,7 @@ where
         &mut self,
         target_addr: &Address,
         data: &[u8],
-        rate_limited: &mut Option<time::Interval>,
+        rate_limited: &mut Option<time::Instant>,
     ) {
         // Check if target should be bypassed. If so, send packets directly.
         #[allow(unused_mut)]
@@ -879,7 +885,7 @@ where
         addr: &Address,
         data: &[u8],
         bypassed: bool,
-        rate_limited: &mut Option<time::Interval>,
+        rate_limited: &mut Option<time::Instant>,
     ) {
         trace!(
             "udp relay {} <- {} ({}) received {} bytes",
