@@ -26,10 +26,12 @@ impl Drop for Runing {
     }
 }
 
+pub type ConfigProvider = Box<dyn Fn() -> io::Result<Config> + Send + Sync>;
+
 pub struct Dispatcher {
     context: SharedContext,
     addr: ServerAddr,
-    config: Config,
+    config_provider: ConfigProvider,
     connect_opts: ConnectOpts,
     runing: RwLock<Option<Runing>>,
 }
@@ -41,28 +43,35 @@ impl Debug for Dispatcher {
 }
 
 impl Dispatcher {
-    pub fn new(context: SharedContext, addr: ServerAddr, config: Config, connect_opts: ConnectOpts) -> Self {
+    pub fn new(
+        context: SharedContext,
+        addr: ServerAddr,
+        config_provider: ConfigProvider,
+        connect_opts: ConnectOpts,
+    ) -> Self {
         Self {
             context,
             addr,
-            config,
+            config_provider,
             connect_opts,
             runing: RwLock::new(None),
         }
     }
 
     async fn run(self: Arc<Dispatcher>, close_notify: Option<Arc<Notify>>) -> io::Result<Runing> {
+        let config = (*self.config_provider)()?;
+
         let (relay, req_tx) = relay_init(
             self.context.clone(),
-            self.config.client_config.clone(),
+            config.client_config.clone(),
             self.addr.clone(),
             self.connect_opts.clone(),
-            self.config.token_digest,
-            self.config.heartbeat_interval,
-            self.config.reduce_rtt,
-            self.config.udp_relay_mode,
-            self.config.request_timeout,
-            self.config.max_udp_relay_packet_size,
+            config.token_digest,
+            config.heartbeat_interval,
+            config.reduce_rtt,
+            config.udp_relay_mode,
+            config.request_timeout,
+            config.max_udp_relay_packet_size,
         )
         .await;
 

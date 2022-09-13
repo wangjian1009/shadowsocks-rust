@@ -86,17 +86,17 @@ impl ServerIdent {
     ) -> io::Result<ServerIdent> {
         #[cfg(feature = "tuic")]
         let tuic_dispatcher = if let ServerProtocol::Tuic(tuic_config) = svr_cfg.protocol() {
-            let tuic_config = match tuic_config {
-                shadowsocks::config::TuicConfig::Client(c) => c,
-                shadowsocks::config::TuicConfig::Server(..) => unreachable!(),
-            };
-
             let server_addr = match svr_cfg.addr() {
                 shadowsocks::ServerAddr::DomainName(domain, port) => tuic::ServerAddr::DomainAddr {
                     domain: domain.clone(),
                     port: port.clone(),
                 },
                 shadowsocks::ServerAddr::SocketAddr(addr) => {
+                    let tuic_config = match tuic_config {
+                        shadowsocks::config::TuicConfig::Client(c) => c,
+                        shadowsocks::config::TuicConfig::Server(..) => unreachable!(),
+                    };
+
                     let sni = match tuic_config.sni.as_ref() {
                         Some(sni) => sni,
                         None => {
@@ -113,12 +113,36 @@ impl ServerIdent {
                 }
             };
 
-            let config = tuic::Config::new(tuic_config)?;
+            let config_provider: tuic::ConfigProvider = {
+                let context = _context.clone();
+                let tuic_config = tuic_config.clone();
+                Box::new(move || {
+                    #[cfg(feature = "local-fake-mode")]
+                    let mut _tuic_cfg_buf = None;
+
+                    #[allow(unused_mut)]
+                    let mut effect_tuic_cfg = &tuic_config;
+
+                    #[cfg(feature = "local-fake-mode")]
+                    if let Some(fake_cfg) = context.fake_mode().is_param_error_for_tuic(&tuic_config) {
+                        _tuic_cfg_buf = Some(fake_cfg);
+                        effect_tuic_cfg = _tuic_cfg_buf.as_ref().unwrap();
+                    }
+
+                    let effect_tuic_cfg = match effect_tuic_cfg {
+                        shadowsocks::config::TuicConfig::Client(c) => c,
+                        shadowsocks::config::TuicConfig::Server(..) => unreachable!(),
+                    };
+
+                    let config = tuic::Config::new(effect_tuic_cfg)?;
+                    io::Result::Ok(config)
+                })
+            };
 
             Some(Arc::new(tuic::Dispatcher::new(
                 _context.context(),
                 server_addr,
-                config,
+                config_provider,
                 _context.connect_opts_ref().clone(),
             )))
         } else {
