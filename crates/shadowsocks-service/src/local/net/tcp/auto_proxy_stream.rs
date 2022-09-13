@@ -280,7 +280,10 @@ impl AutoProxyClientStream {
 
                     let (relay_req, relay_resp_rx) = RelayRequest::new_connect(target_addr);
 
-                    svr.tuic_dispatcher().unwrap().send_req(relay_req).await?;
+                    svr.tuic_dispatcher()
+                        .unwrap()
+                        .send_req(relay_req, connection_close_notify.clone())
+                        .await?;
 
                     let stream = match relay_resp_rx.await {
                         Ok(stream) => stream,

@@ -827,9 +827,14 @@ where
                         .await?,
                     ),
                     #[cfg(feature = "tuic")]
-                    ServerProtocol::Tuic(tuic_config) => self
-                        .proxied_socket
-                        .insert(self.tuic_create_context(server.as_ref(), tuic_config).await?),
+                    ServerProtocol::Tuic(tuic_config) => self.proxied_socket.insert(
+                        self.tuic_create_context(
+                            server.as_ref(),
+                            Some(self.context.connection_close_notify()),
+                            tuic_config,
+                        )
+                        .await?,
+                    ),
                 }
             }
         };

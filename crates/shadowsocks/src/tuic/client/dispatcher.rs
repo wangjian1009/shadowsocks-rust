@@ -1,11 +1,12 @@
 use std::io;
 use std::{
     fmt::{self, Debug},
+    future,
     sync::Arc,
 };
 
 use tokio::{
-    sync::{mpsc::Sender, RwLock},
+    sync::{mpsc::Sender, Notify, RwLock},
     task::JoinHandle,
 };
 
@@ -50,7 +51,7 @@ impl Dispatcher {
         }
     }
 
-    async fn run(self: Arc<Dispatcher>) -> io::Result<Runing> {
+    async fn run(self: Arc<Dispatcher>, close_notify: Option<Arc<Notify>>) -> io::Result<Runing> {
         let (relay, req_tx) = relay_init(
             self.context.clone(),
             self.config.client_config.clone(),
@@ -69,21 +70,37 @@ impl Dispatcher {
         let task = tokio::spawn(async move {
             log::info!("tuic: server {}: serve begin", addr);
             tokio::pin!(relay);
-            match relay.await {
-                Ok(()) => log::info!("tuic: server {}: serve complete success", addr),
-                Err(err) => log::error!("tuic: server {}: serve complete error, {:?}", addr, err),
+
+            let wait_close = async move {
+                if let Some(close_notify) = close_notify {
+                    close_notify.notified().await
+                } else {
+                    future::pending().await
+                }
+            };
+
+            tokio::select! {
+                r = relay => {
+                    match r {
+                        Ok(()) => log::info!("tuic: server {}: serve complete success", addr),
+                        Err(err) => log::error!("tuic: server {}: serve complete error, {:?}", addr, err),
+                    }
+                }
+                _r = wait_close => {
+                    log::info!("tuic: server {}: serve closed by notify", addr);
+                }
             }
         });
         Ok(Runing { task, req_tx })
     }
 
-    pub async fn send_req(self: &Arc<Self>, req: Request) -> io::Result<()> {
+    pub async fn send_req(self: &Arc<Self>, req: Request, close_notify: Option<Arc<Notify>>) -> io::Result<()> {
         let left_req = self.tuic_try_send_req(req).await?;
         if left_req.is_none() {
             return Ok(());
         }
 
-        self.start_svr().await?;
+        self.start_svr(close_notify).await?;
 
         let left_req = self.tuic_try_send_req(left_req.unwrap()).await?;
         if left_req.is_none() {
@@ -96,7 +113,7 @@ impl Dispatcher {
         ))
     }
 
-    async fn start_svr(self: &Arc<Self>) -> io::Result<()> {
+    async fn start_svr(self: &Arc<Self>, close_notify: Option<Arc<Notify>>) -> io::Result<()> {
         let mut runing = self.runing.write().await;
 
         if let Some(runing) = (*runing).as_mut() {
@@ -109,7 +126,7 @@ impl Dispatcher {
         // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         // log::error!("tuic: server start: sleep end");
 
-        *runing = Some(self.clone().run().await?);
+        *runing = Some(self.clone().run(close_notify).await?);
 
         Ok(())
     }

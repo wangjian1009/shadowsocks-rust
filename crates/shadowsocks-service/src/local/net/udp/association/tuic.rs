@@ -1,5 +1,5 @@
 use super::*;
-use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::{mpsc::error::TrySendError, Notify};
 
 use crate::local::loadbalancing::ServerIdent;
 use crate::net::UDP_ASSOCIATION_SEND_CHANNEL_SIZE;
@@ -84,11 +84,16 @@ where
     pub async fn tuic_create_context(
         &self,
         server: &ServerIdent,
+        close_notify: Option<Arc<Notify>>,
         _tuic_cfg: &shadowsocks::config::TuicConfig,
     ) -> io::Result<MultiProtocolProxySocket> {
         let (relay_req, pkt_send_tx, pkt_recv_rx) = Request::new_associate(UDP_ASSOCIATION_SEND_CHANNEL_SIZE);
 
-        server.tuic_dispatcher().unwrap().send_req(relay_req).await?;
+        server
+            .tuic_dispatcher()
+            .unwrap()
+            .send_req(relay_req, close_notify)
+            .await?;
 
         Ok(MultiProtocolProxySocket::Tuic(TuicUdpContext {
             packet_sender: pkt_send_tx,
