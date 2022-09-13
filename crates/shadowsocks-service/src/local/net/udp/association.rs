@@ -20,7 +20,7 @@ use tokio::{sync::mpsc, task::JoinHandle, time};
 use shadowsocks::{
     config::ServerProtocol,
     lookup_then,
-    net::{AddrFamily, UdpSocket as ShadowUdpSocket},
+    net::{AddrFamily, FlowStat, UdpSocket as ShadowUdpSocket},
     relay::{
         udprelay::{options::UdpSocketControlData, ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
         Address,
@@ -434,6 +434,7 @@ where
         let mut proxied_buffer = Vec::new();
         let mut keepalive_interval = time::interval(Duration::from_secs(1));
         let close_notify = self.context.connection_close_notify();
+        let flow_state = self.context.flow_stat();
 
         let mut check_rate_limit_size: usize = 0;
 
@@ -490,7 +491,7 @@ where
                     self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut check_rate_limit_size).await;
                 }
 
-                received_opt = receive_from_proxied_opt(&mut self.proxied_socket, &self.peer_addr, &mut proxied_buffer), if check_rate_limit_size == 0 && self.proxied_socket.is_some() => {
+                received_opt = receive_from_proxied_opt(flow_state.as_ref(), &mut self.proxied_socket, &self.peer_addr, &mut proxied_buffer), if check_rate_limit_size == 0 && self.proxied_socket.is_some() => {
                     let (n, addr, control_opt) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -568,6 +569,7 @@ where
 
         #[inline]
         async fn receive_from_proxied_opt(
+            flow_stat: &FlowStat,
             socket: &mut Option<MultiProtocolProxySocket>,
             _peer_addr: &SocketAddr,
             buf: &mut Vec<u8>,
@@ -582,14 +584,22 @@ where
                     match socket {
                         MultiProtocolProxySocket::SS(ref s) => s.recv_with_ctrl(buf).await,
                         #[cfg(feature = "trojan")]
-                        MultiProtocolProxySocket::Trojan { ref mut r, .. } => trojan::trojan_receive_from(r, buf).await,
+                        MultiProtocolProxySocket::Trojan { ref mut r, .. } => {
+                            let (size, addr, control_data) = trojan::trojan_receive_from(r, buf).await?;
+                            flow_stat.incr_tx(size as u64);
+                            Ok((size, addr, control_data))
+                        }
                         #[cfg(feature = "vless")]
                         MultiProtocolProxySocket::Vless(ref mut context) => {
-                            context.vless_receive_from(_peer_addr, buf).await
+                            let (size, addr, control_data) = context.vless_receive_from(_peer_addr, buf).await?;
+                            flow_stat.incr_tx(size as u64);
+                            Ok((size, addr, control_data))
                         }
                         #[cfg(feature = "tuic")]
                         MultiProtocolProxySocket::Tuic(ref mut context) => {
-                            context.tuic_receive_from(_peer_addr, buf).await
+                            let (size, addr, control_data) = context.tuic_receive_from(_peer_addr, buf).await?;
+                            flow_stat.incr_tx(size as u64);
+                            Ok((size, addr, control_data))
                         }
                     }
                 }
@@ -844,15 +854,21 @@ where
             MultiProtocolProxySocket::SS(socket) => socket,
             #[cfg(feature = "trojan")]
             MultiProtocolProxySocket::Trojan { ref mut w, .. } => {
-                return trojan::trojan_send_to(w, target_addr, data).await;
+                trojan::trojan_send_to(w, target_addr, data).await?;
+                self.context.flow_stat().incr_tx(data.len() as u64);
+                return Ok(());
             }
             #[cfg(feature = "vless")]
             MultiProtocolProxySocket::Vless(ref mut context) => {
-                return context.vless_send_to(&self.peer_addr, target_addr, data).await;
+                context.vless_send_to(&self.peer_addr, target_addr, data).await?;
+                self.context.flow_stat().incr_tx(data.len() as u64);
+                return Ok(());
             }
             #[cfg(feature = "tuic")]
             MultiProtocolProxySocket::Tuic(ref mut context) => {
-                return context.tuic_try_send_to(&self.peer_addr, target_addr, data);
+                context.tuic_try_send_to(&self.peer_addr, target_addr, data)?;
+                self.context.flow_stat().incr_tx(data.len() as u64);
+                return Ok(());
             }
         };
 

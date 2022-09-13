@@ -114,7 +114,7 @@ impl ServerIdent {
             };
 
             let config_provider: tuic::ConfigProvider = {
-                let context = _context.clone();
+                let _context = _context.clone();
                 let tuic_config = tuic_config.clone();
                 Box::new(move || {
                     #[cfg(feature = "local-fake-mode")]
@@ -124,7 +124,7 @@ impl ServerIdent {
                     let mut effect_tuic_cfg = &tuic_config;
 
                     #[cfg(feature = "local-fake-mode")]
-                    if let Some(fake_cfg) = context.fake_mode().is_param_error_for_tuic(&tuic_config) {
+                    if let Some(fake_cfg) = _context.fake_mode().is_param_error_for_tuic(&tuic_config) {
                         _tuic_cfg_buf = Some(fake_cfg);
                         effect_tuic_cfg = _tuic_cfg_buf.as_ref().unwrap();
                     }
