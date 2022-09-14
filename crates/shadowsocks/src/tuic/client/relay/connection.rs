@@ -48,7 +48,6 @@ pub async fn manage_connection(
             wait_req.clone().await;
 
             // try to establish a new connection
-            log::debug!("xxxxxx: connect begin");
             let (new_conn, dg, uni) = match Connection::connect(context.as_ref(), &config, &connect_opts).await {
                 Ok(conn) => conn,
                 Err(err) => {
@@ -60,7 +59,6 @@ pub async fn manage_connection(
                     continue;
                 }
             };
-            log::debug!("xxxxxx: connect success");
 
             // renew the connection mutex
             // safety: the mutex must be locked before, so this container must have a lock guard inside

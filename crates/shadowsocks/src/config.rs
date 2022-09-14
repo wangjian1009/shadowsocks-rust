@@ -455,6 +455,14 @@ impl ServerConfig {
 
     pub fn set_idle_timeout(&mut self, idle_timeout: Duration) {
         self.idle_timeout = Some(idle_timeout);
+
+        #[cfg(feature = "tuic")]
+        if let ServerProtocol::Tuic(tuic_config) = &mut self.protocol {
+            match tuic_config {
+                TuicConfig::Client(_c) => {}
+                TuicConfig::Server((s, ..)) => s.max_idle_time = self.idle_timeout.unwrap().as_millis() as u32,
+            }
+        }
     }
 
     /// Create a new `ServerConfig`
@@ -509,6 +517,14 @@ impl ServerConfig {
     /// Set timeout
     pub fn set_timeout(&mut self, timeout: Duration) {
         self.timeout = Some(timeout);
+
+        #[cfg(feature = "tuic")]
+        if let ServerProtocol::Tuic(tuic_config) = &mut self.protocol {
+            match tuic_config {
+                TuicConfig::Client(_c) => {}
+                TuicConfig::Server((s, ..)) => s.authentication_timeout = self.timeout.unwrap().as_millis() as u64,
+            }
+        }
     }
 
     /// Timeout
