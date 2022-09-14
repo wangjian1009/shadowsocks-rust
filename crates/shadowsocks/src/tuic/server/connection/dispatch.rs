@@ -86,8 +86,15 @@ impl Connection {
                     let dst_addr = addr.to_string();
                     log::info!("[{rmt_addr}] [connect] [{dst_addr}]");
 
-                    let res =
-                        task::connect(self.server_policy.clone(), send, recv, addr, self.flow_state.clone()).await;
+                    let res = task::connect(
+                        self.server_policy.clone(),
+                        &rmt_addr,
+                        send,
+                        recv,
+                        addr,
+                        self.flow_state.clone(),
+                    )
+                    .await;
 
                     match res {
                         Ok(()) => {}

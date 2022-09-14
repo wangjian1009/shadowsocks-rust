@@ -108,7 +108,11 @@ impl UdpSession {
         src_addr: SocketAddr,
         udp_socket_creator: &Box<dyn ServerPolicy>,
     ) -> Result<Self, IoError> {
-        let socket = Arc::new(udp_socket_creator.create(assoc_id, src_addr.clone()).await?);
+        let socket = Arc::new(
+            udp_socket_creator
+                .create_outbound_udp_socket(assoc_id, src_addr.clone())
+                .await?,
+        );
         let (send_pkt_tx, send_pkt_rx) = mpsc::channel(1);
 
         tokio::spawn(async move {

@@ -1,6 +1,7 @@
 use super::super::super::protocol::{Address, Command};
 use super::udp::UdpSessionMap;
 use bytes::{Bytes, BytesMut};
+use cfg_if::cfg_if;
 use quinn::{
     Connection as QuinnConnection, ConnectionError, ReadExactError, RecvStream, SendDatagramError, SendStream,
     WriteError,
@@ -22,8 +23,12 @@ use tokio::{
 use super::super::ServerPolicy;
 use crate::{net::FlowStat, transport::MonTraffic};
 
+#[cfg(feature = "rate-limit")]
+use crate::transport::RateLimitedStream;
+
 pub async fn connect(
     server_policy: Arc<Box<dyn ServerPolicy>>,
+    rmt_addr: &SocketAddr,
     mut send: SendStream,
     recv: RecvStream,
     addr: Address,
@@ -36,6 +41,35 @@ pub async fn connect(
             io::ErrorKind::Other,
             format!("outbound {} blocked by ACL rules", addr),
         )));
+    }
+
+    if server_policy.connection_check_process_local(&addr) {
+        let flow_state_tx = flow_state.clone();
+
+        let send = MonTraffic::new(send, flow_state_tx, None);
+        let recv = MonTraffic::new(recv, None, flow_state);
+
+        cfg_if! {
+            if #[cfg(feature = "rate-limit")] {
+                let rate_limit = server_policy.create_connection_rate_limit()?.map(Arc::new);
+                let send =
+                    RateLimitedStream::from_stream(send, rate_limit.clone());
+                let recv =
+                    RateLimitedStream::from_stream(recv, rate_limit.clone());
+            }
+        }
+
+        server_policy
+            .connection_process_local(
+                rmt_addr,
+                addr,
+                Box::new(recv) as Box<dyn AsyncRead + Send + Unpin>,
+                Box::new(send) as Box<dyn AsyncWrite + Send + Unpin>,
+            )
+            .await
+            .map_err(|e| TaskError::Io(e))?;
+
+        return Ok(());
     }
 
     let addrs = match addr {
@@ -52,11 +86,27 @@ pub async fn connect(
         }
     }
 
+    #[allow(unused_mut)]
     if let Some(mut target) = target {
         let resp = Command::new_response(true);
         resp.write_to(&mut send).await?;
+
         let flow_state_tx = flow_state.clone();
+
+        #[allow(unused_mut)]
         let mut tunnel = MonTraffic::new(BiStream(send, recv), flow_state_tx, flow_state.clone());
+
+        cfg_if! {
+            if #[cfg(feature = "rate-limit")] {
+                let rate_limit = server_policy.create_connection_rate_limit()?.map(Arc::new);
+                let mut tunnel =
+                    RateLimitedStream::from_stream(tunnel, rate_limit.clone());
+
+                let mut target =
+                    RateLimitedStream::from_stream(target, rate_limit);
+            }
+        }
+
         io::copy_bidirectional(&mut target, &mut tunnel).await?;
     } else {
         let resp = Command::new_response(false);
