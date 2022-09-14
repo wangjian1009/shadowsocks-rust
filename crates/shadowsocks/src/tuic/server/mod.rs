@@ -1,7 +1,10 @@
-use std::{io, net::SocketAddr};
+use std::{io, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+
+use crate::net::FlowStat;
+
 mod certificate;
 mod config;
 mod connection;
@@ -19,6 +22,7 @@ pub trait UdpSocket: Sync + Send {
 }
 
 #[async_trait]
-pub trait UdpSocketCreator: Sync + Send {
+pub trait ServerPolicy: Sync + Send {
     async fn create(&self, assoc_id: u32, peer_addr: SocketAddr) -> io::Result<Box<dyn UdpSocket>>;
+    fn create_connection_flow_state(&self) -> Option<Arc<FlowStat>>;
 }

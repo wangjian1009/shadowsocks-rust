@@ -18,7 +18,14 @@ use tokio::{
     net::{self, TcpStream},
 };
 
-pub async fn connect(mut send: SendStream, recv: RecvStream, addr: Address) -> Result<(), TaskError> {
+use crate::{net::FlowStat, transport::MonTraffic};
+
+pub async fn connect(
+    mut send: SendStream,
+    recv: RecvStream,
+    addr: Address,
+    flow_state: Option<Arc<FlowStat>>,
+) -> Result<(), TaskError> {
     let mut target = None;
 
     let addrs = match addr {
@@ -38,7 +45,8 @@ pub async fn connect(mut send: SendStream, recv: RecvStream, addr: Address) -> R
     if let Some(mut target) = target {
         let resp = Command::new_response(true);
         resp.write_to(&mut send).await?;
-        let mut tunnel = BiStream(send, recv);
+        let flow_state_tx = flow_state.clone();
+        let mut tunnel = MonTraffic::new(BiStream(send, recv), flow_state_tx, flow_state.clone());
         io::copy_bidirectional(&mut target, &mut tunnel).await?;
     } else {
         let resp = Command::new_response(false);
@@ -56,12 +64,15 @@ pub async fn packet_from_uni_stream(
     len: u16,
     addr: Address,
     src_addr: SocketAddr,
+    flow_state: Option<Arc<FlowStat>>,
 ) -> Result<(), TaskError> {
     let mut buf = vec![0; len as usize];
     stream.read_exact(&mut buf).await?;
 
     let pkt = Bytes::from(buf);
     udp_sessions.send(assoc_id, pkt, addr, src_addr).await?;
+
+    flow_state.map(|f| f.incr_rx(len as u64));
 
     Ok(())
 }
@@ -72,8 +83,13 @@ pub async fn packet_from_datagram(
     assoc_id: u32,
     addr: Address,
     src_addr: SocketAddr,
+    flow_state: Option<Arc<FlowStat>>,
 ) -> Result<(), TaskError> {
+    let len = pkt.len();
     udp_sessions.send(assoc_id, pkt, addr, src_addr).await?;
+
+    flow_state.map(|f| f.incr_rx(len as u64));
+
     Ok(())
 }
 
@@ -82,6 +98,7 @@ pub async fn packet_to_uni_stream(
     assoc_id: u32,
     pkt: Bytes,
     addr: Address,
+    flow_state: Option<Arc<FlowStat>>,
 ) -> Result<(), TaskError> {
     let mut stream = conn.open_uni().await?;
 
@@ -89,6 +106,8 @@ pub async fn packet_to_uni_stream(
     cmd.write_to(&mut stream).await?;
     stream.write_all(&pkt).await?;
     stream.finish().await?;
+
+    flow_state.map(|f| f.incr_tx(pkt.len() as u64));
 
     Ok(())
 }
@@ -98,6 +117,7 @@ pub async fn packet_to_datagram(
     assoc_id: u32,
     pkt: Bytes,
     addr: Address,
+    flow_state: Option<Arc<FlowStat>>,
 ) -> Result<(), TaskError> {
     let cmd = Command::new_packet(assoc_id, pkt.len() as u16, addr);
 
@@ -106,7 +126,10 @@ pub async fn packet_to_datagram(
     buf.extend_from_slice(&pkt);
 
     let pkt = buf.freeze();
+    let len = pkt.len();
     conn.send_datagram(pkt)?;
+
+    flow_state.map(|f| f.incr_tx(len as u64));
 
     Ok(())
 }

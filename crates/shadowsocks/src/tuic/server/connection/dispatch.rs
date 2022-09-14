@@ -40,6 +40,7 @@ impl Connection {
                             len,
                             addr,
                             rmt_addr,
+                            self.flow_state.clone(),
                         )
                         .await;
 
@@ -84,7 +85,7 @@ impl Connection {
                     let dst_addr = addr.to_string();
                     log::info!("[{rmt_addr}] [connect] [{dst_addr}]");
 
-                    let res = task::connect(send, recv, addr).await;
+                    let res = task::connect(send, recv, addr, self.flow_state.clone()).await;
 
                     match res {
                         Ok(()) => {}
@@ -118,6 +119,7 @@ impl Connection {
                             assoc_id,
                             addr,
                             rmt_addr,
+                            self.flow_state.clone(),
                         )
                         .await;
 
@@ -153,7 +155,9 @@ impl Connection {
             UdpPacketSource::UniStream => {
                 log::debug!("[{rmt_addr}] [packet-to-quic] [{assoc_id}] [{dst_addr}]");
 
-                let res = task::packet_to_uni_stream(self.controller.clone(), assoc_id, pkt, addr).await;
+                let res =
+                    task::packet_to_uni_stream(self.controller.clone(), assoc_id, pkt, addr, self.flow_state.clone())
+                        .await;
 
                 match res {
                     Ok(()) => {}
@@ -165,7 +169,9 @@ impl Connection {
             UdpPacketSource::Datagram => {
                 log::debug!("[{rmt_addr}] [packet-to-native] [{assoc_id}] [{dst_addr}]");
 
-                let res = task::packet_to_datagram(self.controller.clone(), assoc_id, pkt, addr).await;
+                let res =
+                    task::packet_to_datagram(self.controller.clone(), assoc_id, pkt, addr, self.flow_state.clone())
+                        .await;
 
                 match res {
                     Ok(()) => {}

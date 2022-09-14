@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use super::*;
 
@@ -17,6 +17,21 @@ pub struct TuicUdpSocket {
 }
 
 impl TuicUdpSocket {
+    pub fn new(context: Arc<ServiceContext>, max_udp_packet_size: usize, peer_addr: SocketAddr, assoc_id: u32) -> Self {
+        let (socket_update_tx, socket_update_rx) = mpsc::channel(1);
+
+        Self {
+            context,
+            max_udp_packet_size,
+            peer_addr,
+            assoc_id,
+            outbound_ipv4_socket: spin::Mutex::new(None),
+            outbound_ipv6_socket: spin::Mutex::new(None),
+            socket_update_tx,
+            socket_update_rx: tokio::sync::Mutex::new(socket_update_rx),
+        }
+    }
+
     async fn send_to_sock_addr(&self, mut target_addr: SocketAddr, data: &[u8]) -> io::Result<()> {
         const UDP_SOCKET_SUPPORT_DUAL_STACK: bool = cfg!(any(
             target_os = "linux",
@@ -189,40 +204,6 @@ impl tuic::server::UdpSocket for TuicUdpSocket {
                 })
                 .map(|_| ())
             }
-        }
-    }
-}
-
-pub struct TuicUdpSocketCreator {
-    context: Arc<ServiceContext>,
-    max_udp_packet_size: usize,
-}
-
-#[async_trait]
-impl tuic::server::UdpSocketCreator for TuicUdpSocketCreator {
-    async fn create(&self, assoc_id: u32, peer_addr: SocketAddr) -> io::Result<Box<dyn tuic::server::UdpSocket>> {
-        let (socket_update_tx, socket_update_rx) = mpsc::channel(1);
-
-        let udp_socket = TuicUdpSocket {
-            context: self.context.clone(),
-            max_udp_packet_size: self.max_udp_packet_size,
-            peer_addr,
-            assoc_id,
-            outbound_ipv4_socket: spin::Mutex::new(None),
-            outbound_ipv6_socket: spin::Mutex::new(None),
-            socket_update_tx,
-            socket_update_rx: tokio::sync::Mutex::new(socket_update_rx),
-        };
-
-        Ok(Box::new(udp_socket) as Box<dyn tuic::server::UdpSocket>)
-    }
-}
-
-impl TuicUdpSocketCreator {
-    pub fn new(context: Arc<ServiceContext>, max_udp_packet_size: usize) -> Self {
-        Self {
-            context,
-            max_udp_packet_size,
         }
     }
 }

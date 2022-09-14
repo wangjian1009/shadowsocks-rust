@@ -17,7 +17,8 @@ use std::{
     time::Duration,
 };
 
-use super::UdpSocketCreator;
+use super::ServerPolicy;
+use crate::net::FlowStat;
 
 mod authenticate;
 mod dispatch;
@@ -31,6 +32,7 @@ pub struct Connection {
     udp_sessions: Arc<UdpSessionMap>,
     token: Arc<HashSet<[u8; 32]>>,
     is_authenticated: IsAuthenticated,
+    flow_state: Option<Arc<FlowStat>>,
 }
 
 impl Connection {
@@ -38,7 +40,7 @@ impl Connection {
         conn: Connecting,
         token: Arc<HashSet<[u8; 32]>>,
         auth_timeout: Duration,
-        udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
+        server_policy: Arc<Box<dyn ServerPolicy>>,
     ) {
         let rmt_addr = conn.remote_address();
 
@@ -60,7 +62,7 @@ impl Connection {
 
         log::info!("[{rmt_addr}] [establish]");
 
-        let (udp_sessions, mut recv_pkt_rx) = UdpSessionMap::new(udp_socket_creator);
+        let (udp_sessions, mut recv_pkt_rx) = UdpSessionMap::new(server_policy.clone());
         let is_closed = IsClosed::new();
         let is_authed = IsAuthenticated::new(is_closed.clone());
 
@@ -70,6 +72,7 @@ impl Connection {
             udp_sessions: Arc::new(udp_sessions),
             token,
             is_authenticated: is_authed,
+            flow_state: server_policy.create_connection_flow_state(),
         };
 
         let mut is_authed = false;
