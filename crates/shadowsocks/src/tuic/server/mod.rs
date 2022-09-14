@@ -25,4 +25,7 @@ pub trait UdpSocket: Sync + Send {
 pub trait ServerPolicy: Sync + Send {
     async fn create(&self, assoc_id: u32, peer_addr: SocketAddr) -> io::Result<Box<dyn UdpSocket>>;
     fn create_connection_flow_state(&self) -> Option<Arc<FlowStat>>;
+
+    async fn check_outbound_blocked(&self, addr: &Address) -> bool;
+    fn check_client_blocked(&self, addr: &SocketAddr) -> bool;
 }

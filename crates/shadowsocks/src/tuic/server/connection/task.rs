@@ -5,6 +5,7 @@ use quinn::{
     Connection as QuinnConnection, ConnectionError, ReadExactError, RecvStream, SendDatagramError, SendStream,
     WriteError,
 };
+
 use std::{
     io::{Error as IoError, IoSlice},
     net::SocketAddr,
@@ -18,15 +19,24 @@ use tokio::{
     net::{self, TcpStream},
 };
 
+use super::super::ServerPolicy;
 use crate::{net::FlowStat, transport::MonTraffic};
 
 pub async fn connect(
+    server_policy: Arc<Box<dyn ServerPolicy>>,
     mut send: SendStream,
     recv: RecvStream,
     addr: Address,
     flow_state: Option<Arc<FlowStat>>,
 ) -> Result<(), TaskError> {
     let mut target = None;
+
+    if server_policy.check_outbound_blocked(&addr).await {
+        return Err(TaskError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("outbound {} blocked by ACL rules", addr),
+        )));
+    }
 
     let addrs = match addr {
         Address::SocketAddress(addr) => Ok(vec![addr]),
@@ -58,6 +68,7 @@ pub async fn connect(
 }
 
 pub async fn packet_from_uni_stream(
+    server_policy: Arc<Box<dyn ServerPolicy>>,
     mut stream: RecvStream,
     udp_sessions: Arc<UdpSessionMap>,
     assoc_id: u32,
@@ -69,6 +80,13 @@ pub async fn packet_from_uni_stream(
     let mut buf = vec![0; len as usize];
     stream.read_exact(&mut buf).await?;
 
+    if server_policy.check_outbound_blocked(&addr).await {
+        return Err(TaskError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("outbound {} blocked by ACL rules", addr),
+        )));
+    }
+
     let pkt = Bytes::from(buf);
     udp_sessions.send(assoc_id, pkt, addr, src_addr).await?;
 
@@ -78,6 +96,7 @@ pub async fn packet_from_uni_stream(
 }
 
 pub async fn packet_from_datagram(
+    server_policy: Arc<Box<dyn ServerPolicy>>,
     pkt: Bytes,
     udp_sessions: Arc<UdpSessionMap>,
     assoc_id: u32,
@@ -85,6 +104,13 @@ pub async fn packet_from_datagram(
     src_addr: SocketAddr,
     flow_state: Option<Arc<FlowStat>>,
 ) -> Result<(), TaskError> {
+    if server_policy.check_outbound_blocked(&addr).await {
+        return Err(TaskError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("outbound {} blocked by ACL rules", addr),
+        )));
+    }
+
     let len = pkt.len();
     udp_sessions.send(assoc_id, pkt, addr, src_addr).await?;
 

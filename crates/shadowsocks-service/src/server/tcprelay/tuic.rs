@@ -26,6 +26,18 @@ impl tuic::server::ServerPolicy for TuicServerPolicy {
     fn create_connection_flow_state(&self) -> Option<Arc<FlowStat>> {
         Some(self.context.flow_stat())
     }
+
+    async fn check_outbound_blocked(&self, addr: &tuic::server::Address) -> bool {
+        let addr = match addr.clone() {
+            tuic::server::Address::DomainAddress(h, p) => shadowsocks::relay::Address::DomainNameAddress(h, p),
+            tuic::server::Address::SocketAddress(a) => shadowsocks::relay::Address::SocketAddress(a),
+        };
+        self.context.check_outbound_blocked(&addr).await
+    }
+
+    fn check_client_blocked(&self, addr: &SocketAddr) -> bool {
+        self.context.check_client_blocked(addr)
+    }
 }
 
 impl TuicServerPolicy {

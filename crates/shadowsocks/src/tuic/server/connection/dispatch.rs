@@ -34,6 +34,7 @@ impl Connection {
                         log::debug!("[{rmt_addr}] [packet-from-quic] [{assoc_id}] [{dst_addr}]");
 
                         let res = task::packet_from_uni_stream(
+                            self.server_policy.clone(),
                             stream,
                             self.udp_sessions.clone(),
                             assoc_id,
@@ -85,7 +86,8 @@ impl Connection {
                     let dst_addr = addr.to_string();
                     log::info!("[{rmt_addr}] [connect] [{dst_addr}]");
 
-                    let res = task::connect(send, recv, addr, self.flow_state.clone()).await;
+                    let res =
+                        task::connect(self.server_policy.clone(), send, recv, addr, self.flow_state.clone()).await;
 
                     match res {
                         Ok(()) => {}
@@ -114,6 +116,7 @@ impl Connection {
                         log::debug!("[{rmt_addr}] [packet-from-native] [{assoc_id}] [{dst_addr}]");
 
                         let res = task::packet_from_datagram(
+                            self.server_policy.clone(),
                             datagram.slice(cmd_len..),
                             self.udp_sessions.clone(),
                             assoc_id,

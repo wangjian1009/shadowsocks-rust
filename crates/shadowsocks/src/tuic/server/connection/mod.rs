@@ -32,6 +32,7 @@ pub struct Connection {
     udp_sessions: Arc<UdpSessionMap>,
     token: Arc<HashSet<[u8; 32]>>,
     is_authenticated: IsAuthenticated,
+    server_policy: Arc<Box<dyn ServerPolicy>>,
     flow_state: Option<Arc<FlowStat>>,
 }
 
@@ -43,6 +44,10 @@ impl Connection {
         server_policy: Arc<Box<dyn ServerPolicy>>,
     ) {
         let rmt_addr = conn.remote_address();
+        if server_policy.check_client_blocked(&rmt_addr) {
+            log::error!("[{rmt_addr}] [connecting] client blocked");
+            return;
+        }
 
         let (connection, mut uni_streams, mut bi_streams, mut datagrams) = match conn.await {
             Ok(NewConnection {
@@ -66,13 +71,15 @@ impl Connection {
         let is_closed = IsClosed::new();
         let is_authed = IsAuthenticated::new(is_closed.clone());
 
+        let flow_state = server_policy.create_connection_flow_state();
         let conn = Self {
             controller: connection,
             udp_packet_from: UdpPacketFrom::new(),
             udp_sessions: Arc::new(udp_sessions),
             token,
             is_authenticated: is_authed,
-            flow_state: server_policy.create_connection_flow_state(),
+            server_policy,
+            flow_state,
         };
 
         let mut is_authed = false;
