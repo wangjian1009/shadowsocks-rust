@@ -20,7 +20,7 @@ use tokio::{sync::mpsc, task::JoinHandle, time};
 use shadowsocks::{
     config::ServerProtocol,
     lookup_then,
-    net::{AddrFamily, FlowStat, UdpSocket as ShadowUdpSocket},
+    net::{AddrFamily, UdpSocket as ShadowUdpSocket},
     relay::{
         udprelay::{options::UdpSocketControlData, ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
         Address,
@@ -32,8 +32,7 @@ use shadowsocks::{
 use crate::{
     local::{context::ServiceContext, loadbalancing::PingBalancer},
     net::{
-        packet_window::PacketWindowFilter, MonProxySocket, UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE,
-        UDP_ASSOCIATION_SEND_CHANNEL_SIZE,
+        packet_window::PacketWindowFilter, UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE, UDP_ASSOCIATION_SEND_CHANNEL_SIZE,
     },
 };
 
@@ -266,7 +265,7 @@ impl ServerSessionContext {
 }
 
 enum MultiProtocolProxySocket {
-    SS(MonProxySocket),
+    SS(ProxySocket),
     #[cfg(feature = "trojan")]
     Trojan {
         r: trojan::TrojanUdpReader,
@@ -491,7 +490,7 @@ where
                     self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut check_rate_limit_size).await;
                 }
 
-                received_opt = receive_from_proxied_opt(flow_state.as_ref(), &mut self.proxied_socket, &self.peer_addr, &mut proxied_buffer), if check_rate_limit_size == 0 && self.proxied_socket.is_some() => {
+                received_opt = receive_from_proxied_opt(&mut self.proxied_socket, &self.peer_addr, &mut proxied_buffer), if check_rate_limit_size == 0 && self.proxied_socket.is_some() => {
                     let (n, addr, control_opt) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -501,6 +500,7 @@ where
                             continue;
                         }
                     };
+                    flow_state.incr_rx(n as u64);
 
                     if let Some(control) = control_opt {
                         // Check if Packet ID is in the window
@@ -569,7 +569,6 @@ where
 
         #[inline]
         async fn receive_from_proxied_opt(
-            flow_stat: &FlowStat,
             socket: &mut Option<MultiProtocolProxySocket>,
             _peer_addr: &SocketAddr,
             buf: &mut Vec<u8>,
@@ -582,24 +581,19 @@ where
                     }
 
                     match socket {
-                        MultiProtocolProxySocket::SS(ref s) => s.recv_with_ctrl(buf).await,
-                        #[cfg(feature = "trojan")]
-                        MultiProtocolProxySocket::Trojan { ref mut r, .. } => {
-                            let (size, addr, control_data) = trojan::trojan_receive_from(r, buf).await?;
-                            flow_stat.incr_tx(size as u64);
+                        MultiProtocolProxySocket::SS(ref s) => {
+                            let (size, addr, _recv_size, control_data) = s.recv_with_ctrl(buf).await?;
                             Ok((size, addr, control_data))
                         }
+                        #[cfg(feature = "trojan")]
+                        MultiProtocolProxySocket::Trojan { ref mut r, .. } => trojan::trojan_receive_from(r, buf).await,
                         #[cfg(feature = "vless")]
                         MultiProtocolProxySocket::Vless(ref mut context) => {
-                            let (size, addr, control_data) = context.vless_receive_from(_peer_addr, buf).await?;
-                            flow_stat.incr_tx(size as u64);
-                            Ok((size, addr, control_data))
+                            context.vless_receive_from(_peer_addr, buf).await
                         }
                         #[cfg(feature = "tuic")]
                         MultiProtocolProxySocket::Tuic(ref mut context) => {
-                            let (size, addr, control_data) = context.tuic_receive_from(_peer_addr, buf).await?;
-                            flow_stat.incr_tx(size as u64);
-                            Ok((size, addr, control_data))
+                            context.tuic_receive_from(_peer_addr, buf).await
                         }
                     }
                 }
@@ -803,7 +797,6 @@ where
                             self.context.connect_opts_ref(),
                         )
                         .await?;
-                        let socket = MonProxySocket::from_socket(socket, self.context.flow_stat());
 
                         self.proxied_socket.insert(MultiProtocolProxySocket::SS(socket))
                     }
@@ -891,7 +884,10 @@ where
         control.packet_id = self.client_packet_id;
 
         match socket.send_with_ctrl(target_addr, &control, data).await {
-            Ok(..) => return Ok(()),
+            Ok(..) => {
+                self.context.flow_stat().incr_tx(data.len() as u64);
+                return Ok(());
+            }
             Err(err) => {
                 debug!(
                     "{} -> {} (proxied) sending {} bytes failed, error: {}",
