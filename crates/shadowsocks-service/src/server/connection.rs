@@ -221,34 +221,31 @@ impl ConnectionStat {
         result
     }
 
-    pub fn add_out_connection(&self) -> OutConnectionGuard<'_> {
+    pub fn add_out_connection(self: Arc<ConnectionStat>) -> OutConnectionGuard {
         self.out_conn_count.fetch_add(1, Ordering::AcqRel);
         OutConnectionGuard::new(self)
     }
-
-    #[cfg(feature = "server-limit")]
-    pub fn check_and_add_in_count_by_ip(&self) {}
 }
 
-pub struct OutConnectionGuard<'a> {
-    stat: &'a ConnectionStat,
+pub struct OutConnectionGuard {
+    stat: Arc<ConnectionStat>,
 }
 
-impl<'a> Drop for OutConnectionGuard<'a> {
+impl Drop for OutConnectionGuard {
     fn drop(&mut self) {
         self.stat.out_conn_count.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
-impl<'a> OutConnectionGuard<'a> {
-    pub fn new(stat: &'a ConnectionStat) -> OutConnectionGuard {
+impl OutConnectionGuard {
+    pub fn new(stat: Arc<ConnectionStat>) -> OutConnectionGuard {
         OutConnectionGuard { stat }
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use super::ConnectionStat;
+    use super::*;
 
     #[tokio::test]
     pub async fn in_conn_guard() {
@@ -272,9 +269,9 @@ pub mod tests {
 
     #[test]
     pub fn out_conn_guard() {
-        let conn_stat = ConnectionStat::default();
+        let conn_stat = Arc::new(ConnectionStat::default());
         {
-            let _guard = conn_stat.add_out_connection();
+            let _guard = conn_stat.clone().add_out_connection();
             assert_eq!(1, conn_stat.count());
         }
         assert_eq!(0, conn_stat.count());

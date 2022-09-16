@@ -1,12 +1,16 @@
-use super::{connection::Connection, ServerPolicy};
 use quinn::{Endpoint, Incoming, ServerConfig};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::{collections::HashSet, io::Result, sync::Arc, time::Duration};
+
+use crate::policy::ServerPolicy;
+
+use super::{connection::Connection, UdpSocketCreator};
 
 pub struct Server {
     incoming: Incoming,
     token: Arc<HashSet<[u8; 32]>>,
     authentication_timeout: Duration,
+    udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
     policy: Arc<Box<dyn ServerPolicy>>,
 }
 
@@ -16,7 +20,8 @@ impl Server {
         socket: std::net::UdpSocket,
         token: HashSet<[u8; 32]>,
         auth_timeout: Duration,
-        policy: Box<dyn ServerPolicy>,
+        udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
+        policy: Arc<Box<dyn ServerPolicy>>,
     ) -> Result<Self> {
         let (endpoint, incoming) = Endpoint::server(
             config,
@@ -31,7 +36,8 @@ impl Server {
             incoming,
             token: Arc::new(token),
             authentication_timeout: auth_timeout,
-            policy: Arc::new(policy),
+            udp_socket_creator,
+            policy,
         })
     }
 
@@ -42,6 +48,7 @@ impl Server {
                 conn,
                 token,
                 self.authentication_timeout,
+                self.udp_socket_creator.clone(),
                 self.policy.clone(),
             ));
         }

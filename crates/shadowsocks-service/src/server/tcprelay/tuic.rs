@@ -1,117 +1,29 @@
 use super::*;
-use cfg_if::cfg_if;
 
 use async_trait::async_trait;
-use shadowsocks::{
-    config::TuicConfig,
-    lookup_then,
-    net::{sys::create_inbound_udp_socket, FlowStat},
-    tuic,
-};
+use shadowsocks::{config::TuicConfig, lookup_then, net::sys::create_inbound_udp_socket, tuic};
 
 use super::super::udprelay::tuic::TuicUdpSocket;
+use crate::server::policy::ServerPolicy;
 
-pub struct TuicServerPolicy {
+pub struct TuicUdpCreator {
     context: Arc<ServiceContext>,
     max_udp_packet_size: usize,
 }
 
 #[async_trait]
-impl tuic::server::ServerPolicy for TuicServerPolicy {
+impl tuic::server::UdpSocketCreator for TuicUdpCreator {
     async fn create_outbound_udp_socket(
         &self,
         assoc_id: u32,
         peer_addr: SocketAddr,
     ) -> io::Result<Box<dyn tuic::server::UdpSocket>> {
         let udp_socket = TuicUdpSocket::new(self.context.clone(), self.max_udp_packet_size, peer_addr, assoc_id);
-
         Ok(Box::new(udp_socket) as Box<dyn tuic::server::UdpSocket>)
-    }
-
-    fn create_connection_flow_state(&self) -> Option<Arc<FlowStat>> {
-        Some(self.context.flow_stat())
-    }
-
-    fn connection_check_process_local(&self, target_addr: &tuic::server::Address) -> bool {
-        cfg_if! {
-            if #[cfg(feature = "server-mock")] {
-                let target_addr = match target_addr.clone() {
-                    tuic::server::Address::DomainAddress(h, p) => shadowsocks::relay::Address::DomainNameAddress(h, p),
-                    tuic::server::Address::SocketAddress(a) => shadowsocks::relay::Address::SocketAddress(a),
-                };
-
-                match self.context.mock_server_protocol(&target_addr) {
-                    Some(protocol) => match protocol {
-                        ServerMockProtocol::DNS => return true
-                    },
-                    None => {}
-                }
-            }
-        }
-
-        false
-    }
-
-    async fn connection_process_local(
-        &self,
-        peer_addr: &SocketAddr,
-        target_addr: tuic::server::Address,
-        mut r: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
-        mut w: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
-    ) -> io::Result<()> {
-        cfg_if! {
-            if #[cfg(feature = "server-mock")] {
-                let target_addr = match target_addr {
-                    tuic::server::Address::DomainAddress(h, p) => shadowsocks::relay::Address::DomainNameAddress(h, p),
-                    tuic::server::Address::SocketAddress(a) => shadowsocks::relay::Address::SocketAddress(a),
-                };
-
-                match self.context.mock_server_protocol(&target_addr) {
-                    Some(protocol) => match protocol {
-                        ServerMockProtocol::DNS => {
-                            run_dns_tcp_stream(
-                                self.context.dns_resolver(),
-                                peer_addr,
-                                &target_addr,
-                                &mut r,
-                                &mut w,
-                            )
-                                .await?;
-                            return Ok(());
-                        }
-                    },
-                    None => {}
-                }
-            }
-        }
-
-        unreachable!()
-    }
-
-    #[cfg(feature = "rate-limit")]
-    fn create_connection_rate_limit(&self) -> std::io::Result<Option<shadowsocks::transport::RateLimiter>> {
-        match self.context.connection_bound_width() {
-            Some(bound_width) => Ok(Some(shadowsocks::transport::RateLimiter::new(Some(
-                bound_width.clone(),
-            ))?)),
-            None => Ok(None),
-        }
-    }
-
-    async fn check_outbound_blocked(&self, addr: &tuic::server::Address) -> bool {
-        let addr = match addr.clone() {
-            tuic::server::Address::DomainAddress(h, p) => shadowsocks::relay::Address::DomainNameAddress(h, p),
-            tuic::server::Address::SocketAddress(a) => shadowsocks::relay::Address::SocketAddress(a),
-        };
-        self.context.check_outbound_blocked(&addr).await
-    }
-
-    fn check_client_blocked(&self, addr: &SocketAddr) -> bool {
-        self.context.check_client_blocked(addr)
     }
 }
 
-impl TuicServerPolicy {
+impl TuicUdpCreator {
     pub fn new(context: Arc<ServiceContext>, max_udp_packet_size: usize) -> Self {
         Self {
             context,
@@ -154,10 +66,11 @@ impl TcpServer {
             socket.into_std()?,
             runtime_cfg.token,
             runtime_cfg.authentication_timeout,
-            Box::new(TuicServerPolicy::new(
+            Arc::new(Box::new(TuicUdpCreator::new(
                 self.context.clone(),
                 runtime_cfg.max_udp_relay_packet_size,
-            )),
+            ))),
+            Arc::new(Box::new(ServerPolicy::new(self.context.clone(), svr_cfg.timeout()))),
         )?;
 
         info!("{} server listening on {}", svr_cfg.protocol().name(), svr_cfg.addr());

@@ -98,7 +98,7 @@ impl<T: AsyncWrite> AsyncWrite for MonTraffic<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write(cx, buf));
         if let Ok(n) = r {
-            this.tx.as_ref().map(|tx| tx.incr_rx(n as u64));
+            this.tx.as_ref().map(|tx| tx.incr_tx(n as u64));
         }
         Poll::Ready(r)
     }
@@ -121,7 +121,7 @@ impl<T: AsyncWrite> AsyncWrite for MonTraffic<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write_vectored(cx, bufs));
         if let Ok(n) = r {
-            this.tx.as_ref().map(|tx| tx.incr_rx(n as u64));
+            this.tx.as_ref().map(|tx| tx.incr_tx(n as u64));
         }
         Poll::Ready(r)
     }

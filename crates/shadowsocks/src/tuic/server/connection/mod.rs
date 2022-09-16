@@ -17,8 +17,8 @@ use std::{
     time::Duration,
 };
 
-use super::ServerPolicy;
-use crate::net::FlowStat;
+use super::UdpSocketCreator;
+use crate::{net::FlowStat, policy::ServerPolicy};
 
 mod authenticate;
 mod dispatch;
@@ -41,14 +41,10 @@ impl Connection {
         conn: Connecting,
         token: Arc<HashSet<[u8; 32]>>,
         auth_timeout: Duration,
+        udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
         server_policy: Arc<Box<dyn ServerPolicy>>,
     ) {
         let rmt_addr = conn.remote_address();
-        if server_policy.check_client_blocked(&rmt_addr) {
-            log::error!("[{rmt_addr}] [connecting] client blocked");
-            return;
-        }
-
         let (connection, mut uni_streams, mut bi_streams, mut datagrams) = match conn.await {
             Ok(NewConnection {
                 connection,
@@ -67,7 +63,7 @@ impl Connection {
 
         log::info!("[{rmt_addr}] [establish]");
 
-        let (udp_sessions, mut recv_pkt_rx) = UdpSessionMap::new(server_policy.clone());
+        let (udp_sessions, mut recv_pkt_rx) = UdpSessionMap::new(udp_socket_creator.clone());
         let is_closed = IsClosed::new();
         let is_authed = IsAuthenticated::new(is_closed.clone());
 

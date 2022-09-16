@@ -35,6 +35,7 @@ pub mod dns_resolver;
 pub mod manager;
 pub mod net;
 pub mod plugin;
+pub mod policy;
 pub mod relay;
 mod security;
 pub mod timeout;

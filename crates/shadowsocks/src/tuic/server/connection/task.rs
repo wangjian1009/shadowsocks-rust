@@ -15,13 +15,13 @@ use std::{
     task::{Context, Poll},
 };
 use thiserror::Error;
-use tokio::{
-    io::{self, AsyncRead, AsyncWrite, ReadBuf},
-    net::{self, TcpStream},
-};
+use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 
-use super::super::ServerPolicy;
-use crate::{net::FlowStat, transport::MonTraffic};
+use crate::{
+    net::FlowStat,
+    policy::{PacketAction, ServerPolicy, StreamAction},
+    transport::MonTraffic,
+};
 
 #[cfg(feature = "rate-limit")]
 use crate::transport::RateLimitedStream;
@@ -34,87 +34,83 @@ pub async fn connect(
     addr: Address,
     flow_state: Option<Arc<FlowStat>>,
 ) -> Result<(), TaskError> {
-    let mut target = None;
-
-    if server_policy.check_outbound_blocked(&addr).await {
-        return Err(TaskError::Io(io::Error::new(
-            io::ErrorKind::Other,
-            format!("outbound {} blocked by ACL rules", addr),
-        )));
-    }
-
-    if server_policy.connection_check_process_local(&addr) {
-        let flow_state_tx = flow_state.clone();
-
-        let send = MonTraffic::new(send, flow_state_tx, None);
-        let recv = MonTraffic::new(recv, None, flow_state);
-
-        cfg_if! {
-            if #[cfg(feature = "rate-limit")] {
-                let rate_limit = server_policy.create_connection_rate_limit()?.map(Arc::new);
-                let send =
-                    RateLimitedStream::from_stream(send, rate_limit.clone());
-                let recv =
-                    RateLimitedStream::from_stream(recv, rate_limit.clone());
-            }
-        }
-
-        server_policy
-            .connection_process_local(
-                rmt_addr,
-                addr,
-                Box::new(recv) as Box<dyn AsyncRead + Send + Unpin>,
-                Box::new(send) as Box<dyn AsyncWrite + Send + Unpin>,
-            )
-            .await
-            .map_err(|e| TaskError::Io(e))?;
-
-        return Ok(());
-    }
-
-    let addrs = match addr {
-        Address::SocketAddress(addr) => Ok(vec![addr]),
-        Address::DomainAddress(domain, port) => {
-            net::lookup_host((domain.as_str(), port)).await.map(|res| res.collect())
-        }
-    }?;
-
-    for addr in addrs {
-        if let Ok(target_stream) = TcpStream::connect(addr).await {
-            target = Some(target_stream);
-            break;
-        }
-    }
-
-    #[allow(unused_mut)]
-    if let Some(mut target) = target {
-        let resp = Command::new_response(true);
-        resp.write_to(&mut send).await?;
-
-        let flow_state_tx = flow_state.clone();
-
-        #[allow(unused_mut)]
-        let mut tunnel = MonTraffic::new(BiStream(send, recv), flow_state_tx, flow_state.clone());
-
-        cfg_if! {
-            if #[cfg(feature = "rate-limit")] {
-                let rate_limit = server_policy.create_connection_rate_limit()?.map(Arc::new);
-                let mut tunnel =
-                    RateLimitedStream::from_stream(tunnel, rate_limit.clone());
-
-                let mut target =
-                    RateLimitedStream::from_stream(target, rate_limit);
-            }
-        }
-
-        io::copy_bidirectional(&mut target, &mut tunnel).await?;
-    } else {
-        let resp = Command::new_response(false);
-        resp.write_to(&mut send).await?;
-        send.finish().await?;
+    let addr2 = match addr.clone() {
+        Address::DomainAddress(h, p) => crate::relay::Address::DomainNameAddress(h, p),
+        Address::SocketAddress(s) => crate::relay::Address::SocketAddress(s),
     };
 
-    Ok(())
+    match server_policy.stream_check(rmt_addr, &addr2).await? {
+        StreamAction::ClientBlocked => Err(TaskError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("client {} blocked by ACL rules", rmt_addr),
+        ))),
+        StreamAction::OutboundBlocked => Err(TaskError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("outbound {} blocked by ACL rules", addr),
+        ))),
+        StreamAction::ConnectionLimited => Err(TaskError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("client {} blocked by count limit", addr),
+        ))),
+        StreamAction::Remote {
+            connection_guard: _,
+            #[cfg(feature = "rate-limit")]
+            rate_limit,
+        } => {
+            #[allow(unused_mut)]
+            let (mut target, _guard) = match server_policy.create_out_connection(&addr2).await {
+                Ok(s) => {
+                    let resp = Command::new_response(true);
+                    resp.write_to(&mut send).await?;
+                    s
+                }
+                Err(err) => {
+                    let resp = Command::new_response(false);
+                    resp.write_to(&mut send).await?;
+                    send.finish().await?;
+                    return Err(TaskError::Io(err));
+                }
+            };
+
+            let flow_state_tx = flow_state.clone();
+
+            #[allow(unused_mut)]
+            let mut tunnel = MonTraffic::new(BiStream(send, recv), flow_state_tx, flow_state.clone());
+
+            cfg_if! {
+                if #[cfg(feature = "rate-limit")] {
+                    let mut tunnel =
+                        RateLimitedStream::from_stream(tunnel, rate_limit.clone());
+
+                    let mut target =
+                        RateLimitedStream::from_stream(target, rate_limit);
+                }
+            }
+
+            io::copy_bidirectional(&mut target, &mut tunnel).await?;
+
+            Ok(())
+        }
+        StreamAction::Local { processor } => {
+            let resp = Command::new_response(true);
+            resp.write_to(&mut send).await?;
+
+            let flow_state_tx = flow_state.clone();
+            let flow_state_rx = flow_state;
+            let send = MonTraffic::new(send, flow_state_tx, None);
+            let recv = MonTraffic::new(recv, None, flow_state_rx);
+
+            processor
+                .process(
+                    Box::new(recv) as Box<dyn AsyncRead + Send + Unpin>,
+                    Box::new(send) as Box<dyn AsyncWrite + Send + Unpin>,
+                )
+                .await
+                .map_err(|e| TaskError::Io(e))?;
+
+            Ok(())
+        }
+    }
 }
 
 pub async fn packet_from_uni_stream(
@@ -130,19 +126,29 @@ pub async fn packet_from_uni_stream(
     let mut buf = vec![0; len as usize];
     stream.read_exact(&mut buf).await?;
 
-    if server_policy.check_outbound_blocked(&addr).await {
-        return Err(TaskError::Io(io::Error::new(
+    let addr2 = match addr.clone() {
+        Address::DomainAddress(h, p) => crate::relay::Address::DomainNameAddress(h, p),
+        Address::SocketAddress(s) => crate::relay::Address::SocketAddress(s),
+    };
+
+    match server_policy.packet_check(&src_addr, &addr2).await? {
+        PacketAction::ClientBlocked => Err(TaskError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("client {} blocked by ACL rules", src_addr),
+        ))),
+        PacketAction::OutboundBlocked => Err(TaskError::Io(io::Error::new(
             io::ErrorKind::Other,
             format!("outbound {} blocked by ACL rules", addr),
-        )));
+        ))),
+        PacketAction::Remote => {
+            let pkt = Bytes::from(buf);
+            udp_sessions.send(assoc_id, pkt, addr, src_addr).await?;
+
+            flow_state.map(|f| f.incr_rx(len as u64));
+
+            Ok(())
+        }
     }
-
-    let pkt = Bytes::from(buf);
-    udp_sessions.send(assoc_id, pkt, addr, src_addr).await?;
-
-    flow_state.map(|f| f.incr_rx(len as u64));
-
-    Ok(())
 }
 
 pub async fn packet_from_datagram(
@@ -154,19 +160,29 @@ pub async fn packet_from_datagram(
     src_addr: SocketAddr,
     flow_state: Option<Arc<FlowStat>>,
 ) -> Result<(), TaskError> {
-    if server_policy.check_outbound_blocked(&addr).await {
-        return Err(TaskError::Io(io::Error::new(
+    let addr2 = match addr.clone() {
+        Address::DomainAddress(h, p) => crate::relay::Address::DomainNameAddress(h, p),
+        Address::SocketAddress(s) => crate::relay::Address::SocketAddress(s),
+    };
+
+    match server_policy.packet_check(&src_addr, &addr2).await? {
+        PacketAction::ClientBlocked => Err(TaskError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            format!("client {} blocked by ACL rules", src_addr),
+        ))),
+        PacketAction::OutboundBlocked => Err(TaskError::Io(io::Error::new(
             io::ErrorKind::Other,
             format!("outbound {} blocked by ACL rules", addr),
-        )));
+        ))),
+        PacketAction::Remote => {
+            let len = pkt.len();
+            udp_sessions.send(assoc_id, pkt, addr, src_addr).await?;
+
+            flow_state.map(|f| f.incr_rx(len as u64));
+
+            Ok(())
+        }
     }
-
-    let len = pkt.len();
-    udp_sessions.send(assoc_id, pkt, addr, src_addr).await?;
-
-    flow_state.map(|f| f.incr_rx(len as u64));
-
-    Ok(())
 }
 
 pub async fn packet_to_uni_stream(

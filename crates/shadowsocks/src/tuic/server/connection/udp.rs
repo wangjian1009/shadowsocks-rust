@@ -6,7 +6,7 @@ use std::{collections::HashMap, io::Error as IoError, net::SocketAddr, sync::Arc
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use super::super::super::protocol::Address;
-use super::super::{ServerPolicy, UdpSocket};
+use super::super::{UdpSocket, UdpSocketCreator};
 
 #[derive(Clone)]
 pub struct UdpPacketFrom(Arc<AtomicCell<Option<UdpPacketSource>>>);
@@ -47,11 +47,11 @@ pub type RecvPacketReceiver = Receiver<(u32, Bytes, Address)>;
 pub struct UdpSessionMap {
     map: Mutex<HashMap<u32, UdpSession>>,
     recv_pkt_tx_for_clone: RecvPacketSender,
-    udp_socket_creator: Arc<Box<dyn ServerPolicy>>,
+    udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
 }
 
 impl UdpSessionMap {
-    pub fn new(udp_socket_creator: Arc<Box<dyn ServerPolicy>>) -> (Self, RecvPacketReceiver) {
+    pub fn new(udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>) -> (Self, RecvPacketReceiver) {
         let (recv_pkt_tx, recv_pkt_rx) = mpsc::channel(1);
 
         (
@@ -106,7 +106,7 @@ impl UdpSession {
         assoc_id: u32,
         recv_pkt_tx: RecvPacketSender,
         src_addr: SocketAddr,
-        udp_socket_creator: &Box<dyn ServerPolicy>,
+        udp_socket_creator: &Box<dyn UdpSocketCreator>,
     ) -> Result<Self, IoError> {
         let socket = Arc::new(
             udp_socket_creator
