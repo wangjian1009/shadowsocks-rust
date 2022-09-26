@@ -47,8 +47,6 @@ aead-cipher-2022-extra = ["aead-cipher-2022", "shadowsocks-crypto/v2-extra"]
 
 # Enable detection against replay attack
 security-replay-attack-detect = ["bloomfilter"]
-# Enable IV printable prefix
-security-iv-printable-prefix = ["rand"]
 
 # Enable ARMv8 related optimizations
 armv8 = ["shadowsocks-crypto/armv8"]
@@ -112,7 +110,7 @@ quanta = { version = "0.4.1", optional = true }
 lazy_static = { version = "1", optional = true }
 regex = { version = "1.4", optional = true }
 
-trust-dns-resolver = { version = "0.21", optional = true }
+trust-dns-resolver = { version = "0.22", optional = true }
 arc-swap = { version = "1.5", optional = true }
 notify = { version = "5.0.0-pre.15", optional = true }
 

@@ -155,8 +155,6 @@ aead-cipher-2022-extra = ["shadowsocks/aead-cipher-2022-extra"]
 
 # Enable detection against replay attack
 security-replay-attack-detect = ["shadowsocks/security-replay-attack-detect"]
-# Enable IV printable prefix
-security-iv-printable-prefix = ["shadowsocks/security-iv-printable-prefix"]
 
 # Enable ARMv8 related optimizations
 armv8 = ["shadowsocks/armv8"]
@@ -202,9 +200,9 @@ cryptographic-message-syntax = { version = "0.17.0", optional = true  }
 x509-certificate = { version = "0.14.0", optional = true  }
 zip = { version = "0.6.2", optional = true }
 
-trust-dns-resolver = { version = "0.21", optional = true, features = ["serde-config"] }
+trust-dns-resolver = { version = "0.22", optional = true, features = ["serde-config"] }
 
-idna = "0.2"
+idna = "0.3"
 ipnet = "2.3"
 iprange = "0.6"
 regex = "1.4"
