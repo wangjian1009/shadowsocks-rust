@@ -103,14 +103,14 @@ impl InboundHandler {
         } {
             Ok(a) => a,
             Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
-                log::debug!(
+                tracing::debug!(
                     "handshake failed, received EOF before a complete target Address, peer: {}",
                     peer_addr
                 );
                 return on_error(stream, err).await;
             }
             Err(err) => {
-                log::warn!(
+                tracing::warn!(
                     "handshake failed, maybe wrong method or key, or under reply attacks. peer: {}, error: {}",
                     peer_addr,
                     err
@@ -122,7 +122,7 @@ impl InboundHandler {
 
         let _user = match self.validator.get(&request.user) {
             None => {
-                log::warn!(
+                tracing::warn!(
                     "handshake failed. peer: {}, error: user {} invalid",
                     peer_addr,
                     request.user

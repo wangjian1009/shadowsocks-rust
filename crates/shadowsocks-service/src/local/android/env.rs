@@ -106,7 +106,7 @@ pub fn load_path_infos(path: &str) -> std::result::Result<Vec<PathEntryInfo>, (S
             },
             Err(err) => return Err((cur_path.unwrap().to_str().unwrap().to_owned(), err)),
         };
-        // log::error!("xxxxxxx: path: {:?}, info: {:?}", cur_path.unwrap(), path_state_info);
+        // tracing::error!("xxxxxxx: path: {:?}, info: {:?}", cur_path.unwrap(), path_state_info);
 
         path_infos.push(path_state_info);
 
@@ -176,24 +176,16 @@ mod tests {
     use super::*;
 
     #[test]
+    #[tracing_test]
     fn test_load_path_infos() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-
         let current_dir = std::env::current_dir().expect("read current dir success");
 
         let _dir_infos = load_path_infos(current_dir.to_str().unwrap());
     }
 
     #[test]
+    #[tracing_test]
     fn test_apk_path_prefix() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-
         assert_eq!(apk_path_prefix().as_str(), "/data/data");
     }
 
@@ -210,13 +202,9 @@ mod tests {
     }
 
     #[test]
+    #[tracing_test]
     fn test_encrypt_str() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-
-        log::error!("xxxx: {:?}", string_encode("__system_property_get"));
+        tracing::error!("xxxx: {:?}", string_encode("__system_property_get"));
 
         assert_eq!(string_decode(&S_CMDLINE).as_str(), "/proc/self/cmdline");
         assert_eq!(string_decode(&S_LIB).as_str(), "lib");

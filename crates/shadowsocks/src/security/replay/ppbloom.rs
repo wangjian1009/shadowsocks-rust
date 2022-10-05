@@ -1,5 +1,5 @@
 use bloomfilter::Bloom;
-use log::debug;
+use tracing::debug;
 
 use crate::config::ServerType;
 

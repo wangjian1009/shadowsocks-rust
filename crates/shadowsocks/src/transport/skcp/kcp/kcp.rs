@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::io::{self, Cursor, Read, Write};
 
 use bytes::{Buf, BufMut, BytesMut};
-use log::{debug, trace};
+use tracing::{debug, trace};
 
 use super::{error::Error, KcpResult};
 

@@ -10,9 +10,9 @@ use std::{
 
 use futures::{future::BoxFuture, FutureExt};
 use hyper::Uri;
-use log::error;
 use pin_project::pin_project;
 use tower::Service;
+use tracing::error;
 
 use crate::local::{context::ServiceContext, loadbalancing::ServerIdent, net::AutoProxyClientStream};
 

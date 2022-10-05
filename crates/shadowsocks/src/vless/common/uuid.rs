@@ -112,12 +112,8 @@ mod test {
     }
 
     #[test]
+    #[traced_test]
     fn test_new_uuid() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Trace)
-            .is_test(true)
-            .try_init();
-
         let uuid = UUID::new();
         let uuid2 = uuid.to_string().parse::<UUID>().unwrap();
 

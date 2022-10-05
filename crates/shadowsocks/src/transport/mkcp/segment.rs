@@ -392,12 +392,8 @@ mod test {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn ack_segment() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-
         let seg = Segment {
             conv: 1,
             option: 0,

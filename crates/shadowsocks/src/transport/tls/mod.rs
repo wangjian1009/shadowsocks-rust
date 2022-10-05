@@ -54,7 +54,7 @@ fn get_cipher_suite(cipher: Option<Vec<&str>>) -> io::Result<Vec<SupportedCipher
             if name == get_cipher_name(i) {
                 result.push(i.clone());
                 found = true;
-                log::debug!("cipher: {} applied", name);
+                tracing::debug!("cipher: {} applied", name);
                 break;
             }
         }

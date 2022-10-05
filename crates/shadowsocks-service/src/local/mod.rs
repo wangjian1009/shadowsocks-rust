@@ -10,13 +10,13 @@ use std::{
 };
 
 use futures::{future, ready};
-use log::trace;
 use shadowsocks::{
     config::{Mode, ServerType},
     context::Context,
     net::{AcceptOpts, ConnectOpts},
 };
 use tokio::task::JoinHandle;
+use tracing::trace;
 
 #[cfg(feature = "local-flow-stat")]
 use crate::config::LocalFlowStatAddress;
@@ -130,7 +130,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
     for server in config.server.iter() {
         server.if_ss(|ss_cfg| {
             if ss_cfg.method().is_stream() {
-                log::warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
+                tracing::warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
                             DO NOT USE. It will be removed in the future.", ss_cfg.method(), server.addr());
             }
         });
@@ -140,7 +140,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
     if let Some(nofile) = config.nofile {
         use crate::sys::set_nofile;
         if let Err(err) = set_nofile(nofile) {
-            log::warn!("set_nofile {} failed, error: {}", nofile, err);
+            tracing::warn!("set_nofile {} failed, error: {}", nofile, err);
         }
     }
 
@@ -196,13 +196,13 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
 
     #[cfg(feature = "rate-limit")]
     if let Some(bound_width) = config.rate_limit.as_ref() {
-        log::info!("bound-width={}", bound_width);
+        tracing::info!("bound-width={}", bound_width);
         context.rate_limiter().set_rate_limit(Some(bound_width.clone()))?;
     }
 
     #[cfg(feature = "sniffer-bittorrent")]
     if let Some(reject_bittorrent) = config.reject_bittorrent {
-        log::info!("reject bittorrent = {}", reject_bittorrent);
+        tracing::info!("reject bittorrent = {}", reject_bittorrent);
         if reject_bittorrent {
             context.set_protocol_action(SnifferProtocol::Bittorrent, Some(ProtocolAction::Reject));
             context.set_protocol_action(SnifferProtocol::Utp, Some(ProtocolAction::Reject));
@@ -378,8 +378,8 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
             }
             #[cfg(feature = "local-tun")]
             ProtocolType::Tun => {
-                use log::info;
                 use shadowsocks::net::UnixListener;
+                use tracing::info;
 
                 use self::tun::TunBuilder;
 
@@ -408,7 +408,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
                     let listener = match UnixListener::bind(fd_path) {
                         Ok(l) => l,
                         Err(err) => {
-                            log::error!("failed to bind uds path \"{}\", error: {}", fd_path.display(), err);
+                            tracing::error!("failed to bind uds path \"{}\", error: {}", fd_path.display(), err);
                             return Err(err);
                         }
                     };
@@ -425,7 +425,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
                         match stream.recv_with_fd(&mut buffer, &mut fd_buffer).await {
                             Ok((n, fd_size)) => {
                                 if fd_size == 0 {
-                                    log::error!(
+                                    tracing::error!(
                                         "client {:?} didn't send file descriptors with buffer.size {} bytes",
                                         peer_addr,
                                         n
@@ -439,7 +439,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
                                 break;
                             }
                             Err(err) => {
-                                log::error!(
+                                tracing::error!(
                                     "failed to receive file descriptors from {:?}, error: {}",
                                     peer_addr,
                                     err
@@ -468,7 +468,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
 
     // vfut.push(async {
     //     tokio::time::sleep(Duration::from_secs(10)).await;
-    //     log::error!("xxxxxxxxx: test done!");
+    //     tracing::error!("xxxxxxxxx: test done!");
     //     unsafe { *(0 as *mut u32) = 42; }
     //     Ok(())
     // }.boxed());
@@ -483,8 +483,8 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
 async fn flow_report_task(stat_addr: LocalFlowStatAddress, flow_stat: Arc<FlowStat>) -> io::Result<()> {
     use std::slice;
 
-    use log::debug;
     use tokio::{io::AsyncWriteExt, time};
+    use tracing::debug;
 
     // Local flow statistic report RPC
     let timeout = Duration::from_secs(1);

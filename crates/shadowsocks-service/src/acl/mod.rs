@@ -15,9 +15,9 @@ use std::{
 
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use iprange::IpRange;
-use log::{trace, warn};
 use once_cell::sync::Lazy;
 use regex::bytes::{Regex, RegexBuilder, RegexSet, RegexSetBuilder};
+use tracing::{trace, warn};
 
 use shadowsocks::{context::Context, relay::socks5::Address};
 

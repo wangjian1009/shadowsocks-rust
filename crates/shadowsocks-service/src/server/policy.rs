@@ -137,13 +137,13 @@ impl policy::ServerPolicy for ServerPolicy {
             Ok((c, b)) => (c.id, b),
             Err(_err) => {
                 match self.context.limit_connection_close_delay() {
-                    None => log::error!(
+                    None => tracing::error!(
                         "tcp server: from {} limit {} reached, close immediately",
                         src_addr,
                         self.context.limit_connection_per_ip().unwrap(),
                     ),
                     Some(delay) => {
-                        log::error!(
+                        tracing::error!(
                             "tcp server: from {} limit {} reached, close delay {:?}",
                             src_addr,
                             self.context.limit_connection_per_ip().unwrap(),

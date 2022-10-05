@@ -13,7 +13,6 @@ use std::{
     time::Duration,
 };
 
-use log::{error, trace};
 use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address};
 use smoltcp::{
     iface::{Interface, InterfaceBuilder, Routes, SocketHandle},
@@ -28,6 +27,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     sync::mpsc,
 };
+use tracing::{error, trace};
 
 use crate::{
     auto_proxy_then,

@@ -115,7 +115,7 @@ impl Drop for Session {
         if let Some(serve_task) = self.serve_task.as_mut() {
             serve_task.abort();
         }
-        log::info!("#{}: connection droped", self.meta());
+        tracing::info!("#{}: connection droped", self.meta());
     }
 }
 

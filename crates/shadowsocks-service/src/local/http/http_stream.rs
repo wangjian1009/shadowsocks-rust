@@ -62,13 +62,13 @@ impl ProxyHttpStream {
     #[cfg(feature = "local-http-rustls")]
     pub async fn connect_https(stream: AutoProxyClientStream, domain: &str) -> io::Result<ProxyHttpStream> {
         use byte_string::ByteStr;
-        use log::warn;
         use once_cell::sync::Lazy;
         use std::sync::Arc;
         use tokio_rustls::{
             rustls::{Certificate, ClientConfig, OwnedTrustAnchor, RootCertStore, ServerName},
             TlsConnector,
         };
+        use tracing::warn;
 
         static TLS_CONFIG: Lazy<Arc<ClientConfig>> = Lazy::new(|| {
             let mut config = ClientConfig::builder()

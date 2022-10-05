@@ -4,12 +4,8 @@ use std::{io::Cursor, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
+#[traced_test]
 async fn test() {
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .is_test(true)
-        .try_init();
-
     let config = Arc::new(MkcpConfig::default());
 
     // 创建服务

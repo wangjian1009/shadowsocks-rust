@@ -12,7 +12,7 @@ impl Connection {
 
         if let Command::Authenticate { digest } = cmd {
             if self.token.contains(&digest) {
-                log::debug!("[{rmt_addr}] [authentication]");
+                tracing::debug!("[{rmt_addr}] [authentication]");
 
                 self.is_authenticated.set_authenticated();
                 self.is_authenticated.wake();
@@ -31,7 +31,7 @@ impl Connection {
                 Command::Packet { assoc_id, len, addr } => {
                     if self.udp_packet_from.uni_stream() {
                         let dst_addr = addr.to_string();
-                        log::debug!("[{rmt_addr}] [packet-from-quic] [{assoc_id}] [{dst_addr}]");
+                        tracing::debug!("[{rmt_addr}] [packet-from-quic] [{assoc_id}] [{dst_addr}]");
 
                         let res = task::packet_from_uni_stream(
                             self.server_policy.clone(),
@@ -47,7 +47,9 @@ impl Connection {
 
                         match res {
                             Ok(()) => {}
-                            Err(err) => log::warn!("[{rmt_addr}] [packet-from-quic] [{assoc_id}] [{dst_addr}] {err}"),
+                            Err(err) => {
+                                tracing::warn!("[{rmt_addr}] [packet-from-quic] [{assoc_id}] [{dst_addr}] {err}")
+                            }
                         }
 
                         Ok(())
@@ -60,13 +62,13 @@ impl Connection {
 
                     match res {
                         Ok(()) => {}
-                        Err(err) => log::warn!("[{rmt_addr}] [dissociate] {err}"),
+                        Err(err) => tracing::warn!("[{rmt_addr}] [dissociate] {err}"),
                     }
 
                     Ok(())
                 }
                 Command::Heartbeat => {
-                    log::debug!("[{rmt_addr}] [heartbeat]");
+                    tracing::debug!("[{rmt_addr}] [heartbeat]");
                     Ok(())
                 }
                 _ => Err(DispatchError::BadCommand),
@@ -84,7 +86,7 @@ impl Connection {
             match cmd {
                 Command::Connect { addr } => {
                     let dst_addr = addr.to_string();
-                    log::info!("[{rmt_addr}] [connect] [{dst_addr}]");
+                    tracing::info!("[{rmt_addr}] [connect] [{dst_addr}]");
 
                     let res = task::connect(
                         self.server_policy.clone(),
@@ -98,7 +100,7 @@ impl Connection {
 
                     match res {
                         Ok(()) => {}
-                        Err(err) => log::warn!("[{rmt_addr}] [connect] [{dst_addr}] {err}"),
+                        Err(err) => tracing::warn!("[{rmt_addr}] [connect] [{dst_addr}] {err}"),
                     }
 
                     Ok(())
@@ -120,7 +122,7 @@ impl Connection {
                 Command::Packet { assoc_id, addr, .. } => {
                     if self.udp_packet_from.datagram() {
                         let dst_addr = addr.to_string();
-                        log::debug!("[{rmt_addr}] [packet-from-native] [{assoc_id}] [{dst_addr}]");
+                        tracing::debug!("[{rmt_addr}] [packet-from-native] [{assoc_id}] [{dst_addr}]");
 
                         let res = task::packet_from_datagram(
                             self.server_policy.clone(),
@@ -136,7 +138,7 @@ impl Connection {
                         match res {
                             Ok(()) => {}
                             Err(err) => {
-                                log::warn!("[{rmt_addr}] [packet-from-native] [{assoc_id}] [{dst_addr}] {err}")
+                                tracing::warn!("[{rmt_addr}] [packet-from-native] [{assoc_id}] [{dst_addr}] {err}")
                             }
                         }
 
@@ -163,7 +165,7 @@ impl Connection {
 
         match self.udp_packet_from.check().unwrap() {
             UdpPacketSource::UniStream => {
-                log::debug!("[{rmt_addr}] [packet-to-quic] [{assoc_id}] [{dst_addr}]");
+                tracing::debug!("[{rmt_addr}] [packet-to-quic] [{assoc_id}] [{dst_addr}]");
 
                 let res =
                     task::packet_to_uni_stream(self.controller.clone(), assoc_id, pkt, addr, self.flow_state.clone())
@@ -172,12 +174,12 @@ impl Connection {
                 match res {
                     Ok(()) => {}
                     Err(err) => {
-                        log::warn!("[{rmt_addr}] [packet-to-quic] [{assoc_id}] [{dst_addr}] {err}")
+                        tracing::warn!("[{rmt_addr}] [packet-to-quic] [{assoc_id}] [{dst_addr}] {err}")
                     }
                 }
             }
             UdpPacketSource::Datagram => {
-                log::debug!("[{rmt_addr}] [packet-to-native] [{assoc_id}] [{dst_addr}]");
+                tracing::debug!("[{rmt_addr}] [packet-to-native] [{assoc_id}] [{dst_addr}]");
 
                 let res =
                     task::packet_to_datagram(self.controller.clone(), assoc_id, pkt, addr, self.flow_state.clone())
@@ -186,7 +188,7 @@ impl Connection {
                 match res {
                     Ok(()) => {}
                     Err(err) => {
-                        log::warn!("[{rmt_addr}] [packet-to-native] [{assoc_id}] [{dst_addr}] {err}")
+                        tracing::warn!("[{rmt_addr}] [packet-to-native] [{assoc_id}] [{dst_addr}] {err}")
                     }
                 }
             }

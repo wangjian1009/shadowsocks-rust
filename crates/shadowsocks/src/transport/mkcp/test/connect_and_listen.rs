@@ -11,11 +11,6 @@
 
 // #[tokio::test(flavor = "multi_thread")]
 // async fn test() {
-//     let _ = env_logger::builder()
-//         .filter_level(log::LevelFilter::Info)
-//         .is_test(true)
-//         .try_init();
-
 //     let config = MkcpConfig::default();
 //     let config = Arc::new(config);
 
@@ -46,8 +41,8 @@
 //                     })
 //                     .await
 //                     {
-//                         Ok(len) => log::info!("test server transform success, len={}", len),
-//                         Err(err) => log::error!("test transform complete error {}", err),
+//                         Ok(len) => tracing::info!("test server transform success, len={}", len),
+//                         Err(err) => tracing::error!("test transform complete error {}", err),
 //                     };
 //                 });
 //             }
@@ -81,8 +76,8 @@
 
 //     assert_eq!(0, listener.active_connections());
 
-//     log::error!("xxxxx: server-stastics={}", server_statistic);
-//     log::error!("xxxxx: client-stastics={}", client_statistic);
+//     tracing::error!("xxxxx: server-stastics={}", server_statistic);
+//     tracing::error!("xxxxx: client-stastics={}", client_statistic);
 //     tokio::time::sleep(Duration::from_secs(10)).await;
 // }
 
@@ -107,7 +102,7 @@
 //         w.write_all_buf(&mut Cursor::new(client_send))
 //             .await
 //             .unwrap_or_else(|err| panic!("客户端发送数据失败 {}", err));
-//         log::error!("客户端发送数据成功");
+//         tracing::error!("客户端发送数据成功");
 //     });
 
 //     let mut client_received = vec![0u8; 1024 * 1024];
@@ -116,7 +111,7 @@
 //         .await
 //         .unwrap_or_else(|err| panic!("客户端接受数据失败 {}", err));
 
-//     log::info!("test client transform success");
+//     tracing::info!("test client transform success");
 
 //     assert_eq!(client_received, client_expected);
 

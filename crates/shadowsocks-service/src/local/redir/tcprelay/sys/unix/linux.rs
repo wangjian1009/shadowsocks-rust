@@ -6,10 +6,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use log::warn;
 use shadowsocks::net::{is_dual_stack_addr, set_tcp_fastopen, AcceptOpts};
 use socket2::SockAddr;
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tracing::warn;
 
 use crate::{
     config::RedirType,

@@ -4,8 +4,8 @@ use std::{net::IpAddr, path::PathBuf, process::ExitCode, time::Duration};
 
 use clap::{Arg, ArgGroup, ArgMatches, Command, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
-use log::{info, trace};
 use tokio::{self, runtime::Builder};
+use tracing::{info, trace};
 
 #[cfg(unix)]
 use shadowsocks_service::config::ManagerServerMode;
@@ -122,10 +122,10 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                     .help("Log without datetime prefix"),
             )
             .arg(
-                Arg::new("LOG_CONFIG")
-                    .long("log-config")
+                Arg::new("LOG_TEMPLATE")
+                    .long("log-template")
                     .takes_value(true)
-                    .help("log4rs configuration file"),
+                    .help("log template file name"),
             );
     }
 
@@ -248,14 +248,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
         service_config.set_options(matches);
 
         #[cfg(feature = "logging")]
-        match service_config.log.config_path {
-            Some(ref path) => {
-                logging::init_with_file(path);
-            }
-            None => {
-                logging::init_with_config("sslocal", &service_config.log);
-            }
-        }
+        logging::init_with_config("ssmanager", &service_config.log);
 
         trace!("{:?}", service_config);
 

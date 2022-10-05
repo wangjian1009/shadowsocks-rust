@@ -28,11 +28,11 @@ impl MaintainServer {
             context: self.context.clone(),
         });
 
-        log::info!("shadowsocks maintain server listening on {}", addr);
+        tracing::info!("shadowsocks maintain server listening on {}", addr);
 
         // Run this server for... forever!
         if let Err(e) = server.await {
-            log::error!("maintain server error: {}", e);
+            tracing::error!("maintain server error: {}", e);
             Err(io::Error::new(io::ErrorKind::Other, e))
         } else {
             Ok(())

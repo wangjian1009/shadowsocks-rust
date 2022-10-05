@@ -4,9 +4,9 @@ use std::{
 };
 
 use cfg_if::cfg_if;
-use log::{debug, warn};
 use socket2::{SockAddr, Socket};
 use tokio::net::TcpSocket;
+use tracing::{debug, warn};
 
 use super::ConnectOpts;
 

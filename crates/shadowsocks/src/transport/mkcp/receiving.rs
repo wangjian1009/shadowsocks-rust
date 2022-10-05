@@ -10,6 +10,7 @@ use std::{
 use crate::transport::PacketWrite;
 use bytes::Bytes;
 use spin::Mutex;
+use tracing::trace;
 
 use super::{
     connection::{MkcpConnectionContext, MkcpState},
@@ -277,7 +278,7 @@ impl<PW: PacketWrite> ReceivingWorker<PW> {
         while let Some(seg) = to_send_segments.pop_front() {
             match self.write(seg).await {
                 Ok(()) => {}
-                Err(err) => log::error!(
+                Err(err) => tracing::error!(
                     "#{}: sending flush send data segment error: {}",
                     self.context.meta(),
                     err
@@ -310,7 +311,7 @@ impl<PW: PacketWrite> ReceivingWorker<PW> {
             .write(&self.context.meta().remote_addr, &seg)
             .await?;
         let state = self.context.state();
-        log::trace!("#{}: ({}): --> {:?}", self.context.meta(), state, seg,);
+        trace!("#{}: ({}): --> {:?}", self.context.meta(), state, seg,);
         Ok(())
     }
 }

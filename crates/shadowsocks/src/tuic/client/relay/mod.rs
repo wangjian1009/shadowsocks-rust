@@ -72,7 +72,7 @@ pub async fn init(
         connection::manage_connection(context, connect_opts, config, conn, conn_lock, incoming_tx, wait_req);
 
     let task = async move {
-        log::info!("[relay] Started. Target server: {server_addr}");
+        tracing::info!("[relay] Started. Target server: {server_addr}");
 
         tokio::select! {
             _ = tokio::spawn(manage_connection) => {}

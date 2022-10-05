@@ -8,9 +8,9 @@ use std::{
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use etherparse::PacketBuilder;
-use log::{debug, trace};
 use shadowsocks::relay::socks5::Address;
 use tokio::sync::mpsc;
+use tracing::{debug, trace};
 
 use crate::{
     local::{

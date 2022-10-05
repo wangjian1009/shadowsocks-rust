@@ -62,8 +62,8 @@ use aes::{
 };
 use byte_string::ByteStr;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use log::{error, trace};
 use lru_time_cache::LruCache;
+use tracing::{error, trace};
 
 #[cfg(feature = "aead-cipher-2022-extra")]
 use crate::crypto::v2::udp::ChaCha8Poly1305Cipher;

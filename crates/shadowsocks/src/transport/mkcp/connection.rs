@@ -110,7 +110,7 @@ macro_rules! set_updater_interval {
             Ok(()) => {}
             Err(err) => {
                 let state = $ctx.state();
-                log::error!(
+                tracing::error!(
                     "#{}: ({}): {}: {}: set_interval fail: {}!",
                     $ctx.meta(),
                     state,
@@ -131,7 +131,7 @@ macro_rules! wakeup_updater {
                 mpsc::error::TrySendError::Full(..) => {}
                 mpsc::error::TrySendError::Closed(..) => {
                     let state = $ctx.state();
-                    log::trace!(
+                    tracing::trace!(
                         "#{}: ({}): {}: {}: ignore for closed!",
                         $ctx.meta(),
                         state,
@@ -349,7 +349,7 @@ where
         let old_rto = round_trip.rto;
         round_trip.update(rtt, current);
         if old_rto != round_trip.rto {
-            log::trace!(
+            tracing::trace!(
                 "#{}: update rto (rtt={}) {} => {}",
                 self.meta(),
                 rtt,
@@ -366,7 +366,7 @@ where
         let old_rto = round_trip.rto;
         round_trip.update_peer_rto(rto, current);
         if old_rto != round_trip.rto {
-            log::info!("#{}: update peer rto {} => {}", self.meta(), old_rto, round_trip.rto);
+            tracing::info!("#{}: update peer rto {} => {}", self.meta(), old_rto, round_trip.rto);
             self.round_trip.store(Arc::new(round_trip));
         }
     }
@@ -410,7 +410,7 @@ where
         self.state.store(state as u8, Ordering::Relaxed);
         self.state_begin_time.store(current, Ordering::Relaxed);
 
-        log::debug!(
+        tracing::debug!(
             "#{}: ({}): state ==> {:?}({}) for {} at {}",
             self.meta(),
             old_state,
@@ -539,7 +539,7 @@ where
                 .await
             {
                 Ok(()) => {}
-                Err(err) => log::error!("#{}: sending flush send ping segment error: {}", self.meta(), err),
+                Err(err) => tracing::error!("#{}: sending flush send ping segment error: {}", self.meta(), err),
             }
         }
 
@@ -559,7 +559,7 @@ where
 
     fn terminate(&self, receiving_worker: &ReceivingWorker<PW>, sending_worker: &SendingWorker<PW>) {
         let state = self.state();
-        log::debug!("#{}: ({}): terminating connection", self.meta(), state);
+        tracing::debug!("#{}: ({}): terminating connection", self.meta(), state);
         let _ = self.data_input_tx.try_send(0);
         let _ = self.data_output_tx.try_send(0);
 
@@ -590,7 +590,7 @@ where
             }
         }
 
-        log::info!("#{}: closing connection", self.meta());
+        tracing::info!("#{}: closing connection", self.meta());
 
         Ok(())
     }
@@ -623,7 +623,7 @@ where
 
         self.output.write(&self.meta().remote_addr, &seg).await?;
         let state = self.state();
-        log::trace!("#{}: ({}): --> {:?} (ping for {})", self.meta(), state, seg, reason);
+        tracing::trace!("#{}: ({}): --> {:?} (ping for {})", self.meta(), state, seg, reason);
         self.set_last_ping_time(current.clone());
 
         Ok(())
@@ -651,7 +651,7 @@ where
         output: Arc<MkcpPacketWriter<PW>>,
         statistic: Option<Arc<StatisticStat>>,
     ) -> Self {
-        log::info!("#{}: creating connection", meta);
+        tracing::info!("#{}: creating connection", meta);
 
         let (context, data_receiver, ping_receiver) =
             MkcpConnectionContext::new(config, meta, remove, output, statistic);
@@ -705,7 +705,7 @@ where
         for seg in segments {
             if seg.conv != self.context.meta().conversation {
                 let state = self.context.state();
-                log::debug!(
+                tracing::debug!(
                     "#{}: ({}): input: ignore mismatch conv segment: {:?}",
                     self.context.meta(),
                     state,
@@ -715,7 +715,7 @@ where
             }
 
             let state = self.context.state();
-            log::trace!("#{}: ({}): <-- {:?}", self.context.meta(), state, seg);
+            tracing::trace!("#{}: ({}): <-- {:?}", self.context.meta(), state, seg);
 
             let option = seg.option;
             match seg.data {
@@ -725,13 +725,13 @@ where
                     if self.receiving_worker.is_data_available() {
                         match self.context.data_input_tx.try_send(0) {
                             Ok(()) => {
-                                // log::info!("xxxxx: data_input signal: success");
+                                // tracing::info!("xxxxx: data_input signal: success");
                             }
                             Err(mpsc::error::TrySendError::Closed(_message)) => {
-                                // log::info!("xxxxx: data_input signal: closed {}", _message);
+                                // tracing::info!("xxxxx: data_input signal: closed {}", _message);
                             }
                             Err(mpsc::error::TrySendError::Full(_message)) => {
-                                // log::info!("xxxxx: data_input signal: full {}", _message);
+                                // tracing::info!("xxxxx: data_input signal: full {}", _message);
                             }
                         }
                     }
@@ -822,17 +822,17 @@ where
             match self.context.state() {
                 MkcpState::ReadyToClose | MkcpState::Terminating | MkcpState::Terminated => {
                     // let state = self.context.state();
-                    // log::info!("#{}: read done in state {:?}", self.context.meta(), state);
+                    // tracing::info!("#{}: read done in state {:?}", self.context.meta(), state);
                     return Poll::Ready(Ok(()));
                 }
                 MkcpState::Active | MkcpState::PeerClosed | MkcpState::PeerTerminating => {
                     let readed = self.receiving_worker.read(buf);
                     if readed > 0 {
-                        // log::info!("#{}: received {} data", self.context.meta(), readed);
+                        // tracing::info!("#{}: received {} data", self.context.meta(), readed);
                         wakeup_updater!(self.context, "poll read", UPDATER_DATA, self.context.data_updater);
                         return Poll::Ready(Ok(()));
                     } else {
-                        // log::info!("#{}: recv begin wait", self.context.meta());
+                        // tracing::info!("#{}: recv begin wait", self.context.meta());
                         ready!(self.context.data_input_rx.lock().recv().boxed_local().poll_unpin(cx));
                     }
                 }
@@ -923,7 +923,7 @@ where
                     match cmd {
                         Some(UpdaterCmd::UpdateDuration(duration)) => {
                             let state = context.state();
-                            log::debug!("#{}: ({}): {}: interval {:?} ==> {:?}", context.meta(), state, UPDATER_DATA, data_update_interval, duration);
+                            tracing::debug!("#{}: ({}): {}: interval {:?} ==> {:?}", context.meta(), state, UPDATER_DATA, data_update_interval, duration);
                             data_next_process -= data_update_interval;
                             data_next_process += duration;
                             data_update_interval = duration;
@@ -933,14 +933,14 @@ where
                                 data_next_process = Instant::now();
                                 data_is_wakeup = true;
                                 let state = context.state();
-                                log::debug!("#{}: ({}): {}: wakeup", context.meta(), state, UPDATER_DATA);
+                                tracing::debug!("#{}: ({}): {}: wakeup", context.meta(), state, UPDATER_DATA);
                             }
                         }
                         None => {}
                     };
                 },
                 _ = data_delay , if !is_terminating && data_is_wakeup => {
-                    log::trace!(
+                    tracing::trace!(
                         "#{}: flush for data: sending-cache={} receiving-cache={} ack-list={} rto={}",
                         context.meta(),
                         sending_worker.sending_cache_len(),
@@ -952,7 +952,7 @@ where
                     match context.flush(receiving_worker.as_ref(), sending_worker.as_ref()).await {
                         Ok(()) => {}
                         Err(err) => {
-                            log::error!("#{}: {}: flush(data) error {}", context.meta(), UPDATER_DATA, err);
+                            tracing::error!("#{}: {}: flush(data) error {}", context.meta(), UPDATER_DATA, err);
                         }
                     };
 
@@ -960,14 +960,14 @@ where
                     data_is_wakeup = sending_worker.update_necessary() || receiving_worker.update_necessary();
                     if !data_is_wakeup {
                         let state = context.state();
-                        log::debug!("#{}: ({}): {}: suspend", context.meta(), state, UPDATER_DATA);
+                        tracing::debug!("#{}: ({}): {}: suspend", context.meta(), state, UPDATER_DATA);
                     }
                 },
                 cmd = ping_receiver.recv() => {
                     match cmd {
                         Some(UpdaterCmd::UpdateDuration(duration)) => {
                             let state = context.state();
-                            log::debug!("#{}: ({}): {}: interval {:?} ==> {:?}", context.meta(), state, UPDATER_PING, ping_update_interval, duration);
+                            tracing::debug!("#{}: ({}): {}: interval {:?} ==> {:?}", context.meta(), state, UPDATER_PING, ping_update_interval, duration);
                             ping_update_interval = duration;
                         }
                         Some(UpdaterCmd::Wakeup) => {}
@@ -975,7 +975,7 @@ where
                     };
                 },
                 _ = ping_delay => {
-                    log::trace!(
+                    tracing::trace!(
                         "#{}: flush for ping: sending-cache={} receiving-cache={} ack-list={} rto={}",
                         context.meta(),
                         sending_worker.sending_cache_len(),
@@ -987,7 +987,7 @@ where
                     match context.flush(receiving_worker.as_ref(), sending_worker.as_ref()).await {
                         Ok(()) => {}
                         Err(err) => {
-                            log::error!("#{}: {}: flush(ping) error {}", context.meta(), UPDATER_PING, err);
+                            tracing::error!("#{}: {}: flush(ping) error {}", context.meta(), UPDATER_PING, err);
                         }
                     };
 
@@ -1006,7 +1006,7 @@ where
 {
     fn drop(&mut self) {
         self.output_task.abort();
-        log::info!("#{}: connection droped", self.context.meta());
+        tracing::info!("#{}: connection droped", self.context.meta());
     }
 }
 

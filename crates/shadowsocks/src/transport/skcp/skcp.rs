@@ -106,7 +106,7 @@ impl KcpSocket {
         match self.kcp.input(buf) {
             Ok(..) => {}
             Err(KcpError::ConvInconsistent(expected, actual)) => {
-                log::trace!("[INPUT] Conv expected={} actual={} ignored", expected, actual);
+                tracing::trace!("[INPUT] Conv expected={} actual={} ignored", expected, actual);
                 return Ok(false);
             }
             Err(err) => return Err(err),
@@ -130,7 +130,7 @@ impl KcpSocket {
         //     1. Have sent the first packet (asking for conv)
         //     2. Too many pending packets
         if self.sent_first && (self.kcp.wait_snd() >= self.kcp.snd_wnd() as usize || self.kcp.waiting_conv()) {
-            log::trace!(
+            tracing::trace!(
                 "[SEND] waitsnd={} sndwnd={} excceeded or waiting conv={}",
                 self.kcp.wait_snd(),
                 self.kcp.snd_wnd(),
@@ -297,9 +297,8 @@ mod test {
     use super::UdpSocket;
 
     #[tokio::test]
+    #[traced_test]
     async fn kcp_echo() {
-        let _ = env_logger::try_init();
-
         static CONV: u32 = 0xdeadbeef;
 
         // s1 connects s2
@@ -329,7 +328,7 @@ mod test {
                 loop {
                     let mut kcp = kcp1.lock().await;
                     let next = kcp.update().expect("update");
-                    log::trace!("kcp1 next tick {:?}", next);
+                    tracing::trace!("kcp1 next tick {:?}", next);
                     time::sleep_until(Instant::from_std(next)).await;
                 }
             })
@@ -341,7 +340,7 @@ mod test {
                 loop {
                     let mut kcp = kcp2.lock().await;
                     let next = kcp.update().expect("update");
-                    log::trace!("kcp2 next tick {:?}", next);
+                    tracing::trace!("kcp2 next tick {:?}", next);
                     time::sleep_until(Instant::from_std(next)).await;
                 }
             })

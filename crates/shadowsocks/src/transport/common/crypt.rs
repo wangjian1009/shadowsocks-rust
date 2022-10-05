@@ -158,12 +158,8 @@ mod test {
     }
 
     #[test]
+    #[traced_test]
     fn simple_authenticator() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .is_test(true)
-            .try_init();
-
         let payload = b"abcdefg";
         let output = seal_then_open(payload, 512).unwrap();
         assert_eq!(payload, &output[..]);

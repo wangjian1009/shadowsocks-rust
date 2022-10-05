@@ -60,7 +60,6 @@ use std::{
 use cfg_if::cfg_if;
 #[cfg(feature = "local-tun")]
 use ipnet::IpNet;
-use log::warn;
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "local-tunnel", feature = "local-dns", feature = "server-mock"))]
 use shadowsocks::relay::socks5::Address;
@@ -72,6 +71,7 @@ use shadowsocks::{
     crypto::CipherKind,
     plugin::PluginConfig,
 };
+use tracing::warn;
 #[cfg(feature = "trust-dns")]
 use trust_dns_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 
@@ -2094,7 +2094,7 @@ impl Config {
             if c.network.is_some() && c.network.as_ref().unwrap().find("://").is_none() {
                 c.network = match crate::decrypt(c.network.as_ref().unwrap().as_str()) {
                     Ok(v) => {
-                        // log::info!("env-crypt: network {} => {}", c.network.as_ref().unwrap(), v);
+                        // tracing::info!("env-crypt: network {} => {}", c.network.as_ref().unwrap(), v);
                         Some(v)
                     }
                     Err(e) => return Err(Error::new(ErrorKind::CryptError, "decrypt network error", Some(e))),
@@ -2104,11 +2104,11 @@ impl Config {
             if c.password.is_some() {
                 match crate::decrypt(c.password.as_ref().unwrap().as_str()) {
                     Ok(v) => {
-                        // log::info!("env-crypt: password {} => {}", c.password.as_ref().unwrap(), v);
+                        // tracing::info!("env-crypt: password {} => {}", c.password.as_ref().unwrap(), v);
                         c.password = Some(v)
                     }
                     Err(e) => {
-                        log::warn!("env-crypt: ignore decrypt password, error={}", e);
+                        tracing::warn!("env-crypt: ignore decrypt password, error={}", e);
                         // return Err(Error::new(ErrorKind::CryptError, "decrypt password error", Some(e)))
                     }
                 };

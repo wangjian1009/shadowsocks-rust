@@ -9,9 +9,9 @@ use std::{
 
 use byte_string::ByteStr;
 use bytes::{Bytes, BytesMut};
-use log::{trace, warn};
 use once_cell::sync::Lazy;
 use tokio::{net::ToSocketAddrs, time};
+use tracing::{trace, warn};
 
 use crate::{
     config::{ServerAddr, ServerConfig, ServerUserManager, ShadowsocksConfig},

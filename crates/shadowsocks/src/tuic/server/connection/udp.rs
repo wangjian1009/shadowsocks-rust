@@ -69,7 +69,7 @@ impl UdpSessionMap {
         let mut send_pkt_tx = self.map.lock().get(&assoc_id).map(|s| s.0.clone());
 
         if send_pkt_tx.is_none() {
-            log::info!("[{src_addr}] [associate] [{assoc_id}]");
+            tracing::info!("[{src_addr}] [associate] [{assoc_id}]");
 
             let assoc = UdpSession::new(
                 assoc_id,
@@ -94,7 +94,7 @@ impl UdpSessionMap {
     }
 
     pub fn dissociate(&self, assoc_id: u32, src_addr: SocketAddr) {
-        log::info!("[{src_addr}] [dissociate] [{assoc_id}]");
+        tracing::info!("[{src_addr}] [dissociate] [{assoc_id}]");
         self.map.lock().remove(&assoc_id);
     }
 }
@@ -121,7 +121,7 @@ impl UdpSession {
                 res = Self::listen_receive_packet(socket, assoc_id, recv_pkt_tx) => res,
             ) {
                 Ok(()) => (),
-                Err(err) => log::warn!("[{src_addr}] [udp-session] [{assoc_id}] {err}"),
+                Err(err) => tracing::warn!("[{src_addr}] [udp-session] [{assoc_id}] {err}"),
             }
         });
 
@@ -138,7 +138,7 @@ impl UdpSession {
             match socket.send_to(&pkt, addr).await {
                 Ok(()) => {}
                 Err(err) => {
-                    log::warn!("[{src_addr}] [udp-session] [{assoc_id}] [] --> {err}")
+                    tracing::warn!("[{src_addr}] [udp-session] [{assoc_id}] [] --> {err}")
                 }
             }
 

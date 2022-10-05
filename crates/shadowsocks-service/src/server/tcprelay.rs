@@ -8,7 +8,6 @@ use std::{
     time::Duration,
 };
 
-use log::{debug, error, info, trace, warn};
 use shadowsocks::{
     config::ServerProtocol,
     crypto::CipherKind,
@@ -29,6 +28,7 @@ use tokio::{
     sync::Mutex,
     time,
 };
+use tracing::{debug, error, info, trace, warn};
 
 use crate::net::{utils::ignore_until_end, MonProxyStream};
 

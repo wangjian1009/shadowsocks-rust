@@ -6,12 +6,12 @@ use std::{
     task::{self, Poll},
 };
 
-use log::trace;
 use pin_project::pin_project;
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{TcpStream, ToSocketAddrs},
 };
+use tracing::trace;
 
 use crate::local::socks::socks4::{Address, Command, Error, HandshakeRequest, HandshakeResponse, ResultCode};
 

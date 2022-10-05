@@ -14,7 +14,7 @@ impl StreamConnection for crate::net::TcpStream {
 
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, _limiter: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
-        log::error!("TcpStream not support set rate-limit")
+        tracing::error!("TcpStream not support set rate-limit")
     }
 
     fn physical_device(&self) -> DeviceOrGuard<'_> {
@@ -39,7 +39,7 @@ impl StreamConnection for tokio::net::TcpStream {
 
     #[cfg(feature = "rate-limit")]
     fn set_rate_limit(&mut self, _limiter: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
-        log::error!("TcpStream not support set rate-limit")
+        tracing::error!("TcpStream not support set rate-limit")
     }
 
     fn physical_device(&self) -> DeviceOrGuard<'_> {

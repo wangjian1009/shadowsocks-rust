@@ -7,7 +7,6 @@ use std::{
     sync::Arc,
 };
 
-use log::{debug, error, trace, warn};
 use shadowsocks::{
     config::Mode,
     relay::socks5::{
@@ -18,6 +17,7 @@ use shadowsocks::{
     ServerAddr,
 };
 use tokio::net::TcpStream;
+use tracing::{debug, error, trace, warn};
 
 use crate::{
     local::{

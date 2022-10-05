@@ -1,6 +1,6 @@
 //! Manager client
 
-use log::warn;
+use tracing::warn;
 
 use crate::{config::ManagerAddr, context::Context, net::ConnectOpts, relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE};
 
@@ -8,16 +8,8 @@ use super::{
     datagram::ManagerDatagram,
     error::Error,
     protocol::{
-        AddRequest,
-        AddResponse,
-        ListRequest,
-        ListResponse,
-        ManagerProtocol,
-        PingRequest,
-        PingResponse,
-        RemoveRequest,
-        RemoveResponse,
-        StatRequest,
+        AddRequest, AddResponse, ListRequest, ListResponse, ManagerProtocol, PingRequest, PingResponse, RemoveRequest,
+        RemoveResponse, StatRequest,
     },
 };
 

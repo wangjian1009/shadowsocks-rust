@@ -37,7 +37,7 @@ pub fn listen_requests(
 }
 
 async fn process_request(conn: Arc<AsyncMutex<Option<Connection>>>, req: Request, timeout: u64, _reg: Register) {
-    log::info!("[relay] [task] {req}");
+    tracing::info!("[relay] [task] {req}");
 
     // try to get the current connection
     if let Ok(lock) = time::timeout(Duration::from_millis(timeout), conn.lock()).await {
@@ -59,13 +59,13 @@ async fn process_request(conn: Arc<AsyncMutex<Option<Connection>>>, req: Request
                     );
                 }
 
-                log::info!("[relay] [task] [dissociate] [{assoc_id}]");
+                tracing::info!("[relay] [task] [dissociate] [{assoc_id}]");
                 conn.clone().udp_sessions().remove(&assoc_id);
                 conn.handle_dissociate(assoc_id).await;
             }
         }
     } else {
-        log::warn!("[relay] [task] {req} [timeout]");
+        tracing::warn!("[relay] [task] {req} [timeout]");
     }
 }
 

@@ -153,7 +153,7 @@ impl Sniffer for SnifferTls {
         match Self::read_client_hello(&data[5..(5 + header_len) as usize]) {
             Ok(domain) => Ok(SnifferProtocol::Tls(domain)),
             Err(_err) => {
-                // log::info!("sniffer tls: {}", _err);
+                // tracing::info!("sniffer tls: {}", _err);
                 Err(SnifferCheckError::Reject)
             }
         }

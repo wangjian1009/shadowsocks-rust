@@ -93,7 +93,7 @@ impl<S: StreamConnection> ClientStream<S> {
             None => connector.connect(&destination, opts).await?,
         };
 
-        log::trace!(
+        tracing::trace!(
             "connected vless {} remote {}{} (outbound: {}) with {:?}",
             command,
             svr_cfg.addr(),

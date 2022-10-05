@@ -1,9 +1,9 @@
 /// Client for communicating with Manager
 use std::{collections::HashMap, io::Error};
 
-pub(crate) use log::warn;
 use serde::{ser::SerializeMap, Serialize, Serializer};
 use shadowsocks::{context::Context, manager::datagram::ManagerDatagram, net::ConnectOpts, ManagerAddr};
+pub(crate) use tracing::warn;
 
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "kebab-case")]

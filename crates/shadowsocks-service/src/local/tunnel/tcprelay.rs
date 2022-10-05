@@ -2,9 +2,9 @@
 
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
-use log::{error, info, trace};
 use shadowsocks::{lookup_then, net::TcpListener as ShadowTcpListener, relay::socks5::Address, ServerAddr};
 use tokio::{net::TcpStream, time};
+use tracing::{error, info, trace};
 
 use crate::local::{
     context::ServiceContext,

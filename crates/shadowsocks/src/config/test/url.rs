@@ -31,12 +31,8 @@ fn rebuild_ss() {
 
 #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
 #[test]
+#[traced_test]
 fn parse_vless_wss() {
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .is_test(true)
-        .try_init();
-
     let parsed_config = "vless://9af5ce16-8020-4530-85ba-290ef2290d1c@194.233.85.194:443/?type=ws&encryption=none&path=%2Feaps2021sg&security=tls&sni=proxy0101.com#194-test".parse::<ServerConfig>().unwrap();
 
     let mut vless_config = VlessConfig::new();
@@ -68,12 +64,8 @@ fn parse_vless_wss() {
 
 #[cfg(feature = "transport-mkcp")]
 #[test]
+#[traced_test]
 fn parse_vless_mkcp() {
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .is_test(true)
-        .try_init();
-
     let parsed_config = "vless://c93b0258-6847-42c8-92ac-7b8ac8e390ad@104.237.56.68:7777/?type=kcp&encryption=none&headerType=wechat-video&seed=itest123#68-us".parse::<ServerConfig>().unwrap();
 
     let mut vless_config = VlessConfig::new();
@@ -98,12 +90,8 @@ fn parse_vless_mkcp() {
 
 #[cfg(feature = "transport-skcp")]
 #[test]
+#[traced_test]
 fn parse_vless_skcp() {
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .is_test(true)
-        .try_init();
-
     let parsed_config =
         "vless://c93b0258-6847-42c8-92ac-7b8ac8e390ad@104.237.56.68:7777/?type=skcp&header=wechat-video#68-us"
             .parse::<ServerConfig>()

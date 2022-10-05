@@ -11,8 +11,8 @@ use std::{
 use byte_string::ByteStr;
 use bytes::Bytes;
 use futures::ready;
-use log::trace;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tracing::trace;
 
 use crate::{
     config::ServerUserManager,

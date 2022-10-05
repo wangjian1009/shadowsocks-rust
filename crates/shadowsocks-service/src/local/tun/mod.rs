@@ -11,10 +11,10 @@ use std::{
 
 use byte_string::ByteStr;
 use ipnet::IpNet;
-use log::{debug, error, info, trace, warn};
 use shadowsocks::{config::Mode, transport::Connector};
 use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
 use tokio::{io::AsyncReadExt, sync::mpsc, time};
+use tracing::{debug, error, info, trace, warn};
 use tun::{AsyncDevice, Configuration as TunConfiguration, Device as TunDevice, Error as TunError, Layer};
 
 use crate::local::{context::ServiceContext, loadbalancing::PingBalancer};

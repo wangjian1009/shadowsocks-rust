@@ -90,10 +90,10 @@ where
             tokio::spawn(async move {
                 match Self::handle_incoming(context.clone(), tx, pr, pw).await {
                     Ok(..) => {
-                        log::trace!("MkcpAcceptor: {}: handler incoming completed", context.local_addr);
+                        tracing::trace!("MkcpAcceptor: {}: handler incoming completed", context.local_addr);
                     }
                     Err(err) => {
-                        log::error!("MkcpAcceptor: {}: handler incoming error: {}", context.local_addr, err);
+                        tracing::error!("MkcpAcceptor: {}: handler incoming error: {}", context.local_addr, err);
                     }
                 }
             })
@@ -129,7 +129,7 @@ where
                     match r {
                         Ok((segments, addr)) => Self::on_receive(context.as_ref(), &new_conn_tx, &remove_conn_tx, &writer, segments, addr).await?,
                         Err(err) => {
-                            log::error!("MkcpAcceptor {}: read error: {}", context.local_addr, err);
+                            tracing::error!("MkcpAcceptor {}: read error: {}", context.local_addr, err);
                         }
                     }
                 }
@@ -138,7 +138,7 @@ where
                         context.connections.lock().remove(&id);
                     }
                     else {
-                        log::error!("MkcpAcceptor {}: remove conn rx recv none", context.local_addr);
+                        tracing::error!("MkcpAcceptor {}: remove conn rx recv none", context.local_addr);
                     }
                 }
             }
@@ -179,7 +179,7 @@ where
                                 let remove_conn_tx = remove_conn_tx.clone();
                                 tokio::spawn(async move {
                                     if let Err(err) = remove_conn_tx.send(id).await {
-                                        log::error!("MkcpAcceptor: {}", err);
+                                        tracing::error!("MkcpAcceptor: {}", err);
                                     }
                                 });
                             }
@@ -291,8 +291,8 @@ where
 
         match connection {
             Some(connection) => match connection.close() {
-                Ok(()) => log::trace!("#{}: close: success", connection.meta()),
-                Err(err) => log::debug!("#{}: close: {:?}", connection.meta(), err),
+                Ok(()) => tracing::trace!("#{}: close: success", connection.meta()),
+                Err(err) => tracing::debug!("#{}: close: {:?}", connection.meta(), err),
             },
             None => {}
         }
@@ -312,7 +312,7 @@ where
     #[cfg(feature = "rate-limit")]
     #[inline]
     fn set_rate_limit(&mut self, _rate_limit: Option<Arc<RateLimiter>>) {
-        log::debug!("#{}: set_rate_limit: ignore", 1)
+        tracing::debug!("#{}: set_rate_limit: ignore", 1)
     }
 
     fn physical_device(&self) -> DeviceOrGuard<'_> {

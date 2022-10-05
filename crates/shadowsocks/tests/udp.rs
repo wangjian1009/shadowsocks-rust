@@ -1,8 +1,8 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
 use byte_string::ByteStr;
-use log::info;
 use tokio::{net::UdpSocket, sync::Barrier};
+use tracing::info;
 
 use shadowsocks::{
     config::{ServerConfig, ServerProtocol, ServerType, ShadowsocksConfig},
@@ -157,9 +157,8 @@ async fn udp_tunnel_echo(
 }
 
 #[tokio::test]
+#[traced_test]
 async fn udp_tunnel_aead() {
-    let _ = env_logger::try_init();
-
     let server_addr = "127.0.0.1:21001".parse::<SocketAddr>().unwrap();
     let local_addr = "127.0.0.1:21101".parse::<SocketAddr>().unwrap();
     let target_addr = "127.0.0.1:21201".parse::<SocketAddr>().unwrap();
@@ -171,9 +170,8 @@ async fn udp_tunnel_aead() {
 
 #[cfg(feature = "stream-cipher")]
 #[tokio::test]
+#[traced_test]
 async fn udp_tunnel_stream() {
-    let _ = env_logger::try_init();
-
     let server_addr = "127.0.0.1:22001".parse::<SocketAddr>().unwrap();
     let local_addr = "127.0.0.1:22101".parse::<SocketAddr>().unwrap();
     let target_addr = "127.0.0.1:22201".parse::<SocketAddr>().unwrap();
@@ -190,9 +188,8 @@ async fn udp_tunnel_stream() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn udp_tunnel_none() {
-    let _ = env_logger::try_init();
-
     let server_addr = "127.0.0.1:23001".parse::<SocketAddr>().unwrap();
     let local_addr = "127.0.0.1:23101".parse::<SocketAddr>().unwrap();
     let target_addr = "127.0.0.1:23201".parse::<SocketAddr>().unwrap();
@@ -204,9 +201,8 @@ async fn udp_tunnel_none() {
 
 #[cfg(feature = "aead-cipher-2022")]
 #[tokio::test]
+#[traced_test]
 async fn udp_tunnel_aead_2022_aes() {
-    let _ = env_logger::try_init();
-
     let server_addr = "127.0.0.1:24001".parse::<SocketAddr>().unwrap();
     let local_addr = "127.0.0.1:24101".parse::<SocketAddr>().unwrap();
     let target_addr = "127.0.0.1:24201".parse::<SocketAddr>().unwrap();
@@ -224,9 +220,8 @@ async fn udp_tunnel_aead_2022_aes() {
 
 #[cfg(feature = "aead-cipher-2022")]
 #[tokio::test]
+#[traced_test]
 async fn udp_tunnel_aead_2022_chacha20() {
-    let _ = env_logger::try_init();
-
     let server_addr = "127.0.0.1:25001".parse::<SocketAddr>().unwrap();
     let local_addr = "127.0.0.1:25101".parse::<SocketAddr>().unwrap();
     let target_addr = "127.0.0.1:25201".parse::<SocketAddr>().unwrap();

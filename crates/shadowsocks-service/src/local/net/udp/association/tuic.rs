@@ -21,7 +21,7 @@ impl TuicUdpContext {
         let (bytes, addr) = match self.packet_receiver.recv().await {
             Some(v) => v,
             None => {
-                log::error!(
+                tracing::error!(
                     "udp relay {} <- ... (tuic) failed, error: receiver chanel break",
                     peer_addr,
                 );
@@ -33,7 +33,7 @@ impl TuicUdpContext {
         let recv_len = std::cmp::min(origin_len, buf.len());
 
         if origin_len > recv_len {
-            log::error!(
+            tracing::error!(
                 "udp relay {} <- {} (vless) receive packet overflow, input-len={}, capacity={}",
                 peer_addr,
                 addr,

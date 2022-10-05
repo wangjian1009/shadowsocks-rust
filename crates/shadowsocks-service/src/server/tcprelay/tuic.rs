@@ -61,6 +61,16 @@ impl TcpServer {
             }
         };
 
+        // Spans will be sent to the configured OpenTelemetry exporter
+        let span = tracing::span!(
+            tracing::Level::TRACE,
+            "svr",
+            port = svr_cfg.addr().port(),
+            "net" = "udp",
+            proto = svr_cfg.protocol().name()
+        );
+        let _enter = span.enter();
+        
         let server = tuic::server::Server::init(
             runtime_cfg.server_config,
             socket.into_std()?,

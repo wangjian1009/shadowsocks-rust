@@ -138,7 +138,7 @@ impl VlessUdpContext {
                     {
                         Ok(()) => (),
                         Err(err) => {
-                            log::error!(
+                            tracing::error!(
                                 "udp relay {} <- {} (vless) : send to channel error {}",
                                 peer_addr,
                                 target_addr,
@@ -173,7 +173,7 @@ impl VlessUdpContext {
         let (addr, mut bytes) = match self.packet_receiver.recv().await {
             Some(v) => v,
             None => {
-                log::error!(
+                tracing::error!(
                     "udp relay {} <- ... (vless) failed, error: receiver chanel break",
                     peer_addr,
                 );
@@ -185,7 +185,7 @@ impl VlessUdpContext {
         let recv_len = std::cmp::min(origin_len, buf.len());
 
         if origin_len > recv_len {
-            log::error!(
+            tracing::error!(
                 "udp relay {} <- {} (vless) receive packet overflow, input-len={}, capacity={}",
                 peer_addr,
                 addr,

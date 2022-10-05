@@ -9,19 +9,13 @@ use std::{
 use hyper::{
     server::conn::AddrStream,
     service::{make_service_fn, service_fn},
-    Body,
-    Client,
-    Request,
-    Server,
+    Body, Client, Request, Server,
 };
-use log::{error, info};
 use shadowsocks::{config::ServerAddr, lookup_then, net::TcpListener};
+use tracing::{error, info};
 
 use crate::local::{
-    context::ServiceContext,
-    http::connector::Connector,
-    loadbalancing::PingBalancer,
-    LOCAL_DEFAULT_KEEPALIVE_TIMEOUT,
+    context::ServiceContext, http::connector::Connector, loadbalancing::PingBalancer, LOCAL_DEFAULT_KEEPALIVE_TIMEOUT,
 };
 
 use super::{client_cache::ProxyClientCache, dispatcher::HttpDispatcher};

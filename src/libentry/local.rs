@@ -1,4 +1,3 @@
-use log;
 use serde_json::{self, Map as JsonMap, Value};
 use std::{
     ffi::CStr,
@@ -41,20 +40,17 @@ pub extern "C" fn lib_local_run(
     control_port: c_ushort,
     #[cfg(target_os = "android")] c_vpn_protect_path: *const c_char,
 ) {
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    oslog::OsLogger::new("com.example.test")
-        .level_filter(log::LevelFilter::Info)
-        .init()
-        .unwrap();
+    cfg_if! {
+        if #[cfg(all(feature = "logging", any(target_os = "macos", target_os = "ios")))] {
+            use tracing_subscriber::layer::SubscriberExt;
 
-    #[cfg(target_os = "android")]
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_min_level(log::Level::Trace)
-            .with_tag("SS"),
-    );
+            let collector = tracing_subscriber::registry()
+                .with(tracing_oslog::OsLogger::new("moe.absolucy.test", "default"));
+            tracing::subscriber::set_global_default(collector).expect("failed to set global subscriber");
+        }
+    }
 
-    log::info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
+    tracing::info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
 
     let str_config = unsafe { CStr::from_ptr(c_config).to_string_lossy().to_owned() };
 
@@ -107,26 +103,26 @@ fn load_config(
     let mut config = match Config::load_from_str(str_config, ConfigType::Local) {
         Ok(c) => c,
         Err(e) => {
-            log::error!("load_config fail: {}", e);
+            tracing::error!("load_config fail: {}", e);
             panic!()
         }
     };
 
     if config.local.is_empty() {
-        log::error!(
+        tracing::error!(
             "missing `local_address`, consider specifying it by \"local_address\" and \"local_port\" in configuration file");
         panic!();
     }
 
     if config.server.is_empty() {
-        log::error!(
+        tracing::error!(
             "missing proxy servers, consider specifying it by configuration file, check more details in https://shadowsocks.org/en/config/quick-guide.html"
         );
         panic!();
     }
 
     if let Err(err) = config.check_integrity() {
-        log::error!("config integrity check failed, {}", err);
+        tracing::error!("config integrity check failed, {}", err);
         panic!();
     }
 
@@ -147,19 +143,19 @@ fn load_config(
         config.local_stat_addr = Some(LocalFlowStatAddress::UnixStreamPath(From::from(stat_path)));
     }
 
-    log::trace!("config {}", config);
+    tracing::trace!("config {}", config);
 
     if let Some(acl_path) = acl_path {
         let acl = match AccessControl::load_from_file(acl_path) {
             Ok(acl) => acl,
             Err(err) => {
-                log::error!("loading ACL \"{}\", {}", acl_path, err);
+                tracing::error!("loading ACL \"{}\", {}", acl_path, err);
                 panic!();
             }
         };
         config.acl = Some(acl);
 
-        log::info!("loading ACL \"{}\" success", acl_path);
+        tracing::info!("loading ACL \"{}\" success", acl_path);
     }
 
     config
@@ -178,12 +174,12 @@ fn run(config: Config, control_port: u16) {
                 match server.await {
                     // Server future resolved without an error. This should never happen.
                     Ok(..) => {
-                        log::info!("server exited unexpectly");
+                        tracing::info!("server exited unexpectly");
                         // process::exit(common::EXIT_CODE_SERVER_EXIT_UNEXPECTLY);
                     }
                     // Server future resolved with error, which are listener errors in most cases
                     Err(err) => {
-                        log::error!("server aborted with {}", err);
+                        tracing::error!("server aborted with {}", err);
                         // process::exit(common::EXIT_CODE_SERVER_ABORTED);
                     }
                 };
@@ -203,8 +199,8 @@ fn run(config: Config, control_port: u16) {
             vfut.push(
                 async move {
                     match host_dns.as_ref().unwrap().run().await {
-                        Ok(()) => log::info!("host dns stop success"),
-                        Err(err) => log::error!("host dns stop with error {}", err),
+                        Ok(()) => tracing::info!("host dns stop success"),
+                        Err(err) => tracing::error!("host dns stop with error {}", err),
                     }
                 }
                 .boxed(),
@@ -229,7 +225,7 @@ fn run(config: Config, control_port: u16) {
 
         let (_res, _) = vfut.into_future().await;
 
-        log::info!("server stoped");
+        tracing::info!("server stoped");
     });
 }
 
@@ -237,7 +233,7 @@ async fn run_ctrl(control_port: u16, #[cfg(feature = "host-dns")] host_dns: Opti
     match async move {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), control_port);
         let listener = UdpSocket::bind(addr).await?;
-        log::info!("shadowsocks control listen on {}", addr);
+        tracing::info!("shadowsocks control listen on {}", addr);
 
         let mut buf = vec![0u8; 2048];
         loop {
@@ -245,7 +241,7 @@ async fn run_ctrl(control_port: u16, #[cfg(feature = "host-dns")] host_dns: Opti
             let cmd: JsonMap<String, Value> = match serde_json::from_slice(&buf[..n]) {
                 Ok(v) => v,
                 Err(err) => {
-                    log::error!("control: cmd: {}, cmd parse error {}", "", err);
+                    tracing::error!("control: cmd: {}, cmd parse error {}", "", err);
                     continue;
                 }
             };
@@ -255,13 +251,13 @@ async fn run_ctrl(control_port: u16, #[cfg(feature = "host-dns")] host_dns: Opti
 
             let cmd = match cmd.get("cmd") {
                 None => {
-                    log::error!("control: cmd: {:?}, no entry cmd", cmd);
+                    tracing::error!("control: cmd: {:?}, no entry cmd", cmd);
                     continue;
                 }
                 Some(v) => match v {
                     Value::String(v) => v.as_str(),
                     _ => {
-                        log::error!("control: cmd: {:?}, entry cmd not string", cmd);
+                        tracing::error!("control: cmd: {:?}, entry cmd not string", cmd);
                         continue;
                     }
                 },
@@ -275,12 +271,12 @@ async fn run_ctrl(control_port: u16, #[cfg(feature = "host-dns")] host_dns: Opti
                         let mut servers = vec![];
                         if let Some(args) = args {
                             if !args.is_array() {
-                                log::error!("control: {}: args not array", cmd);
+                                tracing::error!("control: {}: args not array", cmd);
                                 continue;
                             }
                             for e in args.as_array().unwrap().iter() {
                                 if !e.is_string() {
-                                    log::error!("control: {}: ignore arg for not string", cmd);
+                                    tracing::error!("control: {}: ignore arg for not string", cmd);
                                     continue;
                                 }
                                 servers.push(e.as_str().unwrap());
@@ -293,20 +289,20 @@ async fn run_ctrl(control_port: u16, #[cfg(feature = "host-dns")] host_dns: Opti
                 "update-rate-limit" => match on_update_speed_limit(control_port, args).await {
                     Ok(()) => {}
                     Err(e) => {
-                        log::error!("control: {}: error {}", cmd, e);
+                        tracing::error!("control: {}: error {}", cmd, e);
                     }
                 },
-                _ => log::error!("control: not support cmd {}", cmd),
+                _ => tracing::error!("control: not support cmd {}", cmd),
             }
         }
 
-        log::info!("server aborted ctrl stop");
+        tracing::info!("server aborted ctrl stop");
         io::Result::Ok(())
     }
     .await
     {
-        Ok(()) => log::info!("server control stop success"),
-        Err(err) => log::error!("server control stop with error {}", err),
+        Ok(()) => tracing::info!("server control stop success"),
+        Err(err) => tracing::error!("server control stop with error {}", err),
     }
 }
 
@@ -340,6 +336,6 @@ async fn on_update_speed_limit(maintain_port: u16, args: Option<&Value>) -> io::
         .await
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
-    log::info!("control: update speed limit: rsp={:?}", rsp);
+    tracing::info!("control: update speed limit: rsp={:?}", rsp);
     Ok(())
 }

@@ -129,8 +129,15 @@ impl Config {
                 nlog.format = nformat;
             }
 
-            if let Some(config_path) = log.config_path {
-                nlog.config_path = Some(PathBuf::from(config_path));
+            if let Some(log_template) = log.log_template {
+                nlog.log_template = Some(PathBuf::from(log_template));
+            }
+
+            #[cfg(feature = "logging-remote")]
+            if let Some(log_remote_url) = log.log_remote_url {
+                nlog.log_remote_url = Some(url::Url::parse(log_remote_url.as_str()).map_err(|e| {
+                    ConfigError::InvalidValue(format!("log remote url {} error, {}", log_remote_url, e))
+                })?);
             }
 
             config.log = nlog;
@@ -170,8 +177,13 @@ impl Config {
                 self.log.format.without_time = true;
             }
 
-            if let Some(log_config) = matches.value_of("LOG_CONFIG") {
-                self.log.config_path = Some(log_config.into());
+            if let Some(log_template) = matches.value_of("LOG_TEMPLATE") {
+                self.log.log_template = Some(log_template.into());
+            }
+
+            #[cfg(feature = "logging-remote")]
+            if matches.is_present("LOG_REMOTE") {
+                self.log.log_remote_url = Some(matches.value_of_t_or_exit::<url::Url>("LOG_REMOTE"));
             }
         }
 
@@ -200,7 +212,9 @@ pub struct LogConfig {
     /// Default logger format configuration
     pub format: LogFormatConfig,
     /// Logging configuration file path
-    pub config_path: Option<PathBuf>,
+    pub log_template: Option<PathBuf>,
+    #[cfg(feature = "logging-remote")]
+    pub log_remote_url: Option<url::Url>,
 }
 
 /// Logger format configuration
@@ -271,7 +285,9 @@ struct SSConfig {
 struct SSLogConfig {
     level: Option<u32>,
     format: Option<SSLogFormat>,
-    config_path: Option<String>,
+    log_template: Option<String>,
+    #[cfg(feature = "logging-remote")]
+    log_remote_url: Option<String>,
 }
 
 #[cfg(feature = "logging")]

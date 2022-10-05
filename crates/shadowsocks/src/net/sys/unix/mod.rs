@@ -5,9 +5,9 @@ use std::{
 };
 
 use cfg_if::cfg_if;
-use log::warn;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use tokio::net::UdpSocket;
+use tracing::warn;
 
 use crate::net::{is_dual_stack_addr, sys::socket_bind_dual_stack, AddrFamily, ConnectOpts};
 

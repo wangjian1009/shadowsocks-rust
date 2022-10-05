@@ -5,7 +5,6 @@ use super::{
     cvt_error, BinaryWsStream,
 };
 use async_trait::async_trait;
-use log::error;
 use std::{io, net::SocketAddr};
 use tokio_tungstenite::{
     accept_hdr_async_with_config,
@@ -14,6 +13,7 @@ use tokio_tungstenite::{
         http::StatusCode,
     },
 };
+use tracing::error;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WebSocketAcceptorConfig {

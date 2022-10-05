@@ -8,7 +8,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use log::{debug, error, info, trace, warn};
 use lru_time_cache::LruCache;
 use shadowsocks::{
     lookup_then,
@@ -17,6 +16,7 @@ use shadowsocks::{
     ServerAddr,
 };
 use tokio::{sync::Mutex, task::JoinHandle, time};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     config::RedirType,

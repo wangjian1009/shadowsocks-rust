@@ -1,11 +1,10 @@
 use std::{
     ffi::CStr,
     io::{self, ErrorKind},
-    mem,
-    ptr,
+    mem, ptr,
 };
 
-use log::{error, trace};
+use tracing::{error, trace};
 use tun::{platform::Device as TunDevice, Device};
 
 /// These numbers are used by reliable protocols for determining

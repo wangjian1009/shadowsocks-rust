@@ -23,7 +23,7 @@ impl MaintainServerContext {
             #[cfg(feature = "rate-limit")]
             (&Method::POST, "/speed-limit") => self.update_speed_limit(req).await,
             _ => {
-                log::error!(
+                tracing::error!(
                     "maintain-service: unknown request: {} {}",
                     req.method(),
                     req.uri().path()
@@ -75,7 +75,7 @@ impl MaintainServerContext {
 
         let old_bound_width = rate_limiter.rate_limit();
         if old_bound_width != bound_width {
-            log::info!(
+            tracing::info!(
                 "maintain-service: speed-limit {:?} => {:?}",
                 old_bound_width,
                 bound_width

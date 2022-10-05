@@ -141,13 +141,9 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn test_strings() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-
-        log::error!("xxxx: {:?}", string_encode("abcdefghijklmnop"));
+        tracing::error!("xxxx: {:?}", string_encode("abcdefghijklmnop"));
 
         assert_eq!(string_decode(&S_SS_PASSWORD).as_str(), "aaaaaaaa");
 

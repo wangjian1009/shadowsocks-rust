@@ -57,9 +57,9 @@ pub async fn listen_incoming(mut next_incoming_rx: UdpRelayMode<Receiver<Datagra
         };
 
         match err {
-            ConnectionError::LocallyClosed => log::debug!("[relay] [connection] Locally closed"),
-            ConnectionError::TimedOut => log::debug!("[relay] [connection] Timeout"),
-            err => log::error!("[relay] [connection] {err}"),
+            ConnectionError::LocallyClosed => tracing::debug!("[relay] [connection] Locally closed"),
+            ConnectionError::TimedOut => tracing::debug!("[relay] [connection] Timeout"),
+            err => tracing::error!("[relay] [connection] {err}"),
         }
 
         conn.set_closed();
@@ -87,7 +87,7 @@ impl Connection {
 
         match parse_header(pkt).await {
             Ok((assoc_id, pkt, addr)) => self.handle_packet_from(assoc_id, pkt, addr).await,
-            Err(err) => log::warn!("[relay] [connection] {err}"),
+            Err(err) => tracing::warn!("[relay] [connection] {err}"),
         }
     }
 
@@ -111,7 +111,7 @@ impl Connection {
 
         match parse_header(recv).await {
             Ok((assoc_id, pkt, addr)) => self.handle_packet_from(assoc_id, pkt, addr).await,
-            Err(err) => log::warn!("[relay] [connection] {err}"),
+            Err(err) => tracing::warn!("[relay] [connection] {err}"),
         }
     }
 }

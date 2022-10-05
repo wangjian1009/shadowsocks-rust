@@ -10,7 +10,6 @@ use std::{
 use async_trait::async_trait;
 use byte_string::ByteStr;
 use bytes::{BufMut, BytesMut};
-use log::{debug, error, info, trace};
 use shadowsocks::{
     lookup_then,
     net::UdpSocket as ShadowUdpSocket,
@@ -21,6 +20,7 @@ use shadowsocks::{
     ServerAddr,
 };
 use tokio::{net::UdpSocket, time};
+use tracing::{debug, error, info, trace};
 
 use crate::{
     local::{

@@ -10,8 +10,8 @@
 /// https://github.com/golang/go/issues/46279
 #[cfg(all(unix, not(target_os = "android")))]
 pub fn adjust_nofile() {
-    use log::{debug, trace};
     use std::{io::Error, mem};
+    use tracing::{debug, trace};
 
     unsafe {
         let mut lim: libc::rlimit = mem::zeroed();
@@ -78,11 +78,11 @@ pub fn adjust_nofile() {
 /// setuid(), setgid() for a specific user or uid
 #[cfg(unix)]
 pub fn run_as_user(uname: &str) {
-    use log::warn;
     use std::{
         ffi::{CStr, CString},
         io::Error,
     };
+    use tracing::warn;
 
     unsafe {
         let pwd = match uname.parse::<libc::uid_t>() {

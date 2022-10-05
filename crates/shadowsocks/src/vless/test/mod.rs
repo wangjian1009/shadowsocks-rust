@@ -186,11 +186,11 @@ async fn serve_tcp(
     .await
     {
         Ok(len) => {
-            log::info!("test server to {} transform success, len={}", target_addr, len);
+            tracing::info!("test server to {} transform success, len={}", target_addr, len);
             Ok(())
         }
         Err(err) => {
-            log::error!("test server to {} transform complete error {}", target_addr, err);
+            tracing::error!("test server to {} transform complete error {}", target_addr, err);
             Err(err)
         }
     }
@@ -220,13 +220,13 @@ async fn serve_udp(
                         match channel_w.send(block).await {
                             Ok(()) => {}
                             Err(err) => {
-                                log::error!("test server to {}: channel send error {}", target_addr, err);
+                                tracing::error!("test server to {}: channel send error {}", target_addr, err);
                                 return Err(io::Error::new(io::ErrorKind::Other, err));
                             }
                         };
                     }
                     Err(err) => {
-                        log::error!("test server to {}: read error {}", target_addr, err);
+                        tracing::error!("test server to {}: read error {}", target_addr, err);
                         return Err(err);
                     }
                 }
@@ -240,7 +240,7 @@ async fn serve_udp(
             while let Some(block) = channel_r.recv().await {
                 match w.write_to_mut(&block[..]).await {
                     Err(err) => {
-                        log::error!("test server to {}: write error {}", target_addr, err);
+                        tracing::error!("test server to {}: write error {}", target_addr, err);
                         return Err(err);
                     }
                     Ok(()) => {}
@@ -255,20 +255,20 @@ async fn serve_udp(
         r = process_read => {
             match r {
                 Err(err) => {
-                    log::error!("test server to {}: read error {}", target_addr, err);
+                    tracing::error!("test server to {}: read error {}", target_addr, err);
                 },
                 Ok(()) => {
-                    log::error!("test server to {}: read shutdown", target_addr);
+                    tracing::error!("test server to {}: read shutdown", target_addr);
                 }
             }
         }
         r = process_write => {
             match r {
                 Err(err) => {
-                    log::error!("test server write error {}", err);
+                    tracing::error!("test server write error {}", err);
                 },
                 Ok(()) => {
-                    log::error!("test server write shutdown");
+                    tracing::error!("test server write shutdown");
                 }
             }
         }

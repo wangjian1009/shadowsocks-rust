@@ -3,7 +3,6 @@
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use log::{debug, error, info};
 use shadowsocks::{
     lookup_then,
     net::UdpSocket as ShadowUdpSocket,
@@ -11,6 +10,7 @@ use shadowsocks::{
     ServerAddr,
 };
 use tokio::{net::UdpSocket, time};
+use tracing::{debug, error, info};
 
 use crate::local::{
     context::ServiceContext,

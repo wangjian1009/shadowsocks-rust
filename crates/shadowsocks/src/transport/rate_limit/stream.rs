@@ -225,7 +225,7 @@ where
                             if readed == 0 {
                                 return Poll::Ready(Ok(()));
                             } else {
-                                // log::error!(
+                                // tracing::error!(
                                 //     "xxxxxxx: limit: received {} data, max-once-size={:?}",
                                 //     buf.filled().len(),
                                 //     max_once_size
@@ -256,14 +256,14 @@ where
                                         // 定时器启动，进入等待状态，此时如果有数据，返回数据，等待只影响下一次读取
                                         limiter_ctx.state = State::Wait;
                                         if buf.filled().len() > 0 {
-                                            // log::error!(
+                                            // tracing::error!(
                                             //     "xxxxxxx: limit: sleep begin, duration={:?}, return {}",
                                             //     duration,
                                             //     buf.filled().len()
                                             // );
                                             return Poll::Ready(Ok(()));
                                         } else {
-                                            // log::error!(
+                                            // tracing::error!(
                                             //     "xxxxxxx: limit: sleep begin, duration={:?}, no data",
                                             //     duration
                                             // );
@@ -271,7 +271,7 @@ where
                                         }
                                     }
                                     Poll::Ready(_) => {
-                                        // log::error!("xxxxxxx: limit: sleep skip");
+                                        // tracing::error!("xxxxxxx: limit: sleep skip");
                                         // 定时器反馈无需等待，则再次检测(下一个循环还是CheckNextRead状态)
                                     }
                                 }
@@ -288,12 +288,12 @@ where
 
                             if buf.filled().len() > 0 {
                                 // 从State::ReadInner进入检测状态时，已经可能读取过数据，直接返回上层
-                                // log::error!("xxxxxxx: limit: check passed, return {}", buf.filled().len());
+                                // tracing::error!("xxxxxxx: limit: check passed, return {}", buf.filled().len());
                                 return Poll::Ready(Ok(()));
                             }
 
                             // 没有已经读取的数据，直接进行一次读取
-                            // log::error!("xxxxxxx: limit: check passed, no data");
+                            // tracing::error!("xxxxxxx: limit: check passed, no data");
                         }
                     }
                 }

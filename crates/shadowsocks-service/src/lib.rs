@@ -84,6 +84,10 @@ pub use env_crypt::decrypt;
 #[macro_use]
 extern crate mockall;
 
+#[cfg(test)]
+#[macro_use]
+extern crate tracing_test;
+
 /// Default UDP association's expire duration
 #[allow(dead_code)]
 const DEFAULT_UDP_EXPIRY_DURATION: Duration = Duration::from_secs(5 * 60);

@@ -109,12 +109,8 @@ mod test {
     use super::*;
 
     #[test]
+    #[traced_test]
     fn authenticator_1() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .is_test(true)
-            .try_init();
-
         let seed = "itest123";
         let payload = b"abcdefg";
         let iv = b"aaaaaaaaaaaa";

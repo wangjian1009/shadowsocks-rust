@@ -7,12 +7,12 @@ use std::{
     time::Duration,
 };
 
-use log::{debug, error, info, trace};
 use shadowsocks::{lookup_then, net::TcpListener as ShadowTcpListener, relay::socks5::Address, ServerAddr};
 use tokio::{
     net::{TcpListener, TcpStream},
     time,
 };
+use tracing::{debug, error, info, trace};
 
 use crate::{
     config::RedirType,

@@ -13,12 +13,12 @@ use std::{
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use cfg_if::cfg_if;
-#[cfg(feature = "trust-dns")]
-use log::error;
-use log::{log_enabled, trace, Level};
 use tokio::net::lookup_host;
 #[cfg(feature = "trust-dns")]
 use tokio::task::JoinHandle;
+#[cfg(feature = "trust-dns")]
+use tracing::error;
+use tracing::{level_enabled, trace, Level};
 #[cfg(feature = "trust-dns")]
 use trust_dns_resolver::{config::ResolverConfig, TokioAsyncResolver};
 
@@ -137,9 +137,9 @@ cfg_if! {
 async fn trust_dns_notify_update_dns(resolver: Arc<TrustDnsSystemResolver>) -> notify::Result<()> {
     use std::{path::Path, time::Duration};
 
-    use log::debug;
     use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Result as NotifyResult, Watcher};
     use tokio::{sync::watch, time};
+    use tracing::debug;
 
     use super::trust_dns_resolver::create_resolver;
 
@@ -268,7 +268,7 @@ impl DnsResolver {
 
         impl<'x, 'y> ResolverLogger<'x, 'y> {
             fn new(resolver: &'x DnsResolver, addr: &'y str, port: u16) -> ResolverLogger<'x, 'y> {
-                let start_time = if log_enabled!(Level::Trace) {
+                let start_time = if level_enabled!(Level::TRACE) {
                     Some(Instant::now())
                 } else {
                     None

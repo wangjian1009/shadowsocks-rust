@@ -12,10 +12,10 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future;
-use log::{debug, error, trace, warn};
 use lru_time_cache::LruCache;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use tokio::{sync::mpsc, task::JoinHandle, time};
+use tracing::{debug, error, trace, warn};
 
 use shadowsocks::{
     config::ServerProtocol,
@@ -135,7 +135,7 @@ where
                     Err(SnifferCheckError::NoClue) => None,
                     Err(SnifferCheckError::Reject) => None,
                     Err(SnifferCheckError::Other(err)) => {
-                        log::error!(
+                        tracing::error!(
                             "sniffer package from {} to {} for error {}",
                             peer_addr, target_addr, err
                         );
@@ -375,7 +375,7 @@ where
                     NegativeMultiDecision::BatchNonConforming(duration) => Some(duration),
                     NegativeMultiDecision::InsufficientCapacity => {
                         // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个情况
-                        log::error!("xxxxx: check_n size={} unexpected", processed_size);
+                        tracing::error!("xxxxx: check_n size={} unexpected", processed_size);
                         unreachable!()
                     }
                 },
@@ -407,13 +407,13 @@ where
         assert!((duration.is_some() && *processed_size > 0) || duration.is_none() && *processed_size == 0);
 
         // if duration.is_some() {
-        //     log::error!(
+        //     tracing::error!(
         //         "xxxxx: rate-limit sleep begin: size={}, duration={:?}",
         //         *processed_size,
         //         duration.unwrap()
         //     );
         // } else {
-        //     log::error!("xxxxx: rate-limit sleep end");
+        //     tracing::error!("xxxxx: rate-limit sleep end");
         // }
 
         duration
@@ -545,7 +545,7 @@ where
                 }
 
                 _ = close_notify.notified() => {
-                    // log::error!("xxxxxx: udp association for {} -> ... fake closed", self.peer_addr);
+                    // tracing::error!("xxxxxx: udp association for {} -> ... fake closed", self.peer_addr);
                     break;
                 }
             }
@@ -636,7 +636,7 @@ where
             }
         } else {
             if *check_rate_limit_size > 0 {
-                log::info!(
+                tracing::info!(
                     "udp relay {} -> {} (proxied) with {} bytes, error: rate-limited",
                     self.peer_addr,
                     target_addr,

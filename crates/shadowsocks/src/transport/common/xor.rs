@@ -113,12 +113,8 @@ mod test {
     }
 
     #[test]
+    #[traced_test]
     fn xorfwd_2block() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .is_test(true)
-            .try_init();
-
         let input = b"1234567";
 
         let mut buf1 = [0u8; 7];
@@ -154,22 +150,14 @@ mod test {
     }
 
     #[test]
+    #[traced_test]
     fn pending_inline() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .is_test(true)
-            .try_init();
-
         assert_eq!(b"1234567", xor_rebuild(b"1234567", 8).as_slice());
     }
 
     #[test]
+    #[traced_test]
     fn pending_2block() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .is_test(true)
-            .try_init();
-
         assert_eq!(b"1234567", xor_rebuild(b"1234567", 7).as_slice());
     }
 }

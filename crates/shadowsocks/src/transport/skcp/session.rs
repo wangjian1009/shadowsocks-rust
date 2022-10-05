@@ -10,12 +10,12 @@ use std::{
 };
 
 use byte_string::ByteStr;
-use log::{error, trace};
 use spin::Mutex as SpinMutex;
 use tokio::{
     sync::{mpsc, Notify},
     time::{self, Instant},
 };
+use tracing::{error, trace};
 
 use crate::net::UdpSocket;
 

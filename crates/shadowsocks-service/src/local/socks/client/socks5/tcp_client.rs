@@ -6,23 +6,15 @@ use std::{
     task::{self, Poll},
 };
 
-use log::trace;
 use pin_project::pin_project;
 use shadowsocks::relay::socks5::{
-    self,
-    Address,
-    Command,
-    Error,
-    HandshakeRequest,
-    HandshakeResponse,
-    Reply,
-    TcpRequestHeader,
-    TcpResponseHeader,
+    self, Address, Command, Error, HandshakeRequest, HandshakeResponse, Reply, TcpRequestHeader, TcpResponseHeader,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{TcpStream, ToSocketAddrs},
 };
+use tracing::trace;
 
 /// Socks5 proxy client
 #[pin_project]

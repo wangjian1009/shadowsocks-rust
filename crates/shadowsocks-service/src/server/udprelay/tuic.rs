@@ -57,7 +57,7 @@ impl TuicUdpSocket {
                         OutboundUdpSocket::connect_any_with_opts(AddrFamily::Ipv6, self.context.connect_opts_ref())
                             .await?;
 
-                    log::debug!(
+                    tracing::debug!(
                         "[{}] [udp-session] [{}] socket ipv6 created",
                         self.peer_addr,
                         self.assoc_id
@@ -78,7 +78,7 @@ impl TuicUdpSocket {
                                 OutboundUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref())
                                     .await?;
 
-                            log::debug!(
+                            tracing::debug!(
                                 "[{}] [udp-session] [{}] socket ipv4 created",
                                 self.peer_addr,
                                 self.assoc_id
@@ -98,7 +98,7 @@ impl TuicUdpSocket {
                                 OutboundUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref())
                                     .await?;
 
-                            log::debug!(
+                            tracing::debug!(
                                 "[{}] [udp-session] [{}] socket ipv6 created",
                                 self.peer_addr,
                                 self.assoc_id
@@ -135,7 +135,7 @@ impl TuicUdpSocket {
                 data.len()
             );
         } else {
-            log::debug!(
+            tracing::debug!(
                 "[{}] [udp-session] [{}] {target_addr} --> {n} bytes",
                 self.peer_addr,
                 self.assoc_id,
@@ -163,7 +163,7 @@ impl tuic::server::UdpSocket for TuicUdpSocket {
                     let (len, addr) = s.recv_from(&mut buf).await?;
                     buf.truncate(len);
 
-                    log::debug!("[{}] [udp-session] [{}] {addr} <-- {len} bytes", peer_addr, assoc_id,);
+                    tracing::debug!("[{}] [udp-session] [{}] {addr} <-- {len} bytes", peer_addr, assoc_id,);
 
                     Ok((Bytes::from(buf), addr))
                 }
@@ -185,7 +185,7 @@ impl tuic::server::UdpSocket for TuicUdpSocket {
                         return received_opt;
                 }
                 _socket_updated = socket_update_rx.recv() => {
-                    log::debug!(
+                    tracing::debug!(
                         "[{}] [udp-session] [{}] socket updated",
                         self.peer_addr,
                         self.assoc_id,

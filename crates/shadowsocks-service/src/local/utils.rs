@@ -2,7 +2,6 @@
 
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
-use log::{debug, trace};
 use shadowsocks::{
     config::{ServerConfig, ServerProtocol},
     relay::{
@@ -16,6 +15,7 @@ use tokio::{
     sync::Mutex,
     time,
 };
+use tracing::{debug, trace};
 
 use cfg_if::cfg_if;
 
@@ -82,7 +82,7 @@ where
                     if #[cfg(feature = "sniffer")] {
                         match context.protocol_action(plain.protocol()) {
                             Some(ProtocolAction::Reject) => {
-                                log::error!(
+                                tracing::error!(
                                     "tcp tunnel {} -> {} reject for protocol {:?} len={}",
                                     peer_addr,
                                     target_addr,
@@ -94,7 +94,7 @@ where
                             None =>{}
                         }
 
-                        // log::error!(
+                        // tracing::error!(
                         //     "tcp check pass: xxxxxx: {} -> {} : {:?}: len={}, {:?}",
                         //     peer_addr,
                         //     target_addr,

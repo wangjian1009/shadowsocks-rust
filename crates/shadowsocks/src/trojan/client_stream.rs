@@ -80,7 +80,7 @@ impl<S: StreamConnection> ClientStream<S> {
             None => connector.connect(&destination, opts).await?,
         };
 
-        log::trace!(
+        tracing::trace!(
             "connected trojan tcp remote {}{} (outbound: {}) with {:?}",
             svr_cfg.addr(),
             svr_cfg.external_addr(),
@@ -122,7 +122,7 @@ impl<S: StreamConnection> ClientStream<S> {
             None => connector.connect(&destination, opts).await?,
         };
 
-        log::trace!(
+        tracing::trace!(
             "connected trojan tcp remote {}{} (outbound: {}) with {:?}",
             svr_cfg.addr(),
             svr_cfg.external_addr(),

@@ -1,8 +1,8 @@
 use super::{PluginConfig, PluginMode};
 use crate::config::ServerAddr;
-use log::trace;
 use std::{net::SocketAddr, process::Stdio};
 use tokio::process::Command;
+use tracing::trace;
 
 pub fn plugin_cmd(plugin: &PluginConfig, remote: &ServerAddr, local: &SocketAddr, _mode: PluginMode) -> Command {
     trace!(

@@ -16,7 +16,7 @@ use base64::{decode_config, encode_config, URL_SAFE_NO_PAD};
 use byte_string::ByteStr;
 use bytes::Bytes;
 use cfg_if::cfg_if;
-use log::error;
+use tracing::error;
 use url::{self, Url};
 
 use crate::{
@@ -664,7 +664,7 @@ impl ServerConfig {
                 return Self::from_url_tuic_client(&parsed);
             }
 
-            log::error!("not supported protocol {}", parsed.scheme());
+            tracing::error!("not supported protocol {}", parsed.scheme());
             return Err(UrlParseError::InvalidScheme);
         }
 

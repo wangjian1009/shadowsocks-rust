@@ -163,7 +163,7 @@ impl UdpHeader {
         stream.read_exact(&mut buf).await?;
         let len = ((buf[0] as u16) << 8) | (buf[1] as u16);
         stream.read_exact(&mut buf).await?;
-        log::debug!("udp addr={} len={}", addr, len);
+        tracing::debug!("udp addr={} len={}", addr, len);
         Ok(Self {
             address: addr,
             payload_len: len,

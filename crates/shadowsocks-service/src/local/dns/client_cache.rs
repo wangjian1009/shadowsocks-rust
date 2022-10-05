@@ -10,8 +10,8 @@ use std::{
     time::Duration,
 };
 
-use log::{debug, trace};
 use tokio::sync::Mutex;
+use tracing::{debug, trace};
 use trust_dns_resolver::proto::{error::ProtoError, op::Message};
 
 use shadowsocks::{net::ConnectOpts, relay::socks5::Address};

@@ -4,7 +4,6 @@
 use std::path::PathBuf;
 use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 
-use log::{error, info, trace};
 use shadowsocks::{
     config::{Mode, ServerConfig, ServerProtocol, ServerType, ServerUser, ServerUserManager, ShadowsocksConfig},
     context::{Context, SharedContext},
@@ -19,6 +18,7 @@ use shadowsocks::{
     ManagerListener, ServerAddr,
 };
 use tokio::{sync::Mutex, task::JoinHandle};
+use tracing::{error, info, trace};
 
 use crate::{
     acl::AccessControl,
@@ -280,11 +280,11 @@ impl Manager {
 
     #[cfg(unix)]
     fn kill_standalone_server(&self, port: u16) {
-        use log::{debug, warn};
         use std::{
             fs::{self, File},
             io::Read,
         };
+        use tracing::{debug, warn};
 
         let pid_path = self.server_pid_path(port);
         if pid_path.exists() {
@@ -553,8 +553,8 @@ impl Manager {
 
     #[cfg(unix)]
     async fn handle_stat(&self, stat: &StatRequest) {
-        use log::warn;
         use std::collections::hash_map::Entry;
+        use tracing::warn;
 
         use crate::config::{Config, ConfigType};
 

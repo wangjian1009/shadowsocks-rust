@@ -16,7 +16,6 @@ use std::{
 use arc_swap::ArcSwap;
 use byte_string::ByteStr;
 use futures::future;
-use log::{debug, error, info, trace, warn};
 use shadowsocks::{
     config::{Mode, ServerProtocol, ShadowsocksConfig},
     plugin::{Plugin, PluginMode},
@@ -33,6 +32,7 @@ use tokio::{
     task::JoinHandle,
     time,
 };
+use tracing::{debug, error, info, trace, warn};
 
 use crate::local::{context::ServiceContext, net::AutoProxyClientStream};
 

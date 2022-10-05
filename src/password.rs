@@ -2,7 +2,7 @@
 
 use std::{env, io};
 
-use log::debug;
+use tracing::debug;
 
 /// Read server's password from environment variable or TTY
 pub fn read_server_password(server_name: &str) -> io::Result<String> {

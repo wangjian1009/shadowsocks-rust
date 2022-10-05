@@ -6,7 +6,6 @@ use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{BufMut, BytesMut};
-use log::trace;
 use rand::{thread_rng, Rng};
 use shadowsocks::{
     config::ServerProtocol,
@@ -15,6 +14,7 @@ use shadowsocks::{
     relay::{udprelay::ProxySocket, Address},
     transport::StreamConnection,
 };
+use tracing::trace;
 
 #[cfg(unix)]
 use tokio::net::UnixStream;

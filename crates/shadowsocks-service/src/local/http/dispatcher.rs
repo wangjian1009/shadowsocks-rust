@@ -7,7 +7,7 @@ use hyper::{
     http::uri::{Authority, Scheme},
     upgrade, Body, HeaderMap, Method, Request, Response, StatusCode, Uri, Version,
 };
-use log::{debug, error, trace};
+use tracing::{debug, error, trace};
 
 use shadowsocks::relay::socks5::Address;
 

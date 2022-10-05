@@ -1,7 +1,6 @@
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{BufMut, BytesMut};
 use futures::future::{self, Either};
-use log::{error, info};
 use shadowsocks_service::local::dns::NameServerAddr;
 use std::{
     fmt::Debug,
@@ -10,6 +9,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
 };
+use tracing::{error, info};
 
 use trust_dns_resolver::proto::{error::ProtoError, op::Message};
 
@@ -62,7 +62,7 @@ impl HostDns {
     }
 
     pub async fn update_servers(&self, servers: Vec<&str>) {
-        log::info!("host dns update host dns: {:?}", servers);
+        tracing::info!("host dns update host dns: {:?}", servers);
 
         let mut new_addrs: Vec<SocketAddr> = vec![];
 
@@ -82,7 +82,7 @@ impl HostDns {
 
         let mut guard_addrs = self.remote_addrs.lock().await;
 
-        log::info!("host dns update host dns: {:?} ==> {:?}", guard_addrs, new_addrs);
+        tracing::info!("host dns update host dns: {:?} ==> {:?}", guard_addrs, new_addrs);
 
         *guard_addrs = new_addrs;
     }

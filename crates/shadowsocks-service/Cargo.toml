@@ -162,7 +162,7 @@ armv8 = ["shadowsocks/armv8"]
 neon = ["shadowsocks/neon"]
 
 [dependencies]
-log = "0.4"
+tracing = "0.1.10"
 
 cfg-if = "1"
 pin-project = "1.0"
@@ -237,7 +237,7 @@ windows-sys = { version = "0.36", features = ["Win32_Networking_WinSock"] }
 
 [dev-dependencies]
 byteorder = "1.3"
-env_logger = "0.9"
+tracing-test = "*"
 tokio-test = "*"
 tokio-util = { version = "*", features = ["io"]}
 mockall = "*"

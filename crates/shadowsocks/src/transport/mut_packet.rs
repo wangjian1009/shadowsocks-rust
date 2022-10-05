@@ -28,7 +28,7 @@ impl MutPacketWriter {
                         match err.kind() {
                             io::ErrorKind::UnexpectedEof => {}
                             _ => {
-                                log::error!("MutPacketWrite: write to inner error: {}", err);
+                                tracing::error!("MutPacketWrite: write to inner error: {}", err);
                             }
                         }
                         rx.close();
@@ -56,7 +56,7 @@ impl MutPacketWriter {
                         match err.kind() {
                             io::ErrorKind::UnexpectedEof => {}
                             _ => {
-                                log::error!("MutPacketWrite: write to inner error: {}", err);
+                                tracing::error!("MutPacketWrite: write to inner error: {}", err);
                             }
                         }
                         rx.close();

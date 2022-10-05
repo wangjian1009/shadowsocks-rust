@@ -13,8 +13,8 @@ use cfg_if::cfg_if;
 
 use clap::{Arg, ArgGroup, ArgMatches, Command, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
-use log::info;
 use tokio::{self, runtime::Builder};
+use tracing::info;
 
 #[cfg(feature = "local-redir")]
 use shadowsocks_service::config::RedirType;
@@ -33,6 +33,9 @@ use shadowsocks_service::{
     },
 };
 
+#[cfg(feature = "logging")]
+use crate::logging;
+
 #[cfg(feature = "transport")]
 use shadowsocks_service::shadowsocks::config::TransportConnectorConfig;
 
@@ -45,8 +48,6 @@ use shadowsocks_service::shadowsocks::config::TrojanConfig;
 #[cfg(feature = "vless")]
 use shadowsocks_service::shadowsocks::config::VlessConfig;
 
-#[cfg(feature = "logging")]
-use crate::logging;
 use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
     monitor, validator,
@@ -223,10 +224,10 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                     .help("Log without datetime prefix"),
             )
             .arg(
-                Arg::new("LOG_CONFIG")
-                    .long("log-config")
+                Arg::new("LOG_TEMPLATE")
+                    .long("log-template")
                     .takes_value(true)
-                    .help("log4rs configuration file"),
+                    .help("log template file name"),
             );
     }
 
@@ -484,15 +485,6 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
 
 /// Program entrance `main`
 pub fn main(matches: &ArgMatches) -> ExitCode {
-    // logging::init_with_config(
-    //     "sslocal",
-    //     &crate::config::LogConfig {
-    //         level: 4,
-    //         format: crate::config::LogFormatConfig::default(),
-    //         config_path: None,
-    //     },
-    // );
-
     let (config, runtime) = {
         let config_path_opt = matches
             .value_of("CONFIG")
@@ -545,32 +537,9 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
         service_config.set_options(matches);
 
         #[cfg(feature = "logging")]
-        match service_config.log.config_path {
-            Some(ref path) => {
-                logging::init_with_file(path);
-            }
-            None => {
-                logging::init_with_config("sslocal", &service_config.log);
-            }
-        }
+        logging::init_with_config("sslocal", &service_config.log);
 
-        #[cfg(feature = "tracing")]
-        {
-            let format = tracing_subscriber::fmt::format().with_level(true).with_target(true);
-
-            // 初始化并设置日志格式(定制和筛选日志)
-            match tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::TRACE)
-                .with_writer(io::stdout) // 写入标准输出
-                .event_format(format)
-                .try_init()  // 初始化并将SubScriber设置为全局SubScriber
-            {
-                Ok(()) => {},
-                Err(err) => log::error!("tracing init fail, {:?}", err),
-            }
-        }
-
-        log::trace!("{:?}", service_config);
+        tracing::trace!("{:?}", service_config);
 
         let mut config = match config_opt {
             Some(config) => match Config::load_from_str(&config, ConfigType::Local) {
@@ -1119,8 +1088,8 @@ cfg_if! {
 
 #[cfg(unix)]
 fn launch_reload_server_task(config_path: PathBuf, balancer: PingBalancer) {
-    use log::error;
     use tokio::signal::unix::{signal, SignalKind};
+    use tracing::error;
 
     tokio::spawn(async move {
         let mut sigusr1 = signal(SignalKind::user_defined1()).expect("signal");

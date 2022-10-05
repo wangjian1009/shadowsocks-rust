@@ -51,7 +51,7 @@ pub async fn manage_connection(
             let (new_conn, dg, uni) = match Connection::connect(context.as_ref(), &config, &connect_opts).await {
                 Ok(conn) => conn,
                 Err(err) => {
-                    log::error!("[relay] [connection] {err}");
+                    tracing::error!("[relay] [connection] {err}");
 
                     // sleep 1 second to avoid drawing too much CPU
                     time::sleep(Duration::from_secs(1)).await;
@@ -85,12 +85,12 @@ pub async fn manage_connection(
             break new_conn;
         };
 
-        log::debug!("[relay] [connection] [establish]");
+        tracing::debug!("[relay] [connection] [establish]");
 
         // wait for the connection to be closed, lock the mutex
         new_conn.wait_close().await;
 
-        log::debug!("[relay] [connection] [disconnect]");
+        tracing::debug!("[relay] [connection] [disconnect]");
         lock = Some(conn.clone().lock_owned().await);
     }
 }
@@ -160,7 +160,7 @@ impl Connection {
             match conn.into_0rtt() {
                 Ok((conn, _)) => conn,
                 Err(conn) => {
-                    log::warn!("[relay] [connection] Unable to convert the connection into 0-RTT");
+                    tracing::warn!("[relay] [connection] Unable to convert the connection into 0-RTT");
                     conn.await?
                 }
             }
@@ -204,8 +204,8 @@ impl Connection {
         }
 
         match send_token(&self, token_digest).await {
-            Ok(()) => log::debug!("[relay] [connection] [authentication]"),
-            Err(err) => log::warn!("[relay] [connection] [authentication] {err}"),
+            Ok(()) => tracing::debug!("[relay] [connection] [authentication]"),
+            Err(err) => tracing::warn!("[relay] [connection] [authentication] {err}"),
         }
     }
 
@@ -226,8 +226,8 @@ impl Connection {
         } {
             if !self.no_active_stream() || !self.no_active_udp_session() {
                 match send_heartbeat(&self).await {
-                    Ok(()) => log::debug!("[relay] [connection] [heartbeat]"),
-                    Err(err) => log::warn!("[relay] [connection] [heartbeat] {err}"),
+                    Ok(()) => tracing::debug!("[relay] [connection] [heartbeat]"),
+                    Err(err) => tracing::warn!("[relay] [connection] [heartbeat] {err}"),
                 }
             }
         }
@@ -269,7 +269,7 @@ impl Connection {
             UdpRelayMode::Native(()) => match self.controller.max_datagram_size() {
                 Some(size) => size,
                 None => {
-                    log::warn!("[relay] [connection] Failed to detect the max datagram size");
+                    tracing::warn!("[relay] [connection] Failed to detect the max datagram size");
                     self.default_max_udp_relay_packet_size
                 }
             },

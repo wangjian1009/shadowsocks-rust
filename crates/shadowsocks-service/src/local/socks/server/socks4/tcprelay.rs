@@ -6,12 +6,12 @@ use std::{
     sync::Arc,
 };
 
-use log::{debug, error, trace, warn};
 use shadowsocks::config::Mode;
 use tokio::{
     io::{AsyncWriteExt, BufReader},
     net::TcpStream,
 };
+use tracing::{debug, error, trace, warn};
 
 use crate::local::{
     context::ServiceContext,

@@ -288,12 +288,8 @@ mod test {
     use std::{io::Cursor, str::FromStr};
 
     #[tokio::test]
+    #[traced_test]
     async fn test_address_ipv4() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Trace)
-            .is_test(true)
-            .try_init();
-
         let bin_address = [
             0x1, 0xbb, 0x1, 0x1, 0x2, 0x3, 0x4
         ];
@@ -313,12 +309,8 @@ mod test {
     }
     
     #[tokio::test]
+    #[traced_test]
     async fn test_address_ipv6() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Trace)
-            .is_test(true)
-            .try_init();
-
         let bin_address = [
             0x1, 0xbb, 0x3, 0x20, 0x1, 0x48, 0x60, 0x0, 0x0, 0x20, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x68
         ];
@@ -338,12 +330,8 @@ mod test {
     }
     
     #[tokio::test]
+    #[traced_test]
     async fn test_compact_domain() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Trace)
-            .is_test(true)
-            .try_init();
-
         let bin_packet = [
             0x0, 0xed, 0x6a, 0x11, 0xa3, 0x7d, 0xd9, 0x70, 0x69, 0x55, 0xbb, 0x92, 0x4c, 0x93, 0x6c, 0xbe, 0x71, 0x0,
             0x1, 0x1, 0xbb, 0x2, 0xd, 0x77, 0x77, 0x77, 0x2e, 0x76, 0x32, 0x66, 0x6c, 0x79, 0x2e, 0x6f, 0x72, 0x67,

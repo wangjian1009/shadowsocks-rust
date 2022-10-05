@@ -9,13 +9,13 @@ use std::{
 use bytes::{BufMut, BytesMut};
 use cfg_if::cfg_if;
 use futures::ready;
-use log::trace;
 use once_cell::sync::Lazy;
 use pin_project::pin_project;
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     time,
 };
+use tracing::trace;
 
 #[cfg(feature = "aead-cipher-2022")]
 use crate::relay::get_aead_2022_padding_size;

@@ -72,9 +72,9 @@ macro_rules! lookup_then {
 macro_rules! lookup_then_connect {
     ($context:expr, $addr:expr, $port:expr, |$resolved_addr:ident| $body:block) => {{
         use futures::future::{self, Either};
-        use log::trace;
         use std::{net::SocketAddr, time::Duration};
         use tokio::time;
+        use tracing::trace;
 
         let ipv6_first = $context.ipv6_first();
 

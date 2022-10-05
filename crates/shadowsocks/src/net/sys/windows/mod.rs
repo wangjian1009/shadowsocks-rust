@@ -9,7 +9,6 @@ use std::{
     task::{self, Poll},
 };
 
-use log::{error, warn};
 use pin_project::pin_project;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use tokio::{
@@ -17,26 +16,15 @@ use tokio::{
     net::{TcpSocket, TcpStream as TokioTcpStream, UdpSocket},
 };
 use tokio_tfo::TfoStream;
+use tracing::{error, warn};
 use windows_sys::{
     core::PCSTR,
     Win32::{
         Foundation::BOOL,
         NetworkManagement::IpHelper::if_nametoindex,
         Networking::WinSock::{
-            setsockopt,
-            WSAGetLastError,
-            WSAIoctl,
-            IPPROTO_IP,
-            IPPROTO_IPV6,
-            IPPROTO_TCP,
-            IPV6_MTU_DISCOVER,
-            IPV6_UNICAST_IF,
-            IP_MTU_DISCOVER,
-            IP_PMTUDISC_DO,
-            IP_UNICAST_IF,
-            SIO_UDP_CONNRESET,
-            SOCKET,
-            SOCKET_ERROR,
+            setsockopt, WSAGetLastError, WSAIoctl, IPPROTO_IP, IPPROTO_IPV6, IPPROTO_TCP, IPV6_MTU_DISCOVER,
+            IPV6_UNICAST_IF, IP_MTU_DISCOVER, IP_PMTUDISC_DO, IP_UNICAST_IF, SIO_UDP_CONNRESET, SOCKET, SOCKET_ERROR,
             TCP_FASTOPEN,
         },
     },
@@ -48,8 +36,7 @@ const FALSE: BOOL = 0;
 use crate::net::{
     is_dual_stack_addr,
     sys::{set_common_sockopt_for_connect, socket_bind_dual_stack},
-    AddrFamily,
-    ConnectOpts,
+    AddrFamily, ConnectOpts,
 };
 
 /// A `TcpStream` that supports TFO (TCP Fast Open)

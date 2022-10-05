@@ -6,12 +6,8 @@ use std::{io::Cursor, str::FromStr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
+#[traced_test]
 async fn stream_basic() {
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .is_test(true)
-        .try_init();
-
     let uuid = common::UUID::from_str("66ad4540-b58c-4ad2-9926-ea63445a9b57").unwrap();
 
     let mut cfg = Config::new();
@@ -58,7 +54,7 @@ async fn test_one_connection(cfg: &Config, port: u16, target_addr: Address) -> i
         w.write_all_buf(&mut Cursor::new(client_send))
             .await
             .unwrap_or_else(|err| panic!("客户端发送数据失败 {}", err));
-        log::error!("客户端发送数据成功");
+        tracing::error!("客户端发送数据成功");
     });
 
     let mut client_received = vec![0u8; 1024 * 1024];
@@ -67,7 +63,7 @@ async fn test_one_connection(cfg: &Config, port: u16, target_addr: Address) -> i
         .await
         .unwrap_or_else(|err| panic!("客户端接受数据失败 {}", err));
 
-    log::info!("test client transform success");
+    tracing::info!("test client transform success");
 
     assert_eq!(client_received, client_expected);
 

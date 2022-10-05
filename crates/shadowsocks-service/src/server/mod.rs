@@ -11,9 +11,9 @@ use std::{
 
 use cfg_if::cfg_if;
 use futures::{future, ready};
-use log::trace;
 use shadowsocks::net::{AcceptOpts, ConnectOpts};
 use tokio::task::JoinHandle;
+use tracing::trace;
 
 use crate::{
     config::{Config, ConfigType},
@@ -58,7 +58,7 @@ pub async fn run(config: Config) -> io::Result<()> {
         match server.protocol() {
             shadowsocks::config::ServerProtocol::SS(cfg) => {
                 if cfg.method().is_stream() {
-                    log::warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
+                    tracing::warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
                     DO NOT USE. It will be removed in the future.", cfg.method(), server.addr());
                 }
             }
@@ -75,7 +75,7 @@ pub async fn run(config: Config) -> io::Result<()> {
     if let Some(nofile) = config.nofile {
         use crate::sys::set_nofile;
         if let Err(err) = set_nofile(nofile) {
-            log::warn!("set_nofile {} failed, error: {}", nofile, err);
+            tracing::warn!("set_nofile {} failed, error: {}", nofile, err);
         }
     }
 

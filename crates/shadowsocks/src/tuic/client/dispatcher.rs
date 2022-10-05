@@ -77,7 +77,7 @@ impl Dispatcher {
 
         let addr = self.addr.clone();
         let task = tokio::spawn(async move {
-            log::info!("tuic: server {}: serve begin", addr);
+            tracing::info!("tuic: server {}: serve begin", addr);
             tokio::pin!(relay);
 
             let wait_close = async move {
@@ -91,12 +91,12 @@ impl Dispatcher {
             tokio::select! {
                 r = relay => {
                     match r {
-                        Ok(()) => log::info!("tuic: server {}: serve complete success", addr),
-                        Err(err) => log::error!("tuic: server {}: serve complete error, {:?}", addr, err),
+                        Ok(()) => tracing::info!("tuic: server {}: serve complete success", addr),
+                        Err(err) => tracing::error!("tuic: server {}: serve complete error, {:?}", addr, err),
                     }
                 }
                 _r = wait_close => {
-                    log::info!("tuic: server {}: serve closed by notify", addr);
+                    tracing::info!("tuic: server {}: serve closed by notify", addr);
                 }
             }
         });
@@ -131,9 +131,9 @@ impl Dispatcher {
             }
         }
 
-        // log::error!("tuic: server start: sleep begin");
+        // tracing::error!("tuic: server start: sleep begin");
         // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        // log::error!("tuic: server start: sleep end");
+        // tracing::error!("tuic: server start: sleep end");
 
         *runing = Some(self.clone().run(close_notify).await?);
 
@@ -152,7 +152,7 @@ impl Dispatcher {
             return Ok(Some(req));
         }
 
-        log::error!("tuic: server {}: ==> {} ", self.addr, req);
+        tracing::error!("tuic: server {}: ==> {} ", self.addr, req);
         runing.req_tx.send(req).await.map_err(|e| {
             io::Error::new(
                 io::ErrorKind::Other,

@@ -60,7 +60,7 @@ strip = true
 [features]
 default = [
     "logging",
-    "tracing",
+    "logging-remote",
     "trust-dns",
     "stream-cipher",
     "local",
@@ -139,8 +139,8 @@ dns-over-tls = ["shadowsocks-service/dns-over-tls"]
 dns-over-https = ["shadowsocks-service/dns-over-https"]
 
 # Enable logging output
-logging = ["log4rs"]
-tracing = ["tracing-futures", "tracing-subscriber"]
+logging = ["tracing-futures", "tracing-subscriber", "tracing-appender"]
+logging-remote = ["logging", "tracing-opentelemetry", "opentelemetry", "opentelemetry-jaeger", "hyper", "url"]
 
 # Enable DNS-relay
 local-dns = ["local", "shadowsocks-service/local-dns"]
@@ -203,15 +203,18 @@ armv8 = ["shadowsocks-service/armv8"]
 neon = ["shadowsocks-service/neon"]
 
 [dependencies]
-log = "0.4"
-log4rs = { version = "1.1.1", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
 thiserror = "1.0"
 
 tracing = { version = "0.1.35" }
-tracing-futures = { version = "0.2.0", features = ["std-future"], optional = true }
-tracing-subscriber = { version = "0.3.0", features = ["env-filter", "fmt", "time", "local-time"], default-features = false, optional = true }
+tracing-futures = { version = "0.2", features = ["std-future"], optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time", "local-time"], default-features = false, optional = true }
+tracing-appender = { version = "0.2", optional = true }
+tracing-opentelemetry = { version = "0.18", optional = true }
+opentelemetry = { version = "*", features = ["rt-tokio"], optional = true }
+opentelemetry-jaeger = { version = "*", features = ["rt-tokio", "collector_client", "hyper_collector_client"], optional = true }
+url = { version = "*", optional = true }
 
 clap = { version = "3.2", features = ["wrap_help", "suggestions"] }
 cfg-if = "1"
@@ -254,14 +257,11 @@ shadowsocks-service = { version = "1.15.0", path = "./crates/shadowsocks-service
 daemonize = "0.4"
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-oslog = "0.2.0"
-
-[target.'cfg(target_os = "android")'.dependencies]
-android_logger = "0.11.0"
+tracing-oslog = "0.1.2"
 
 [dev-dependencies]
 byteorder = "1.3"
-env_logger = "0.9"
+tracing-test = "*"
 byte_string = "1.0"
 tokio = { version = "1", features = ["net", "time", "macros", "io-util"] }
 tokio-test = "*"

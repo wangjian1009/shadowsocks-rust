@@ -1,6 +1,6 @@
-use log::info;
 use std::io;
 use tokio::signal::ctrl_c;
+use tracing::info;
 
 /// Create a monitor future for signals
 ///

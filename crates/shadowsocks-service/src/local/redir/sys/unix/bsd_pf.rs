@@ -8,9 +8,9 @@ use std::{
     ptr,
 };
 
-use log::trace;
 use once_cell::sync::Lazy;
 use socket2::{Protocol, SockAddr};
+use tracing::trace;
 
 mod ffi {
     use cfg_if::cfg_if;

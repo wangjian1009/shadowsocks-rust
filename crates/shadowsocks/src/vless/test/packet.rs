@@ -7,12 +7,8 @@ const BLOCK_SIZE: usize = 1024;
 const TOTAL_SIZE: usize = 1024 * 128;
 
 #[tokio::test]
+#[traced_test]
 async fn packet_basic() {
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .is_test(true)
-        .try_init();
-
     let mut cfg = Config::new();
     cfg.add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None).unwrap();
 
@@ -65,7 +61,7 @@ async fn test_one_connection(
 
                 to_send = &mut to_send[send_sz..];
             }
-            log::error!("客户端发送数据成功");
+            tracing::error!("客户端发送数据成功");
         });
     }
 
@@ -94,7 +90,7 @@ async fn test_one_connection(
         recv_expect = &mut recv_expect[sz..];
     }
 
-    log::info!("test client transform success");
+    tracing::info!("test client transform success");
 
     assert_eq!(client_received, client_expected);
 

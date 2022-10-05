@@ -33,7 +33,7 @@ impl UdpOutput {
             tokio::spawn(async move {
                 while let Some(buf) = delay_rx.recv().await {
                     if let Err(err) = socket.send_to(&buf, target_addr).await {
-                        log::error!("[SEND] UDP delayed send failed, error: {}", err);
+                        tracing::error!("[SEND] UDP delayed send failed, error: {}", err);
                     }
                 }
             });
@@ -54,7 +54,7 @@ impl Write for UdpOutput {
             Err(ref err) if err.kind() == ErrorKind::WouldBlock => {
                 // send return EAGAIN
                 // ignored as packet was lost in transmission
-                log::trace!("[SEND] UDP send EAGAIN, packet.size: {} bytes, delayed send", buf.len());
+                tracing::trace!("[SEND] UDP send EAGAIN, packet.size: {} bytes, delayed send", buf.len());
 
                 self.delay_tx.send(buf.to_owned()).expect("channel closed unexpectly");
 
@@ -144,7 +144,7 @@ impl<W: Write> Write for DecorateOutput<W> {
         }
 
         let send_buf = &presend_buf[..total_len];
-        // log::error!("xxxxx: encode: {:?}", send_buf);
+        // tracing::error!("xxxxx: encode: {:?}", send_buf);
         self.writer.write(send_buf).map(|_n| buf.len())
     }
 
@@ -173,7 +173,7 @@ impl InputDecorate {
     }
 
     pub fn decode<'a>(&'a mut self, mut buf: &'a mut [u8]) -> KcpResult<&'a mut [u8]> {
-        // log::error!("xxxxx: decode: {:?}", byte_string::ByteStr::new(buf));
+        // tracing::error!("xxxxx: decode: {:?}", byte_string::ByteStr::new(buf));
         if let Some(header) = self.header.as_ref() {
             buf = &mut buf[header.size()..];
         }

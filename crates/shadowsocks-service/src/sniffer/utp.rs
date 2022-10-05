@@ -80,7 +80,7 @@ impl Sniffer for SnifferUtp {
 
         // let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
 
-        // log::error!("xxxxx: now={}, timestamp={}", now, _timestamp);
+        // tracing::error!("xxxxx: now={}, timestamp={}", now, _timestamp);
 
         // let duration = if now > _timestamp {
         //     now - _timestamp

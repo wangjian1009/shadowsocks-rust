@@ -46,7 +46,7 @@ pub fn start_echo_server(mut listener: TestMkcpAcceptor) -> JoinHandle<()> {
 
             tokio::spawn(async move {
                 let _ = tokio::io::copy(&mut r, &mut w).await;
-                log::debug!("服务端数据传输任务退出");
+                tracing::debug!("服务端数据传输任务退出");
             });
         }
     })

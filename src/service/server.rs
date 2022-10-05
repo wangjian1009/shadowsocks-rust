@@ -9,8 +9,8 @@ use std::{
 
 use clap::{Arg, ArgGroup, ArgMatches, Command, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
-use log::{info, trace};
 use tokio::{self, runtime::Builder};
+use tracing::{info, trace};
 
 use shadowsocks_service::{
     acl::AccessControl,
@@ -288,11 +288,21 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                     .help("Log without datetime prefix"),
             )
             .arg(
-                Arg::new("LOG_CONFIG")
-                    .long("log-config")
+                Arg::new("LOG_TEMPLATE")
+                    .long("log-template")
                     .takes_value(true)
-                    .help("log4rs configuration file"),
+                    .help("log template file name"),
             );
+    }
+
+    #[cfg(feature = "logging-remote")]
+    {
+        app = app.arg(
+            Arg::new("LOG_REMOTE")
+                .long("log-remote")
+                .takes_value(true)
+                .help("log remote server url"),
+        );
     }
 
     #[cfg(unix)]
@@ -436,7 +446,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
 
 /// Program entrance `main`
 pub fn main(matches: &ArgMatches) -> ExitCode {
-    let (config, runtime) = {
+    let (config, runtime, service_config) = {
         let config_path_opt = matches.value_of("CONFIG").map(PathBuf::from).or_else(|| {
             if !matches.is_present("SERVER_CONFIG") {
                 match crate::config::get_default_config_path() {
@@ -462,18 +472,6 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             None => ServiceConfig::default(),
         };
         service_config.set_options(matches);
-
-        #[cfg(feature = "logging")]
-        match service_config.log.config_path {
-            Some(ref path) => {
-                logging::init_with_file(path);
-            }
-            None => {
-                logging::init_with_config("sslocal", &service_config.log);
-            }
-        }
-
-        trace!("{:?}", service_config);
 
         let mut config = match config_path_opt {
             Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Server) {
@@ -865,10 +863,18 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
 
-        (config, runtime)
+        (config, runtime, service_config)
     };
 
     runtime.block_on(async move {
+        #[cfg(feature = "logging")]
+        let _log_guard = logging::init_with_config("ssserver", &service_config.log);
+
+        let span = tracing::span!(tracing::Level::TRACE, "app");
+        let _enter = span.enter();
+
+        trace!("{:?}", service_config);
+
         let abort_signal = monitor::create_signal_monitor();
         let server = run_server(config);
 

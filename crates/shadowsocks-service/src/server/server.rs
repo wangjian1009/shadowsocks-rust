@@ -9,7 +9,6 @@ use std::{
 
 use cfg_if::cfg_if;
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
-use log::{error, trace};
 use shadowsocks::{
     config::{ManagerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
     dns_resolver::DnsResolver,
@@ -19,6 +18,7 @@ use shadowsocks::{
     ServerAddr,
 };
 use tokio::{io::AsyncReadExt, time};
+use tracing::{error, trace};
 
 use crate::{acl::AccessControl, config::SecurityConfig};
 
@@ -346,7 +346,7 @@ impl Server {
         use bytes::BytesMut;
         use shadowsocks::transport::{direct::TcpAcceptor, Acceptor, Connection};
 
-        log::info!("tuic shadow server listening on {}", self.svr_cfg.external_addr());
+        tracing::info!("tuic shadow server listening on {}", self.svr_cfg.external_addr());
 
         let mut listener = TcpAcceptor::bind_server_with_opts(
             self.context.context().as_ref(),
@@ -369,18 +369,18 @@ impl Server {
             };
 
             tokio::spawn(async move {
-                log::info!("tuic shadow connection from {}", peer_addr);
+                tracing::info!("tuic shadow connection from {}", peer_addr);
 
                 tokio::time::timeout(tokio::time::Duration::from_secs(1), async move {
                     let mut buffer = BytesMut::with_capacity(10);
                     loop {
                         let n = s.read_buf(&mut buffer).await?;
                         if n == 0 {
-                            log::info!("tuic shadow connection from {} closed", peer_addr);
+                            tracing::info!("tuic shadow connection from {} closed", peer_addr);
                             // connection was closed
                             return io::Result::Ok(());
                         }
-                        log::info!("tuic shadow connection from {} ignore {} data", peer_addr, n);
+                        tracing::info!("tuic shadow connection from {} ignore {} data", peer_addr, n);
                     }
                 })
                 .await

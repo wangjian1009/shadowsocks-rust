@@ -10,7 +10,6 @@ use std::{
 
 use bytes::Bytes;
 use futures::future;
-use log::{debug, error, info, trace, warn};
 use lru_time_cache::LruCache;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use shadowsocks::{
@@ -26,6 +25,7 @@ use shadowsocks::{
     ServerConfig,
 };
 use tokio::{sync::mpsc, task::JoinHandle, time};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::net::{
     packet_window::PacketWindowFilter, utils::to_ipv4_mapped, MonProxySocket, UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE,

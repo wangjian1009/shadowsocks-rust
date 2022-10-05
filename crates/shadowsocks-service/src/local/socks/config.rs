@@ -7,8 +7,8 @@ use std::{
     path::Path,
 };
 
-use log::trace;
 use serde::Deserialize;
+use tracing::trace;
 
 #[derive(Deserialize, Debug)]
 struct SSSocks5AuthPasswordUserConfig {

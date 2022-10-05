@@ -3,7 +3,7 @@
 use std::{io, net::SocketAddr, sync::Arc};
 
 use byte_string::ByteStr;
-use log::warn;
+use tracing::warn;
 
 use crate::{
     config::{ReplayAttackPolicy, ServerType},

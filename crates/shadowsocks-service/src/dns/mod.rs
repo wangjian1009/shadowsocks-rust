@@ -1,7 +1,7 @@
 //! DNS resolvers
 
-use log::trace;
 use shadowsocks::{dns_resolver::DnsResolver, net::ConnectOpts};
+use tracing::trace;
 
 use crate::config::DnsConfig;
 
@@ -11,8 +11,8 @@ pub async fn build_dns_resolver(dns: DnsConfig, ipv6_first: bool, connect_opts: 
         DnsConfig::System => {
             #[cfg(feature = "trust-dns")]
             if crate::hint_support_default_system_resolver() {
-                use log::warn;
                 use std::env;
+                use tracing::warn;
 
                 let force_system_builtin = match env::var("SS_SYSTEM_DNS_RESOLVER_FORCE_BUILTIN") {
                     Ok(mut v) => {
@@ -44,7 +44,7 @@ pub async fn build_dns_resolver(dns: DnsConfig, ipv6_first: bool, connect_opts: 
         DnsConfig::TrustDns(dns) => match DnsResolver::trust_dns_resolver(dns, ipv6_first).await {
             Ok(r) => Some(r),
             Err(err) => {
-                use log::warn;
+                use tracing::warn;
 
                 warn!(
                     "initialize trust-dns DNS resolver failed, fallback to default system resolver, error: {}",

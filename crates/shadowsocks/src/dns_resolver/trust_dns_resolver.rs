@@ -1,7 +1,7 @@
 //! Asynchronous DNS resolver
 
 use cfg_if::cfg_if;
-use log::trace;
+use tracing::trace;
 use trust_dns_resolver::{
     config::{LookupIpStrategy, ResolverConfig, ResolverOpts},
     error::ResolveResult,
@@ -37,7 +37,7 @@ pub async fn create_resolver(dns: Option<ResolverConfig>, _ipv6_first: bool) -> 
                     let (config, mut opts) = match read_system_conf() {
                         Ok(o) => o,
                         Err(err) => {
-                            use log::error;
+                            use tracing::error;
 
                             error!("failed to initialize DNS resolver with system-config, error: {}", err);
 

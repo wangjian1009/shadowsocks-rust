@@ -3,9 +3,9 @@
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use futures::{future, FutureExt};
-use log::{error, info};
 use shadowsocks::{config::Mode, lookup_then, net::TcpListener as ShadowTcpListener, ServerAddr};
 use tokio::{net::TcpStream, time};
+use tracing::{error, info};
 
 use crate::local::{context::ServiceContext, loadbalancing::PingBalancer};
 

@@ -108,7 +108,7 @@ where
         + Send
         + 'static,
 {
-    log::info!("received request for {}", meta.target.as_ref().unwrap());
+    tracing::info!("received request for {}", meta.target.as_ref().unwrap());
 
     let session_meta = SessionMetadata {
         way: SessionWay::Incoming,

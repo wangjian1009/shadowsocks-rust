@@ -122,15 +122,15 @@ impl AsyncRead for MuxStream {
                     let cmd = ready!(self.read_cmd_receiver.recv().boxed().poll_unpin(cx));
                     match cmd {
                         None => {
-                            log::error!("#{}: recv cmd none", self.session.meta());
+                            tracing::error!("#{}: recv cmd none", self.session.meta());
                         }
                         Some(SessionReadCmd::Close) => {
-                            log::info!("#{}: recv read closed", self.session.meta());
+                            tracing::info!("#{}: recv read closed", self.session.meta());
                             self.read_state = MuxStreamReadState::Closed;
                             return Poll::Ready(Ok(()));
                         }
                         Some(SessionReadCmd::Read(sz)) => {
-                            log::info!("#{}: recv {} data", self.session.meta(), sz);
+                            tracing::info!("#{}: recv {} data", self.session.meta(), sz);
                             if sz > 0 {
                                 self.read_state = MuxStreamReadState::Reading(sz);
                             }
@@ -146,7 +146,7 @@ impl AsyncRead for MuxStream {
                     }
                 }
                 MuxStreamReadState::Closed => {
-                    log::error!("#{}: read aflter closed", self.session.meta());
+                    tracing::error!("#{}: read aflter closed", self.session.meta());
                     return Poll::Ready(Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
                         format!("read in closed"),

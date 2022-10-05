@@ -301,12 +301,8 @@ mod test {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn packet_rebuild_simple() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-
         let seg = Segment {
             conv: 1,
             option: 2,
@@ -329,12 +325,8 @@ mod test {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn packet_rebuild_weixin_real() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-
         let seg = Segment {
             conv: 1,
             option: 2,

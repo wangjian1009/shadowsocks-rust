@@ -15,13 +15,13 @@ use std::{
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{BufMut, BytesMut};
 use futures::future::{self, Either};
-use log::{debug, error, info, trace, warn};
 use rand::{thread_rng, Rng};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpStream, UdpSocket},
     time,
 };
+use tracing::{debug, error, info, trace, warn};
 use trust_dns_resolver::proto::{
     op::{header::MessageType, response_code::ResponseCode, Message, OpCode, Query},
     rr::{DNSClass, Name, RData, RecordType},

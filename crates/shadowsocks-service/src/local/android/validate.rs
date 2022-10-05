@@ -534,20 +534,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_check_sha1_fingerprint() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-    }
+    fn test_check_sha1_fingerprint() {}
 
     #[test]
+    #[tracing_test]
     fn file_match_1() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-
         assert_eq!(check_file_match("aa"), false);
         assert_eq!(check_file_match("MeTA-INf/CeRT.RsA"), true);
         assert_eq!(check_file_match("MeTA-INf/CeRT.RsB"), false);
@@ -587,12 +578,8 @@ mod tests {
     }
 
     #[test]
+    #[tracing_test]
     fn test_fp_validate_1() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-
         let mut blob = Vec::new();
         blob.extend_from_slice(&FP_BLOBS);
 

@@ -7,7 +7,7 @@ use std::{
 };
 
 use futures::{future, ready};
-use log::trace;
+use tracing::trace;
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 

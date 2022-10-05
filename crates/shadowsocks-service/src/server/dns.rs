@@ -1,5 +1,5 @@
-use log::error;
 use std::{io, net::SocketAddr};
+use tracing::error;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -78,7 +78,7 @@ pub async fn run_dns_tcp_stream<'a, I: AsyncRead + Unpin, O: AsyncWrite + Unpin>
         output.write_all(&buf).await?;
     }
 
-    log::trace!("mock dns {}: {}: dns tcp connection closed", target_addr, peer_addr);
+    tracing::trace!("mock dns {}: {}: dns tcp connection closed", target_addr, peer_addr);
 
     Ok(())
 }
@@ -103,7 +103,7 @@ pub async fn process_dns_udp_request(
     let response = resolve(dns_resolver, peer_addr, target_addr, request).await;
     match response.to_vec() {
         Ok(r) => {
-            log::trace!("mock dns {}: {}: dns udp process complete", target_addr, peer_addr);
+            tracing::trace!("mock dns {}: {}: dns udp process complete", target_addr, peer_addr);
             Ok(r)
         }
         Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
@@ -137,7 +137,7 @@ async fn resolve(
         response.set_response_code(ResponseCode::NotImp);
     } else if request.query_count() > 0 {
         for query in request.queries().iter() {
-            log::trace!(
+            tracing::trace!(
                 "mock dns {}: {}: DNS lookup {:?} {}",
                 target_addr,
                 peer_addr,
@@ -169,12 +169,12 @@ async fn resolve(
                             }
                         };
 
-                        log::trace!("mock dns {}: {}:     add response {}", target_addr, peer_addr, &record);
+                        tracing::trace!("mock dns {}: {}:     add response {}", target_addr, peer_addr, &record);
                         response.add_answer(record);
                     }
                 }
                 Err(err) => {
-                    log::error!("mock dns {}: {}: dns resolve error {}", target_addr, peer_addr, err);
+                    tracing::error!("mock dns {}: {}: dns resolve error {}", target_addr, peer_addr, err);
                     response.set_response_code(ResponseCode::ServFail);
                 }
             }

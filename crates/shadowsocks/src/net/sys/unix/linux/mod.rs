@@ -9,7 +9,6 @@ use std::{
 };
 
 use cfg_if::cfg_if;
-use log::{debug, error, warn};
 use pin_project::pin_project;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::{
@@ -17,6 +16,7 @@ use tokio::{
     net::{TcpSocket, TcpStream as TokioTcpStream, UdpSocket},
 };
 use tokio_tfo::TfoStream;
+use tracing::{debug, error, warn};
 
 use crate::net::{
     sys::{set_common_sockopt_after_connect, set_common_sockopt_for_connect, socket_bind_dual_stack},

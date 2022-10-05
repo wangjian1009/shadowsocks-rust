@@ -162,7 +162,7 @@ where
                 let remove_conn_tx = remove_conn_tx.clone();
                 tokio::spawn(async move {
                     if let Err(err) = remove_conn_tx.send(id).await {
-                        log::error!("MkcpConnector: {}", err);
+                        tracing::error!("MkcpConnector: {}", err);
                     }
                 });
             }
@@ -205,18 +205,18 @@ where
                     match r {
                         Ok((segments, _addr)) => connection.input(segments),
                         Err(err) => {
-                            log::error!("#{}: handler incoming error: {}", connection.meta(), err);
+                            tracing::error!("#{}: handler incoming error: {}", connection.meta(), err);
                             return;
                         }
                     };
                 }
                 id = remove_conn_rx.recv() => {
                     if let Some(_id) = id {
-                        log::trace!("#{}: handle incoming recv recv", connection.meta());
+                        tracing::trace!("#{}: handle incoming recv recv", connection.meta());
                         break;
                     }
                     else {
-                        log::error!("#{}: remove conn rx recv none", connection.meta());
+                        tracing::error!("#{}: remove conn rx recv none", connection.meta());
                     }
                 }
             }
@@ -224,7 +224,7 @@ where
             tokio::task::yield_now().await;
         }
 
-        log::trace!("#{}: handle incoming stoped", connection.meta());
+        tracing::trace!("#{}: handle incoming stoped", connection.meta());
     }
 }
 
@@ -234,8 +234,8 @@ where
 {
     fn drop(&mut self) {
         match self.inner.close() {
-            Ok(()) => log::trace!("#{}: close: success", self.inner.meta()),
-            Err(err) => log::debug!("#{}: close: {:?}", self.inner.meta(), err),
+            Ok(()) => tracing::trace!("#{}: close: success", self.inner.meta()),
+            Err(err) => tracing::debug!("#{}: close: {:?}", self.inner.meta(), err),
         }
     }
 }
@@ -253,7 +253,7 @@ where
     #[cfg(feature = "rate-limit")]
     #[inline]
     fn set_rate_limit(&mut self, _rate_limit: Option<Arc<RateLimiter>>) {
-        log::info!(
+        tracing::info!(
             "#{}: rate-limit: ignore rate limit for kcp connection",
             self.inner.meta()
         );

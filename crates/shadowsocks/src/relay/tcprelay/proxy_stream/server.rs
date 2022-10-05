@@ -109,7 +109,7 @@ where
 
         #[cfg(feature = "aead-cipher-2022")]
         if let TcpRequestHeader::Aead2022(ref header) = header {
-            use log::warn;
+            use tracing::warn;
 
             // AEAD-2022 SPEC
             //

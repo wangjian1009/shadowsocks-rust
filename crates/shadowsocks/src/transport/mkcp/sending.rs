@@ -134,7 +134,7 @@ impl SendingWindow {
                 self.total_in_flight_size.fetch_sub(1, Ordering::SeqCst);
                 assert!(self.total_in_flight_size() < 0x7FFFFFFF);
                 cache.remove(i);
-                log::trace!(
+                tracing::trace!(
                     "#{}: sending: remove data segment {}, total-in-flight={}, cache={}",
                     conn_meta,
                     number,
@@ -204,7 +204,7 @@ where
 
     pub fn process_segment(&self, current: u32, seg: segment::AckSegment, rto: u32) {
         if self.closed() {
-            log::error!("#{}: process_segment: closed", self.context.meta());
+            tracing::error!("#{}: process_segment: closed", self.context.meta());
             return;
         }
 
@@ -371,7 +371,7 @@ where
                 {
                     Ok(()) => {
                         let state = self.context.state();
-                        log::trace!(
+                        tracing::trace!(
                             "#{}: ({}): --> {:?} (transmit={})",
                             self.context.meta(),
                             state,
@@ -381,7 +381,7 @@ where
                     }
                     Err(err) => {
                         let state = self.context.state();
-                        log::error!(
+                        tracing::error!(
                             "#{}: ({}): send data segment {} transmit {} error: {}",
                             self.context.meta(),
                             state,
@@ -424,7 +424,7 @@ where
         self.first_unacknowledged.swap(old_value, Ordering::SeqCst);
 
         if old_value != new_value {
-            log::info!(
+            tracing::info!(
                 "#{}: first-unacknowledged {} => {}",
                 self.context.meta(),
                 old_value,
@@ -487,12 +487,8 @@ mod test {
     use tokio::sync::mpsc;
 
     #[tokio::test]
+    #[traced_test]
     async fn basic() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .is_test(true)
-            .try_init();
-
         let config = Arc::new(MkcpConfig::default());
         let (worker, mut outputs) = create_worker(config.clone());
         let worker = Arc::new(worker);
@@ -598,12 +594,8 @@ mod test {
     }
 
     // #[test]
+    // #[traced_test]
     // fn rto() {
-    //     let _ = env_logger::builder()
-    //         .filter_level(log::LevelFilter::Debug)
-    //         .is_test(true)
-    //         .try_init();
-
     //     let config = Arc::new(MkcpConfig::default());
     //     let (worker, mut outputs) = create_worker(config);
     //     let worker = Arc::new(worker);

@@ -54,14 +54,14 @@ impl Connection {
                 ..
             }) => (connection, uni_streams, bi_streams, datagrams),
             Err(err) => {
-                log::error!("[{rmt_addr}] [connecting] {err}");
+                tracing::error!("[{rmt_addr}] [connecting] {err}");
                 return;
             }
         };
 
         let auth_deadline = tokio::time::Instant::now() + auth_timeout;
 
-        log::info!("[{rmt_addr}] [establish]");
+        tracing::info!("[{rmt_addr}] [establish]");
 
         let (udp_sessions, mut recv_pkt_rx) = UdpSessionMap::new(udp_socket_creator.clone());
         let is_closed = IsClosed::new();
@@ -99,7 +99,7 @@ impl Connection {
                                 conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
 
                                 let rmt_addr = conn.controller.remote_address();
-                                log::error!("[{rmt_addr}] {err}");
+                                tracing::error!("[{rmt_addr}] {err}");
                             }
                         }
                     });
@@ -122,7 +122,7 @@ impl Connection {
                                 conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
 
                                 let rmt_addr = conn.controller.remote_address();
-                                log::error!("[{rmt_addr}] {err}");
+                                tracing::error!("[{rmt_addr}] {err}");
                             }
                         }
                     });
@@ -145,7 +145,7 @@ impl Connection {
                                 conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
 
                                 let rmt_addr = conn.controller.remote_address();
-                                log::error!("[{rmt_addr}] {err}");
+                                tracing::error!("[{rmt_addr}] {err}");
                             }
                         }
                     });
@@ -165,7 +165,7 @@ impl Connection {
                                 conn.controller.close(err.as_error_code(), err.to_string().as_bytes());
 
                                 let rmt_addr = conn.controller.remote_address();
-                                log::error!("[{rmt_addr}] {err}");
+                                tracing::error!("[{rmt_addr}] {err}");
                             }
                         }
                     });
@@ -182,7 +182,7 @@ impl Connection {
                     conn.is_authenticated.wake();
 
                     let rmt_addr = conn.controller.remote_address();
-                    log::error!("[{rmt_addr}] {err}");
+                    tracing::error!("[{rmt_addr}] {err}");
 
                     is_authed = true;
                     // break ConnectionError::LocallyClosed;
@@ -194,12 +194,12 @@ impl Connection {
 
         match err {
             ConnectionError::TimedOut => {
-                log::debug!("[{rmt_addr}] [disconnect] [connection timeout]")
+                tracing::debug!("[{rmt_addr}] [disconnect] [connection timeout]")
             }
             ConnectionError::LocallyClosed => {
-                log::debug!("[{rmt_addr}] [disconnect] [locally closed]")
+                tracing::debug!("[{rmt_addr}] [disconnect] [locally closed]")
             }
-            err => log::error!("[{rmt_addr}] [disconnect] {err}"),
+            err => tracing::error!("[{rmt_addr}] [disconnect] {err}"),
         }
     }
 }

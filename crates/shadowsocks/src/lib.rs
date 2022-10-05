@@ -11,6 +11,10 @@
 extern crate assert_matches;
 
 #[cfg(test)]
+#[macro_use]
+extern crate tracing_test;
+
+#[cfg(test)]
 #[macro_use(defer)]
 extern crate scopeguard;
 

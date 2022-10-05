@@ -9,10 +9,10 @@ use std::{
 
 use cfg_if::cfg_if;
 use futures::{future::poll_fn, ready};
-use log::warn;
 use shadowsocks::net::is_dual_stack_addr;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::unix::AsyncFd;
+use tracing::warn;
 
 use crate::{
     config::RedirType,

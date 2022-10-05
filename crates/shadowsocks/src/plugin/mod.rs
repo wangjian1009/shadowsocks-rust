@@ -19,8 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use log::{debug, error};
 use tokio::{net::TcpStream, process::Child, time};
+use tracing::{debug, error};
 
 use crate::config::ServerAddr;
 

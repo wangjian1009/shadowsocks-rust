@@ -7,8 +7,8 @@ use std::{
 };
 
 use byte_string::ByteStr;
-use log::{debug, error, trace};
 use tokio::{sync::mpsc, task::JoinHandle, time};
+use tracing::{debug, error, trace};
 
 use crate::{
     context::Context,
@@ -102,12 +102,12 @@ impl KcpListener {
                                 let packet = match input_decorate.decode(packet) {
                                     Ok(buf) => buf,
                                     Err(err) =>  {
-                                        log::error!("received peer: {}, decorate error {}, input {:?}", peer_addr, err, ByteStr::new(packet));
+                                        tracing::error!("received peer: {}, decorate error {}, input {:?}", peer_addr, err, ByteStr::new(packet));
                                         continue;
                                     }
                                 };
 
-                                log::trace!("received peer: {}, {:?}", peer_addr, ByteStr::new(packet));
+                                tracing::trace!("received peer: {}, {:?}", peer_addr, ByteStr::new(packet));
 
                                 let mut conv = kcp::get_conv(packet);
                                 if conv == 0 {
@@ -181,17 +181,15 @@ mod test {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
+    #[traced_test]
     async fn multi_echo_origin() {
-        let _ = env_logger::try_init();
-
         let config = KcpConfig::default();
         multi_echo_with_cfg(config).await
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn multi_echo_header() {
-        let _ = env_logger::try_init();
-
         let mut config = KcpConfig::default();
         config.header_config = Some(HeaderConfig::Wechat);
 
@@ -199,9 +197,8 @@ mod test {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn multi_echo_security() {
-        let _ = env_logger::try_init();
-
         let mut config = KcpConfig::default();
         config.security_config = Some(SecurityConfig::AESGCM {
             seed: "1234".to_owned(),
@@ -211,9 +208,8 @@ mod test {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn multi_echo_header_security() {
-        let _ = env_logger::try_init();
-
         let mut config = KcpConfig::default();
         config.header_config = Some(HeaderConfig::Wechat);
         config.security_config = Some(SecurityConfig::AESGCM {

@@ -11,7 +11,6 @@
 
 use byte_string::ByteStr;
 use futures::future;
-use log::debug;
 use shadowsocks::{
     config::{ServerProtocol, ServerType, ShadowsocksConfig},
     context::Context,
@@ -28,11 +27,11 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
 };
+use tracing::debug;
 
 #[tokio::test]
+#[traced_test]
 async fn tcp_tunnel_tfo() {
-    let _ = env_logger::try_init();
-
     let svr_cfg = ServerConfig::new(
         ("127.0.0.1", 41000),
         ServerProtocol::SS(ShadowsocksConfig::new("?", CipherKind::NONE)),

@@ -1,8 +1,8 @@
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{BufMut, BytesMut};
-use log::trace;
 use rand::{thread_rng, Rng};
 use std::{io, net::SocketAddr};
+use tracing::trace;
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
