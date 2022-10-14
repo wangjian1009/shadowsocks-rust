@@ -6,6 +6,7 @@ use std::{
     net::IpAddr,
     path::{Path, PathBuf},
     process::ExitCode,
+    sync::Arc,
     time::Duration,
 };
 
@@ -26,6 +27,7 @@ use shadowsocks_service::{
     create_local,
     local::loadbalancing::PingBalancer,
     shadowsocks::{
+        canceler::Canceler,
         config::{Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::{available_ciphers, CipherKind},
         plugin::PluginConfig,
@@ -1044,7 +1046,9 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             launch_reload_server_task(config_path, instance.server_balancer().clone());
         }
 
-        let abort_signal = monitor::create_signal_monitor();
+        let app_cancel = Arc::new(Canceler::new());
+
+        let abort_signal = monitor::create_signal_monitor(app_cancel);
         let server = instance.wait_until_exit();
 
         tokio::pin!(abort_signal);

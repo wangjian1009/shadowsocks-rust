@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tracing::trace;
 
 use super::*;
 
@@ -8,8 +9,6 @@ use shadowsocks::{net::UdpSocket as OutboundUdpSocket, tuic};
 pub struct TuicUdpSocket {
     context: Arc<ServiceContext>,
     max_udp_packet_size: usize,
-    peer_addr: SocketAddr,
-    assoc_id: u32,
     outbound_ipv4_socket: spin::Mutex<Option<Arc<OutboundUdpSocket>>>,
     outbound_ipv6_socket: spin::Mutex<Option<Arc<OutboundUdpSocket>>>,
     socket_update_tx: Sender<()>,
@@ -17,14 +16,12 @@ pub struct TuicUdpSocket {
 }
 
 impl TuicUdpSocket {
-    pub fn new(context: Arc<ServiceContext>, max_udp_packet_size: usize, peer_addr: SocketAddr, assoc_id: u32) -> Self {
+    pub fn new(context: Arc<ServiceContext>, max_udp_packet_size: usize) -> Self {
         let (socket_update_tx, socket_update_rx) = mpsc::channel(1);
 
         Self {
             context,
             max_udp_packet_size,
-            peer_addr,
-            assoc_id,
             outbound_ipv4_socket: spin::Mutex::new(None),
             outbound_ipv6_socket: spin::Mutex::new(None),
             socket_update_tx,
@@ -57,11 +54,7 @@ impl TuicUdpSocket {
                         OutboundUdpSocket::connect_any_with_opts(AddrFamily::Ipv6, self.context.connect_opts_ref())
                             .await?;
 
-                    tracing::debug!(
-                        "[{}] [udp-session] [{}] socket ipv6 created",
-                        self.peer_addr,
-                        self.assoc_id
-                    );
+                    trace!("OUTGOING: socket ipv6 created",);
 
                     socket_updated = true;
                     outbound_ipv6_socket.insert(Arc::new(socket)).clone()
@@ -78,11 +71,7 @@ impl TuicUdpSocket {
                                 OutboundUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref())
                                     .await?;
 
-                            tracing::debug!(
-                                "[{}] [udp-session] [{}] socket ipv4 created",
-                                self.peer_addr,
-                                self.assoc_id
-                            );
+                            trace!("OUTGOING: socket ipv4 created");
 
                             socket_updated = true;
                             outbound_ipv4_socket.insert(Arc::new(socket)).clone()
@@ -98,11 +87,7 @@ impl TuicUdpSocket {
                                 OutboundUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref())
                                     .await?;
 
-                            tracing::debug!(
-                                "[{}] [udp-session] [{}] socket ipv6 created",
-                                self.peer_addr,
-                                self.assoc_id
-                            );
+                            trace!("OUTGOING: socket ipv6 created");
 
                             socket_updated = true;
                             outbound_ipv6_socket.insert(Arc::new(socket)).clone()
@@ -128,18 +113,9 @@ impl TuicUdpSocket {
 
         let n = socket.send_to(data, target_addr).await?;
         if n != data.len() {
-            warn!(
-                "[{}] [udp-session] [{}] {target_addr} --> {n} bytes mismatch, expected {} bytes",
-                self.peer_addr,
-                self.assoc_id,
-                data.len()
-            );
+            error!("OUTGOING: --> {n} bytes mismatch, expected {} bytes", data.len());
         } else {
-            tracing::debug!(
-                "[{}] [udp-session] [{}] {target_addr} --> {n} bytes",
-                self.peer_addr,
-                self.assoc_id,
-            );
+            trace!("OUTGOING: --> {n} bytes");
         }
 
         Ok(())
@@ -152,8 +128,6 @@ impl tuic::server::UdpSocket for TuicUdpSocket {
         #[inline]
         async fn receive_from_outbound_opt(
             socket: &Option<Arc<OutboundUdpSocket>>,
-            peer_addr: &SocketAddr,
-            assoc_id: u32,
             max_udp_packet_size: usize,
         ) -> io::Result<(Bytes, SocketAddr)> {
             match *socket {
@@ -163,7 +137,7 @@ impl tuic::server::UdpSocket for TuicUdpSocket {
                     let (len, addr) = s.recv_from(&mut buf).await?;
                     buf.truncate(len);
 
-                    tracing::debug!("[{}] [udp-session] [{}] {addr} <-- {len} bytes", peer_addr, assoc_id,);
+                    trace!("OUTGOING: <-- {len} bytes");
 
                     Ok((Bytes::from(buf), addr))
                 }
@@ -176,20 +150,16 @@ impl tuic::server::UdpSocket for TuicUdpSocket {
             let mut socket_update_rx = self.socket_update_rx.lock().await;
 
             tokio::select! {
-                received_opt = receive_from_outbound_opt(&outbound_ipv4_socket, &self.peer_addr, self.assoc_id, self.max_udp_packet_size)
+                received_opt = receive_from_outbound_opt(&outbound_ipv4_socket, self.max_udp_packet_size)
                     , if outbound_ipv4_socket.is_some() => {
                         return received_opt;
                 }
-                received_opt = receive_from_outbound_opt(&outbound_ipv6_socket, &self.peer_addr, self.assoc_id, self.max_udp_packet_size)
+                received_opt = receive_from_outbound_opt(&outbound_ipv6_socket, self.max_udp_packet_size)
                     , if outbound_ipv6_socket.is_some() => {
                         return received_opt;
                 }
                 _socket_updated = socket_update_rx.recv() => {
-                    tracing::debug!(
-                        "[{}] [udp-session] [{}] socket updated",
-                        self.peer_addr,
-                        self.assoc_id,
-                    );
+                    trace!("OUTGOING: socket updated");
                 }
             }
         }

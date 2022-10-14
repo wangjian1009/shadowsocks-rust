@@ -33,6 +33,7 @@ pub use self::{
 
 pub use shadowsocks_crypto as crypto;
 
+pub mod canceler;
 pub mod config;
 pub mod context;
 pub mod dns_resolver;

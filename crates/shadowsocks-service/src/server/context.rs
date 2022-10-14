@@ -3,6 +3,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use shadowsocks::{
+    canceler::CancelWaiter,
     config::ServerType,
     context::{Context, SharedContext},
     dns_resolver::DnsResolver,
@@ -47,6 +48,9 @@ pub struct ServiceContext {
     // Flow statistic report
     flow_stat: Arc<FlowStat>,
 
+    // cancel
+    cancel_waiter: CancelWaiter,
+
     // Connection rate limit
     #[cfg(feature = "rate-limit")]
     connection_bound_width: Option<BoundWidth>,
@@ -65,6 +69,7 @@ impl Default for ServiceContext {
         ServiceContext {
             context: Context::new_shared(ServerType::Server),
             connect_opts: ConnectOpts::default(),
+            cancel_waiter: CancelWaiter::none(),
             acl: None,
             connection_stat: Arc::new(ConnectionStat::new()),
             flow_stat: Arc::new(FlowStat::new()),
@@ -82,8 +87,11 @@ impl Default for ServiceContext {
 
 impl ServiceContext {
     /// Create a new `ServiceContext`
-    pub fn new() -> ServiceContext {
-        ServiceContext::default()
+    pub fn new(cancel_waiter: CancelWaiter) -> ServiceContext {
+        ServiceContext {
+            cancel_waiter,
+            ..ServiceContext::default()
+        }
     }
 
     /// Get cloned `shadowsocks` Context
@@ -164,6 +172,10 @@ impl ServiceContext {
 
             None => None,
         }
+    }
+
+    pub fn cancel_waiter(&self) -> CancelWaiter {
+        self.cancel_waiter.clone()
     }
 
     /// Get cloned connection statistic

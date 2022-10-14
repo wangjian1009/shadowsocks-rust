@@ -56,14 +56,7 @@ impl TcpServerClient {
             Some(protocol) => match protocol {
                 ServerMockProtocol::DNS => {
                     let (mut r, mut w) = tokio::io::split(stream);
-                    run_dns_tcp_stream(
-                        self.context.dns_resolver(),
-                        &self.peer_addr,
-                        &target_addr,
-                        &mut r,
-                        &mut w,
-                    )
-                    .await?;
+                    run_dns_tcp_stream(self.context.dns_resolver(), &mut r, &mut w, None).await?;
                     return Ok(());
                 }
             },
@@ -142,8 +135,9 @@ impl TcpServerClient {
             self.context.connect_opts_ref()
         );
 
-        match copy_bidirectional(&mut stream, &mut remote_stream, &self.idle_timeout).await {
-            Ok((rn, wn)) => {
+        let (rn, wn, r) = copy_bidirectional(&mut stream, &mut remote_stream, self.idle_timeout.clone()).await;
+        match r {
+            Ok(()) => {
                 trace!(
                     "vless tcp tunnel {} <-> {} closed, L2R {} bytes, R2L {} bytes",
                     self.peer_addr,
@@ -154,10 +148,12 @@ impl TcpServerClient {
             }
             Err(err) => {
                 trace!(
-                    "vless tcp tunnel {} <-> {} closed with error: {}",
+                    "vless tcp tunnel {} <-> {} closed with error: {}, L2R {} bytes, R2L {} bytes",
                     self.peer_addr,
                     target_addr,
-                    err
+                    err,
+                    rn,
+                    wn,
                 );
             }
         }

@@ -176,7 +176,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[tracing_test]
+    #[traced_test]
     fn test_load_path_infos() {
         let current_dir = std::env::current_dir().expect("read current dir success");
 
@@ -184,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    #[tracing_test]
+    #[traced_test]
     fn test_apk_path_prefix() {
         assert_eq!(apk_path_prefix().as_str(), "/data/data");
     }
@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    #[tracing_test]
+    #[traced_test]
     fn test_encrypt_str() {
         tracing::error!("xxxx: {:?}", string_encode("__system_property_get"));
 

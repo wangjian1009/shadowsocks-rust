@@ -10,14 +10,13 @@ use tokio::{
 
 use shadowsocks_service::{
     config::{Config, ConfigType},
-    run_local,
-    run_server,
+    run_local, run_server,
+    shadowsocks::canceler::CancelWaiter,
 };
 
 #[tokio::test]
+#[tracing_test::traced_test]
 async fn http_proxy() {
-    let _ = env_logger::try_init();
-
     let local_config = Config::load_from_str(
         r#"{
             "locals": [
@@ -48,7 +47,7 @@ async fn http_proxy() {
     .unwrap();
 
     tokio::spawn(run_local(local_config));
-    tokio::spawn(run_server(server_config));
+    tokio::spawn(run_server(CancelWaiter::none(), server_config));
 
     time::sleep(Duration::from_secs(1)).await;
 

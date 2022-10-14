@@ -129,15 +129,24 @@ impl Config {
                 nlog.format = nformat;
             }
 
+            #[cfg(feature = "logging-file")]
             if let Some(log_template) = log.log_template {
                 nlog.log_template = Some(PathBuf::from(log_template));
             }
 
-            #[cfg(feature = "logging-remote")]
-            if let Some(log_remote_url) = log.log_remote_url {
-                nlog.log_remote_url = Some(url::Url::parse(log_remote_url.as_str()).map_err(|e| {
-                    ConfigError::InvalidValue(format!("log remote url {} error, {}", log_remote_url, e))
+            #[cfg(feature = "logging-jaeger")]
+            if let Some(log_jaeger_url) = log.log_jaeger_url {
+                nlog.log_jaeger_url = Some(url::Url::parse(log_jaeger_url.as_str()).map_err(|e| {
+                    ConfigError::InvalidValue(format!("log jaeger url {} error, {}", log_jaeger_url, e))
                 })?);
+            }
+
+            #[cfg(feature = "logging-apm")]
+            if let Some(log_apm_url) = log.log_apm_url {
+                nlog.log_apm_url = Some(
+                    url::Url::parse(log_apm_url.as_str())
+                        .map_err(|e| ConfigError::InvalidValue(format!("log apm url {} error, {}", log_apm_url, e)))?,
+                );
             }
 
             config.log = nlog;
@@ -177,13 +186,19 @@ impl Config {
                 self.log.format.without_time = true;
             }
 
+            #[cfg(feature = "logging-file")]
             if let Some(log_template) = matches.value_of("LOG_TEMPLATE") {
                 self.log.log_template = Some(log_template.into());
             }
 
-            #[cfg(feature = "logging-remote")]
-            if matches.is_present("LOG_REMOTE") {
-                self.log.log_remote_url = Some(matches.value_of_t_or_exit::<url::Url>("LOG_REMOTE"));
+            #[cfg(feature = "logging-jaeger")]
+            if matches.is_present("LOG_JAEGER_URL") {
+                self.log.log_jaeger_url = Some(matches.value_of_t_or_exit::<url::Url>("LOG_JAEGER_URL"));
+            }
+
+            #[cfg(feature = "logging-apm")]
+            if matches.is_present("LOG_APM_URL") {
+                self.log.log_apm_url = Some(matches.value_of_t_or_exit::<url::Url>("LOG_APM_URL"));
             }
         }
 
@@ -212,9 +227,12 @@ pub struct LogConfig {
     /// Default logger format configuration
     pub format: LogFormatConfig,
     /// Logging configuration file path
+    #[cfg(feature = "logging-file")]
     pub log_template: Option<PathBuf>,
-    #[cfg(feature = "logging-remote")]
-    pub log_remote_url: Option<url::Url>,
+    #[cfg(feature = "logging-jaeger")]
+    pub log_jaeger_url: Option<url::Url>,
+    #[cfg(feature = "logging-apm")]
+    pub log_apm_url: Option<url::Url>,
 }
 
 /// Logger format configuration
@@ -285,9 +303,12 @@ struct SSConfig {
 struct SSLogConfig {
     level: Option<u32>,
     format: Option<SSLogFormat>,
+    #[cfg(feature = "logging-file")]
     log_template: Option<String>,
-    #[cfg(feature = "logging-remote")]
-    log_remote_url: Option<String>,
+    #[cfg(feature = "logging-jaeger")]
+    log_jaeger_url: Option<String>,
+    #[cfg(feature = "logging-apm")]
+    log_apm_url: Option<String>,
 }
 
 #[cfg(feature = "logging")]

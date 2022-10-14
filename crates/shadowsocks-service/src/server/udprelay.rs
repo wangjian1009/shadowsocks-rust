@@ -25,7 +25,7 @@ use shadowsocks::{
     ServerConfig,
 };
 use tokio::{sync::mpsc, task::JoinHandle, time};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn, Instrument};
 
 use crate::net::{
     packet_window::PacketWindowFilter, utils::to_ipv4_mapped, MonProxySocket, UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE,
@@ -170,25 +170,28 @@ impl UdpServer {
                 let listener = listener.clone();
                 let context = self.context.clone();
 
-                other_receivers.push(tokio::spawn(async move {
-                    let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
+                other_receivers.push(tokio::spawn(
+                    async move {
+                        let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
 
-                    loop {
-                        let (n, peer_addr, target_addr, control) =
-                            match UdpServer::recv_one_packet(&context, &listener, &mut buffer).await {
-                                Some(s) => s,
-                                None => continue,
-                            };
+                        loop {
+                            let (n, peer_addr, target_addr, control) =
+                                match UdpServer::recv_one_packet(&context, &listener, &mut buffer).await {
+                                    Some(s) => s,
+                                    None => continue,
+                                };
 
-                        if let Err(..) = otx
-                            .send((peer_addr, target_addr, control, Bytes::copy_from_slice(&buffer[..n])))
-                            .await
-                        {
-                            // If Result is error, the channel receiver is closed. We should exit the task.
-                            break;
+                            if let Err(..) = otx
+                                .send((peer_addr, target_addr, control, Bytes::copy_from_slice(&buffer[..n])))
+                                .await
+                            {
+                                // If Result is error, the channel receiver is closed. We should exit the task.
+                                break;
+                            }
                         }
                     }
-                }));
+                    .in_current_span(),
+                ));
             }
         }
 
@@ -501,7 +504,7 @@ impl UdpAssociationContext {
             server_session_id: generate_server_session_id(),
             server_packet_id: 0,
         };
-        let handle = tokio::spawn(async move { assoc.dispatch_packet(receiver).await });
+        let handle = tokio::spawn(async move { assoc.dispatch_packet(receiver).await }.in_current_span());
 
         (handle, sender)
     }

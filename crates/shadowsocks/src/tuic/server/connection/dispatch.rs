@@ -1,27 +1,28 @@
 use super::super::super::protocol::{Address, Command};
-use super::{task, Connection, UdpPacketSource};
-use bytes::Bytes;
+use super::{stream, Connection, UdpSessionCloseReason, UdpSessionSource};
+use bytes::{Bytes, BytesMut};
 use quinn::{RecvStream, SendStream, VarInt};
 use std::io::Error as IoError;
 use thiserror::Error;
+use tracing::{debug, error, info_span, trace, Instrument};
+
+use crate::canceler::CancelWaiter;
 
 impl Connection {
     pub async fn process_uni_stream(&self, mut stream: RecvStream) -> Result<(), DispatchError> {
-        let rmt_addr = self.controller.remote_address();
         let cmd = Command::read_from(&mut stream).await?;
+        trace!("cmd: {:?}", cmd);
 
         if let Command::Authenticate { digest } = cmd {
             if self.token.contains(&digest) {
-                tracing::debug!("[{rmt_addr}] [authentication]");
+                debug!("authentication success");
 
                 self.is_authenticated.set_authenticated();
                 self.is_authenticated.wake();
                 return Ok(());
             } else {
-                let err = DispatchError::AuthenticationFailed;
-                self.controller.close(err.as_error_code(), err.to_string().as_bytes());
-                self.is_authenticated.wake();
-                return Err(err);
+                error!("authentication fail");
+                return Err(DispatchError::AuthenticationFailed);
             }
         }
 
@@ -29,46 +30,42 @@ impl Connection {
             match cmd {
                 Command::Authenticate { .. } => unreachable!(),
                 Command::Packet { assoc_id, len, addr } => {
-                    if self.udp_packet_from.uni_stream() {
-                        let dst_addr = addr.to_string();
-                        tracing::debug!("[{rmt_addr}] [packet-from-quic] [{assoc_id}] [{dst_addr}]");
-
-                        let res = task::packet_from_uni_stream(
-                            self.server_policy.clone(),
-                            stream,
-                            self.udp_sessions.clone(),
-                            assoc_id,
-                            len,
-                            addr,
-                            rmt_addr,
-                            self.flow_state.clone(),
-                        )
-                        .await;
-
-                        match res {
-                            Ok(()) => {}
-                            Err(err) => {
-                                tracing::warn!("[{rmt_addr}] [packet-from-quic] [{assoc_id}] [{dst_addr}] {err}")
-                            }
-                        }
-
-                        Ok(())
-                    } else {
-                        Err(DispatchError::BadCommand)
+                    let mut buf = vec![0; len as usize];
+                    if let Err(err) = stream.read_exact(&mut buf).await {
+                        debug!(error = ?err, "read packet data");
+                        return Ok(());
                     }
-                }
-                Command::Dissociate { assoc_id } => {
-                    let res = task::dissociate(self.udp_sessions.clone(), assoc_id, rmt_addr).await;
 
-                    match res {
-                        Ok(()) => {}
-                        Err(err) => tracing::warn!("[{rmt_addr}] [dissociate] {err}"),
+                    let pkt = Bytes::from(buf);
+                    self.flow_state.as_ref().map(|f| f.incr_rx(pkt.len() as u64));
+
+                    if let Err(err) = self
+                        .udp_sessions
+                        .send_to_outgoing(
+                            assoc_id,
+                            UdpSessionSource::UniStream,
+                            pkt,
+                            addr,
+                            self.controller.remote_address(),
+                            self.server_policy.clone(),
+                        )
+                        .await
+                    {
+                        error!(error = ?err, "send to outgoing error");
+                        return Err(DispatchError::Io(err));
                     }
 
                     Ok(())
                 }
+                Command::Dissociate { assoc_id } => {
+                    let _ = self
+                        .udp_sessions
+                        .dissociate(assoc_id, UdpSessionCloseReason::ClientClose)
+                        .await;
+                    Ok(())
+                }
                 Command::Heartbeat => {
-                    tracing::debug!("[{rmt_addr}] [heartbeat]");
+                    trace!("heartbeat");
                     Ok(())
                 }
                 _ => Err(DispatchError::BadCommand),
@@ -78,30 +75,35 @@ impl Connection {
         }
     }
 
-    pub async fn process_bi_stream(&self, send: SendStream, mut recv: RecvStream) -> Result<(), DispatchError> {
+    pub async fn process_bi_stream(
+        &self,
+        send: SendStream,
+        mut recv: RecvStream,
+        waiter: CancelWaiter,
+    ) -> Result<(), DispatchError> {
         let cmd = Command::read_from(&mut recv).await?;
         let rmt_addr = self.controller.remote_address();
 
         if self.is_authenticated.clone().await {
             match cmd {
                 Command::Connect { addr } => {
-                    let dst_addr = addr.to_string();
-                    tracing::info!("[{rmt_addr}] [connect] [{dst_addr}]");
-
-                    let res = task::connect(
-                        self.server_policy.clone(),
-                        &rmt_addr,
-                        send,
-                        recv,
-                        addr,
-                        self.flow_state.clone(),
-                    )
-                    .await;
-
-                    match res {
-                        Ok(()) => {}
-                        Err(err) => tracing::warn!("[{rmt_addr}] [connect] [{dst_addr}] {err}"),
+                    let span = info_span!("connection", target = addr.to_string());
+                    async move {
+                        tokio::select! {
+                            _ = stream::connect(
+                                self.server_policy.clone(),
+                                &rmt_addr,
+                                send,
+                                recv,
+                                addr,
+                                self.flow_state.clone(),
+                                self.idle_timeout.clone(),
+                            ) => {}
+                            _ = waiter.wait() => {}
+                        }
                     }
+                    .instrument(span.or_current())
+                    .await;
 
                     Ok(())
                 }
@@ -114,38 +116,31 @@ impl Connection {
 
     pub async fn process_datagram(&self, datagram: Bytes) -> Result<(), DispatchError> {
         let cmd = Command::read_from(&mut datagram.as_ref()).await?;
-        let rmt_addr = self.controller.remote_address();
         let cmd_len = cmd.serialized_len();
 
         if self.is_authenticated.clone().await {
             match cmd {
                 Command::Packet { assoc_id, addr, .. } => {
-                    if self.udp_packet_from.datagram() {
-                        let dst_addr = addr.to_string();
-                        tracing::debug!("[{rmt_addr}] [packet-from-native] [{assoc_id}] [{dst_addr}]");
+                    let pkt = datagram.slice(cmd_len..);
+                    self.flow_state.as_ref().map(|f| f.incr_rx(pkt.len() as u64));
 
-                        let res = task::packet_from_datagram(
-                            self.server_policy.clone(),
-                            datagram.slice(cmd_len..),
-                            self.udp_sessions.clone(),
+                    if let Err(err) = self
+                        .udp_sessions
+                        .send_to_outgoing(
                             assoc_id,
+                            UdpSessionSource::Datagram,
+                            pkt,
                             addr,
-                            rmt_addr,
-                            self.flow_state.clone(),
+                            self.controller.remote_address(),
+                            self.server_policy.clone(),
                         )
-                        .await;
-
-                        match res {
-                            Ok(()) => {}
-                            Err(err) => {
-                                tracing::warn!("[{rmt_addr}] [packet-from-native] [{assoc_id}] [{dst_addr}] {err}")
-                            }
-                        }
-
-                        Ok(())
-                    } else {
-                        Err(DispatchError::BadCommand)
+                        .await
+                    {
+                        error!(error = ?err, "send to outgoing error");
+                        return Err(DispatchError::Io(err));
                     }
+
+                    Ok(())
                 }
                 _ => Err(DispatchError::BadCommand),
             }
@@ -160,41 +155,66 @@ impl Connection {
         pkt: Bytes,
         addr: Address,
     ) -> Result<(), DispatchError> {
-        let rmt_addr = self.controller.remote_address();
-        let dst_addr = addr.to_string();
+        let (source, span) = match self.udp_sessions.find_session(assoc_id) {
+            Some(r) => r,
+            None => {
+                debug!(assoc_id, "send to incoming: session not found");
+                return Ok(());
+            }
+        };
 
-        match self.udp_packet_from.check().unwrap() {
-            UdpPacketSource::UniStream => {
-                tracing::debug!("[{rmt_addr}] [packet-to-quic] [{assoc_id}] [{dst_addr}]");
+        async move {
+            match source {
+                UdpSessionSource::UniStream => {
+                    let mut stream = match self.controller.open_uni().await {
+                        Ok(s) => s,
+                        Err(err) => {
+                            error!(error = ?err, "send to incoming: open stream error");
+                            return Ok(());
+                        }
+                    };
 
-                let res =
-                    task::packet_to_uni_stream(self.controller.clone(), assoc_id, pkt, addr, self.flow_state.clone())
-                        .await;
-
-                match res {
-                    Ok(()) => {}
-                    Err(err) => {
-                        tracing::warn!("[{rmt_addr}] [packet-to-quic] [{assoc_id}] [{dst_addr}] {err}")
+                    let cmd = Command::new_packet(assoc_id, pkt.len() as u16, addr);
+                    if let Err(err) = cmd.write_to(&mut stream).await {
+                        error!(error = ?err, "write cmd error");
+                        return Ok(());
                     }
+
+                    if let Err(err) = stream.write_all(&pkt).await {
+                        error!(error = ?err, "write_all error");
+                        return Ok(());
+                    }
+
+                    if let Err(err) = stream.finish().await {
+                        error!(error = ?err, "write_all error");
+                        return Ok(());
+                    }
+
+                    self.flow_state.as_ref().map(|f| f.incr_tx(pkt.len() as u64));
+                }
+                UdpSessionSource::Datagram => {
+                    let cmd = Command::new_packet(assoc_id, pkt.len() as u16, addr);
+
+                    let mut buf = BytesMut::with_capacity(cmd.serialized_len());
+                    cmd.write_to_buf(&mut buf);
+                    buf.extend_from_slice(&pkt);
+
+                    let pkt = buf.freeze();
+                    let len = pkt.len();
+
+                    if let Err(err) = self.controller.send_datagram(pkt) {
+                        debug!(error = ?err, "send to incoming error");
+                        return Ok(());
+                    }
+
+                    self.flow_state.as_ref().map(|f| f.incr_tx(len as u64));
                 }
             }
-            UdpPacketSource::Datagram => {
-                tracing::debug!("[{rmt_addr}] [packet-to-native] [{assoc_id}] [{dst_addr}]");
 
-                let res =
-                    task::packet_to_datagram(self.controller.clone(), assoc_id, pkt, addr, self.flow_state.clone())
-                        .await;
-
-                match res {
-                    Ok(()) => {}
-                    Err(err) => {
-                        tracing::warn!("[{rmt_addr}] [packet-to-native] [{assoc_id}] [{dst_addr}] {err}")
-                    }
-                }
-            }
+            Ok(())
         }
-
-        Ok(())
+        .instrument(span)
+        .await
     }
 }
 
@@ -208,6 +228,10 @@ pub enum DispatchError {
     AuthenticationTimeout,
     #[error("bad command")]
     BadCommand,
+    #[error("idle timeout")]
+    IdleTimeout,
+    #[error("shutdown")]
+    Shutdown,
 }
 
 impl DispatchError {
@@ -215,6 +239,8 @@ impl DispatchError {
     const CODE_AUTHENTICATION_FAILED: VarInt = VarInt::from_u32(0xfffffff1);
     const CODE_AUTHENTICATION_TIMEOUT: VarInt = VarInt::from_u32(0xfffffff2);
     const CODE_BAD_COMMAND: VarInt = VarInt::from_u32(0xfffffff3);
+    const CODE_IDLE_TIMEOUT: VarInt = VarInt::from_u32(0xfffffff4);
+    const CODE_SHUTDOWN: VarInt = VarInt::from_u32(0xfffffff5);
 
     pub fn as_error_code(&self) -> VarInt {
         match self {
@@ -222,6 +248,8 @@ impl DispatchError {
             Self::AuthenticationFailed => Self::CODE_AUTHENTICATION_FAILED,
             Self::AuthenticationTimeout => Self::CODE_AUTHENTICATION_TIMEOUT,
             Self::BadCommand => Self::CODE_BAD_COMMAND,
+            Self::IdleTimeout => Self::CODE_IDLE_TIMEOUT,
+            Self::Shutdown => Self::CODE_SHUTDOWN,
         }
     }
 }

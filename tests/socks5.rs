@@ -7,11 +7,14 @@ use tokio::{
     time::{self, Duration},
 };
 
+use tracing_test::traced_test;
+
 use shadowsocks_service::{
     config::{Config, ConfigType, LocalConfig, ProtocolType},
     local::socks::client::socks5::{Socks5TcpClient, Socks5UdpClient},
     run_local, run_server,
     shadowsocks::{
+        canceler::CancelWaiter,
         config::{Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::CipherKind,
         net::util::generate_port,
@@ -96,7 +99,7 @@ impl Socks5TestServer {
 
     pub async fn run(&self) {
         let svr_cfg = self.svr_config.clone();
-        tokio::spawn(run_server(svr_cfg));
+        tokio::spawn(run_server(CancelWaiter::none(), svr_cfg));
 
         let client_cfg = self.cli_config.clone();
         tokio::spawn(run_local(client_cfg));
@@ -111,11 +114,6 @@ async fn socks5_tcp_relay_test(
     local_protocol: ServerProtocol,
     #[cfg(feature = "transport")] local_transport: Option<TransportConnectorConfig>,
 ) {
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Debug)
-        .is_test(true)
-        .try_init();
-
     let svr = Socks5TestServer::new(
         // server
         format!("127.0.0.1:{}", generate_port().expect("generate port error")),
@@ -160,16 +158,16 @@ fn start_udp_echo_server(port: u16) -> String {
     tokio::spawn(async move {
         let l = UdpSocket::bind(dup_addr.clone()).await.unwrap();
 
-        log::debug!("UDP echo server started {}", dup_addr);
+        tracing::debug!("UDP echo server started {}", dup_addr);
 
         let mut buf = vec![0u8; 65536];
         let (amt, src) = l.recv_from(&mut buf).await.unwrap();
 
-        log::debug!("UDP echo received {} bytes from {}", amt, src);
+        tracing::debug!("UDP echo received {} bytes from {}", amt, src);
 
         l.send_to(&buf[..amt], &src).await.unwrap();
 
-        log::debug!("UDP echo sent {} bytes to {}", amt, src);
+        tracing::debug!("UDP echo sent {} bytes to {}", amt, src);
     });
 
     udp_echo_server_addr
@@ -181,11 +179,6 @@ async fn socks5_udp_relay_test(
     local_protocol: ServerProtocol,
     #[cfg(feature = "transport")] local_transport: Option<TransportConnectorConfig>,
 ) {
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .is_test(true)
-        .try_init();
-
     let remote_echo_addr = start_udp_echo_server(generate_port().expect("generate port error"))
         .parse::<Address>()
         .unwrap();
@@ -239,6 +232,7 @@ async fn socks5_udp_relay_ss() {
 
 #[cfg(feature = "stream-cipher")]
 #[tokio::test]
+#[traced_test]
 async fn socks5_tcp_relay_ss_stream() {
     socks5_tcp_relay_test(
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_128_CFB128)),
@@ -252,6 +246,7 @@ async fn socks5_tcp_relay_ss_stream() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn socks5_tcp_relay_ss_aead() {
     socks5_tcp_relay_test(
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
@@ -266,6 +261,7 @@ async fn socks5_tcp_relay_ss_aead() {
 
 #[cfg(feature = "transport-ws")]
 #[tokio::test]
+#[traced_test]
 async fn socks5_udp_relay_ss_ws() {
     socks5_udp_relay_test(
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_128_GCM)),
@@ -283,6 +279,7 @@ async fn socks5_udp_relay_ss_ws() {
 
 #[cfg(feature = "transport-ws")]
 #[tokio::test]
+#[traced_test]
 async fn socks5_tcp_relay_ss_ws() {
     use shadowsocks_service::shadowsocks::transport::websocket;
 

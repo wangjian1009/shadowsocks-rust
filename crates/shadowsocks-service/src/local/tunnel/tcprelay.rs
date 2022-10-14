@@ -65,7 +65,7 @@ async fn handle_tcp_client(
         trace!("establishing tcp tunnel {} <-> {} direct", peer_addr, forward_addr);
 
         let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), &forward_addr).await?;
-        return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, &forward_addr, &None).await;
+        return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, &forward_addr, None).await;
     }
 
     let server = balancer.best_tcp_server();

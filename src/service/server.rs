@@ -4,19 +4,21 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
     process::ExitCode,
+    sync::Arc,
     time::Duration,
 };
 
 use clap::{Arg, ArgGroup, ArgMatches, Command, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
 use tokio::{self, runtime::Builder};
-use tracing::{info, trace};
+use tracing::{error, info};
 
 use shadowsocks_service::{
     acl::AccessControl,
     config::{read_variable_field_value, Config, ConfigType, ManagerConfig},
     run_server,
     shadowsocks::{
+        canceler::Canceler,
         config::{ManagerAddr, Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::{available_ciphers, CipherKind},
         plugin::PluginConfig,
@@ -286,22 +288,36 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                 Arg::new("LOG_WITHOUT_TIME")
                     .long("log-without-time")
                     .help("Log without datetime prefix"),
-            )
-            .arg(
-                Arg::new("LOG_TEMPLATE")
-                    .long("log-template")
-                    .takes_value(true)
-                    .help("log template file name"),
             );
     }
 
-    #[cfg(feature = "logging-remote")]
+    #[cfg(feature = "logging-apm")]
     {
         app = app.arg(
-            Arg::new("LOG_REMOTE")
-                .long("log-remote")
+            Arg::new("LOG_TEMPLATE")
+                .long("log-template")
                 .takes_value(true)
-                .help("log remote server url"),
+                .help("log template file name"),
+        );
+    }
+
+    #[cfg(feature = "logging-apm")]
+    {
+        app = app.arg(
+            Arg::new("LOG_APM_URL")
+                .long("log-apm-url")
+                .takes_value(true)
+                .help("log apm server url"),
+        );
+    }
+
+    #[cfg(feature = "logging-jaeger")]
+    {
+        app = app.arg(
+            Arg::new("LOG_JAEGER_URL")
+                .long("log-jaeger-url")
+                .takes_value(true)
+                .help("log jaeger server url"),
         );
     }
 
@@ -868,32 +884,36 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
     runtime.block_on(async move {
         #[cfg(feature = "logging")]
-        let _log_guard = logging::init_with_config("ssserver", &service_config.log);
+        let log_guard = logging::init_with_config("ssserver", &service_config.log);
 
-        let span = tracing::span!(tracing::Level::TRACE, "app");
-        let _enter = span.enter();
+        info!("{:?}", service_config);
 
-        trace!("{:?}", service_config);
+        let app_cancel = Arc::new(Canceler::new());
 
-        let abort_signal = monitor::create_signal_monitor();
-        let server = run_server(config);
+        let abort_signal = monitor::create_signal_monitor(app_cancel.clone());
+        let server = run_server(app_cancel.waiter(), config);
 
         tokio::pin!(abort_signal);
         tokio::pin!(server);
 
-        match future::select(server, abort_signal).await {
+        let exit_code = match future::select(server, abort_signal).await {
             // Server future resolved without an error. This should never happen.
             Either::Left((Ok(..), ..)) => {
-                eprintln!("server exited unexpectedly");
-                crate::EXIT_CODE_SERVER_EXIT_UNEXPECTEDLY.into()
+                info!("all server done");
+                ExitCode::SUCCESS
             }
             // Server future resolved with error, which are listener errors in most cases
             Either::Left((Err(err), ..)) => {
-                eprintln!("server aborted with {}", err);
+                error!(error = ?err, "server exit with error");
                 crate::EXIT_CODE_SERVER_ABORTED.into()
             }
             // The abort signal future resolved. Means we should just exit.
             Either::Right(_) => ExitCode::SUCCESS,
-        }
+        };
+
+        #[cfg(feature = "logging")]
+        log_guard.close().await;
+
+        exit_code
     })
 }

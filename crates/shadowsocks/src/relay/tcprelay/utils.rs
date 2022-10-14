@@ -5,23 +5,19 @@
 
 use std::{
     future::Future,
-    io::{self, Error, ErrorKind},
-    ops::DerefMut,
+    io,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
+    time::Duration,
 };
 
-use futures::{ready, FutureExt};
+use futures::ready;
 use pin_project::pin_project;
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    sync::Mutex,
-};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{
     crypto::{CipherCategory, CipherKind},
-    timeout::Sleep,
+    timeout::{TimeoutTicker, TimeoutWaiter},
 };
 
 #[derive(Debug)]
@@ -31,11 +27,11 @@ struct CopyBuffer {
     cap: usize,
     amt: u64,
     buf: Box<[u8]>,
-    idle_timeout: Option<Arc<Mutex<Sleep>>>,
+    idle_timeout: Option<TimeoutTicker>,
 }
 
 impl CopyBuffer {
-    fn new(buffer_size: usize, idle_timeout: Option<Arc<Mutex<Sleep>>>) -> Self {
+    fn new(buffer_size: usize, idle_timeout: Option<TimeoutTicker>) -> Self {
         Self {
             read_done: false,
             pos: 0,
@@ -57,22 +53,6 @@ impl CopyBuffer {
         W: AsyncWrite + ?Sized,
     {
         loop {
-            if let Some(ref idle_timeout) = self.idle_timeout {
-                let mut lock_fut = idle_timeout.lock().boxed();
-                let lock_fut_pin = Pin::new(&mut lock_fut);
-                match lock_fut_pin.poll(cx) {
-                    Poll::Ready(ref mut sleep) => {
-                        let mut sleep = sleep.deref_mut();
-                        let sleep_pin = Pin::new(&mut sleep);
-                        if let Poll::Ready(_) = sleep_pin.poll(cx) {
-                            let err = Error::new(ErrorKind::TimedOut, "idle timeout");
-                            return Poll::Ready(Result::Err(err));
-                        }
-                    }
-                    Poll::Pending => return Poll::Pending,
-                }
-            }
-
             // let check_timeout
             // let pinfut1 =  Pin::new(&mut fut1);
 
@@ -88,6 +68,7 @@ impl CopyBuffer {
                 } else {
                     self.pos = 0;
                     self.cap = n;
+                    self.idle_timeout.as_ref().map(|o| o.tick());
                 }
             }
 
@@ -103,6 +84,7 @@ impl CopyBuffer {
                 } else {
                     self.pos += i;
                     self.amt += i as u64;
+                    self.idle_timeout.as_ref().map(|o| o.tick());
                 }
             }
 
@@ -146,7 +128,7 @@ pub async fn copy_from_encrypted<ER, PW>(
     method: CipherKind,
     reader: &mut ER,
     writer: &mut PW,
-    idle_timeout: Option<Arc<Mutex<Sleep>>>,
+    idle_timeout: Option<TimeoutTicker>,
 ) -> io::Result<u64>
 where
     ER: AsyncRead + Unpin + ?Sized,
@@ -165,7 +147,7 @@ pub async fn copy_to_encrypted<PR, EW>(
     method: CipherKind,
     reader: &mut PR,
     writer: &mut EW,
-    idle_timeout: Option<Arc<Mutex<Sleep>>>,
+    idle_timeout: Option<TimeoutTicker>,
 ) -> io::Result<u64>
 where
     PR: AsyncRead + Unpin + ?Sized,
@@ -219,12 +201,24 @@ enum TransferState {
     Done(u64),
 }
 
+impl TransferState {
+    fn count(&self) -> u64 {
+        match self {
+            Self::Running(b) => b.amt,
+            Self::ShuttingDown(c) => c.clone(),
+            Self::Done(c) => c.clone(),
+        }
+    }
+}
+
 #[pin_project(project = CopyBidirectionalProj)]
 struct CopyBidirectional<'a, A: ?Sized, B: ?Sized> {
     #[pin]
     a: &'a mut A,
     #[pin]
     b: &'a mut B,
+    #[pin]
+    timeout_waiter: Option<TimeoutWaiter>,
     a_to_b: TransferState,
     b_to_a: TransferState,
 }
@@ -234,7 +228,7 @@ fn transfer_one_direction<A, B>(
     state: &mut TransferState,
     mut r: Pin<&mut A>,
     mut w: Pin<&mut B>,
-) -> Poll<io::Result<u64>>
+) -> Poll<io::Result<()>>
 where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
@@ -250,7 +244,7 @@ where
 
                 *state = TransferState::Done(*count);
             }
-            TransferState::Done(count) => return Poll::Ready(Ok(*count)),
+            TransferState::Done(_count) => return Poll::Ready(Ok(())),
         }
     }
 }
@@ -260,32 +254,40 @@ where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
-    type Output = io::Result<(u64, u64)>;
+    type Output = (u64, u64, io::Result<()>);
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // Unpack self into mut refs to each field to avoid borrow check issues.
         let CopyBidirectionalProj {
             mut a,
             mut b,
+            timeout_waiter,
             a_to_b,
             b_to_a,
         } = self.project();
 
-        let poll_a_to_b = transfer_one_direction(cx, a_to_b, a.as_mut(), b.as_mut())?;
-        let poll_b_to_a = transfer_one_direction(cx, b_to_a, b.as_mut(), a.as_mut())?;
+        if let Some(timeout_waiter) = timeout_waiter.as_pin_mut() {
+            if timeout_waiter.poll(cx).is_ready() {
+                return Poll::Ready((
+                    a_to_b.count(),
+                    b_to_a.count(),
+                    Err(io::Error::new(io::ErrorKind::TimedOut, "copy bidirectional timeout")),
+                ));
+            }
+        }
 
-        // It is not a problem if ready! returns early because transfer_one_direction for the
-        // other direction will keep returning TransferState::Done(count) in future calls to poll
-        let a_to_b = ready!(poll_a_to_b);
-        let b_to_a = ready!(poll_b_to_a);
+        let poll_a_to_b = transfer_one_direction(cx, a_to_b, a.as_mut(), b.as_mut());
+        let poll_b_to_a = transfer_one_direction(cx, b_to_a, b.as_mut(), a.as_mut());
 
-        Poll::Ready(Ok((a_to_b, b_to_a)))
-        // match (poll_a_to_b, poll_b_to_a) {
-        //     (Poll::Pending, Poll::Pending) => Poll::Pending,
-        //     (Poll::Ready(a_to_b), Poll::Pending) => Poll::Ready(Ok((a_to_b, 0))),
-        //     (Poll::Pending, Poll::Ready(b_to_a)) => Poll::Ready(Ok((0, b_to_a))),
-        //     (Poll::Ready(a_to_b), Poll::Ready(b_to_a)) => Poll::Ready(Ok((a_to_b, b_to_a))),
-        // }
+        match (poll_a_to_b, poll_b_to_a) {
+            (Poll::Pending, Poll::Pending) => Poll::Pending,
+            (Poll::Ready(r), Poll::Pending) => Poll::Ready((a_to_b.count(), b_to_a.count(), r)),
+            (Poll::Pending, Poll::Ready(r)) => Poll::Ready((a_to_b.count(), b_to_a.count(), r)),
+            (Poll::Ready(a_r), Poll::Ready(b_r)) => {
+                let r = if a_r.is_err() { a_r } else { b_r };
+                Poll::Ready((a_to_b.count(), b_to_a.count(), r))
+            }
+        }
     }
 }
 
@@ -320,22 +322,22 @@ pub async fn copy_encrypted_bidirectional<E, P>(
     method: CipherKind,
     encrypted: &mut E,
     plain: &mut P,
-    idle_timeout: &Option<Arc<Mutex<Sleep>>>,
-) -> Result<(u64, u64), std::io::Error>
+    idle_timeout: Option<Duration>,
+) -> (u64, u64, io::Result<()>)
 where
     E: AsyncRead + AsyncWrite + Unpin + ?Sized,
     P: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
-    let (idle_timeout_a, idle_timeout_b) = match &idle_timeout {
-        Some(ref idle_timeout) => (Some(idle_timeout.clone()), Some(idle_timeout.clone())),
-        None => (None, None),
-    };
+    let timeout_waiter = idle_timeout.map(|c| TimeoutWaiter::new(c));
+    let timeout_ticker_a = timeout_waiter.as_ref().map(|o| o.ticker());
+    let timeout_ticker_b = timeout_ticker_a.clone();
 
     CopyBidirectional {
         a: encrypted,
         b: plain,
-        a_to_b: TransferState::Running(CopyBuffer::new(encrypted_read_buffer_size(method), idle_timeout_a)),
-        b_to_a: TransferState::Running(CopyBuffer::new(plain_read_buffer_size(method), idle_timeout_b)),
+        timeout_waiter,
+        a_to_b: TransferState::Running(CopyBuffer::new(encrypted_read_buffer_size(method), timeout_ticker_a)),
+        b_to_a: TransferState::Running(CopyBuffer::new(plain_read_buffer_size(method), timeout_ticker_b)),
     }
     .await
 }

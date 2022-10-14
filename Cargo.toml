@@ -60,7 +60,9 @@ strip = true
 [features]
 default = [
     "logging",
-    "logging-remote",
+    "logging-file",
+    "logging-apm",
+    "logging-jaeger",
     "trust-dns",
     "stream-cipher",
     "local",
@@ -139,8 +141,10 @@ dns-over-tls = ["shadowsocks-service/dns-over-tls"]
 dns-over-https = ["shadowsocks-service/dns-over-https"]
 
 # Enable logging output
-logging = ["tracing-futures", "tracing-subscriber", "tracing-appender"]
-logging-remote = ["logging", "tracing-opentelemetry", "opentelemetry", "opentelemetry-jaeger", "hyper", "url"]
+logging = ["tracing-futures", "tracing-subscriber"]
+logging-file = ["logging", "tracing-appender"]
+logging-apm = ["logging", "url", "tracing-elastic-apm", "sysinfo"]
+logging-jaeger = ["logging", "url", "tracing-opentelemetry", "opentelemetry", "opentelemetry-jaeger"]
 
 # Enable DNS-relay
 local-dns = ["local", "shadowsocks-service/local-dns"]
@@ -209,12 +213,20 @@ thiserror = "1.0"
 
 tracing = { version = "0.1.35" }
 tracing-futures = { version = "0.2", features = ["std-future"], optional = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time", "local-time"], default-features = false, optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time", "local-time", "ansi", "json"], default-features = false, optional = true }
+
+# logging-file
 tracing-appender = { version = "0.2", optional = true }
-tracing-opentelemetry = { version = "0.18", optional = true }
+
+# logging-jaeger
+tracing-opentelemetry = { version = "*", optional = true }
 opentelemetry = { version = "*", features = ["rt-tokio"], optional = true }
-opentelemetry-jaeger = { version = "*", features = ["rt-tokio", "collector_client", "hyper_collector_client"], optional = true }
+opentelemetry-jaeger = { version = "*", features = ["rt-tokio", "hyper_collector_client"], optional = true }
+
+# logging-apm
+tracing-elastic-apm = { version = "3.2.3", optional = true, features = ["rustls-tls"], default-features = false }
 url = { version = "*", optional = true }
+sysinfo = { version = "*", optional = true }
 
 clap = { version = "3.2", features = ["wrap_help", "suggestions"] }
 cfg-if = "1"

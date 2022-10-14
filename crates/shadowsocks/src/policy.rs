@@ -3,6 +3,7 @@ use std::{io, net::SocketAddr, sync::Arc};
 
 use crate::net::{FlowStat, TcpStream};
 use crate::relay::Address;
+use crate::timeout::TimeoutTicker;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -12,6 +13,7 @@ pub trait LocalProcessor: Sync + Send {
         &self,
         r: Box<dyn AsyncRead + Send + Unpin>,
         w: Box<dyn AsyncWrite + Send + Unpin>,
+        timeout_ticker: Option<TimeoutTicker>,
     ) -> io::Result<()>;
 }
 

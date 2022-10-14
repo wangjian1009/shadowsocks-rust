@@ -176,8 +176,7 @@ impl AutoProxyClientStream {
                             let stream = RateLimitedStream::from_stream(stream, rate_limit);
 
                             if let Some(flow_stat) = flow_stat {
-                                Box::new(MonProxyStream::from_stream(stream, flow_stat, None))
-                                    as Box<dyn StreamConnection>
+                                Box::new(MonProxyStream::from_stream(stream, flow_stat)) as Box<dyn StreamConnection>
                             } else {
                                 Box::new(stream) as Box<dyn StreamConnection>
                             }
@@ -214,8 +213,7 @@ impl AutoProxyClientStream {
                             let stream = RateLimitedStream::from_stream(stream, rate_limit);
 
                             if let Some(flow_stat) = flow_stat {
-                                Box::new(MonProxyStream::from_stream(stream, flow_stat, None))
-                                    as Box<dyn StreamConnection>
+                                Box::new(MonProxyStream::from_stream(stream, flow_stat)) as Box<dyn StreamConnection>
                             } else {
                                 Box::new(stream) as Box<dyn StreamConnection>
                             }
@@ -253,8 +251,7 @@ impl AutoProxyClientStream {
                             let stream = RateLimitedStream::from_stream(stream, rate_limit);
 
                             if let Some(flow_stat) = flow_stat {
-                                Box::new(MonProxyStream::from_stream(stream, flow_stat, None))
-                                    as Box<dyn StreamConnection>
+                                Box::new(MonProxyStream::from_stream(stream, flow_stat)) as Box<dyn StreamConnection>
                             } else {
                                 Box::new(stream) as Box<dyn StreamConnection>
                             }
@@ -296,7 +293,7 @@ impl AutoProxyClientStream {
                     let stream = RateLimitedStream::from_stream(stream, rate_limit);
 
                     let stream = if let Some(flow_stat) = flow_stat {
-                        Box::new(MonProxyStream::from_stream(stream, flow_stat, None)) as Box<dyn StreamConnection>
+                        Box::new(MonProxyStream::from_stream(stream, flow_stat)) as Box<dyn StreamConnection>
                     } else {
                         Box::new(stream) as Box<dyn StreamConnection>
                     };

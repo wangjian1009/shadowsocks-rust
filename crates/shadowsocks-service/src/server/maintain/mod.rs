@@ -4,10 +4,13 @@ type GenericResult<T> = std::result::Result<T, GenericError>;
 mod context;
 mod data;
 mod server;
+use tracing::{error, info};
 
 use hyper::Server as HttpServer;
 
 use std::{io, net::SocketAddr, sync::Arc};
+
+use shadowsocks::canceler::CancelWaiter;
 
 use context::MaintainServerContext;
 pub use data::ServerInfo;
@@ -23,18 +26,20 @@ impl MaintainServer {
         }
     }
 
-    pub async fn run<'a, 'b>(self, addr: SocketAddr) -> io::Result<()> {
-        let server = HttpServer::bind(&addr).serve(server::MakeSvc {
-            context: self.context.clone(),
-        });
+    pub async fn run<'a, 'b>(self, cancel_waiter: CancelWaiter, addr: SocketAddr) -> io::Result<()> {
+        let server = HttpServer::bind(&addr)
+            .serve(server::MakeSvc {
+                context: self.context.clone(),
+            })
+            .with_graceful_shutdown(async move { cancel_waiter.wait().await });
 
-        tracing::info!("shadowsocks maintain server listening on {}", addr);
+        info!("maintain server listening on {}", addr);
 
-        // Run this server for... forever!
         if let Err(e) = server.await {
-            tracing::error!("maintain server error: {}", e);
+            error!(error = ?e, "maintain server exited with error");
             Err(io::Error::new(io::ErrorKind::Other, e))
         } else {
+            info!("maintain server exited success");
             Ok(())
         }
     }

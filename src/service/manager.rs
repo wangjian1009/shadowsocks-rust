@@ -1,6 +1,6 @@
 //! Server Manager launchers
 
-use std::{net::IpAddr, path::PathBuf, process::ExitCode, time::Duration};
+use std::{net::IpAddr, path::PathBuf, process::ExitCode, sync::Arc, time::Duration};
 
 use clap::{Arg, ArgGroup, ArgMatches, Command, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
@@ -14,6 +14,7 @@ use shadowsocks_service::{
     config::{Config, ConfigType, ManagerConfig, ManagerServerHost},
     run_manager,
     shadowsocks::{
+        canceler::Canceler,
         config::{ManagerAddr, Mode},
         crypto::{available_ciphers, CipherKind},
         plugin::PluginConfig,
@@ -483,7 +484,9 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
     };
 
     runtime.block_on(async move {
-        let abort_signal = monitor::create_signal_monitor();
+        let app_cancel = Arc::new(Canceler::new());
+
+        let abort_signal = monitor::create_signal_monitor(app_cancel);
         let server = run_manager(config);
 
         tokio::pin!(abort_signal);

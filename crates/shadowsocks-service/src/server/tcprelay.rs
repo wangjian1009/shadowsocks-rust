@@ -16,7 +16,6 @@ use shadowsocks::{
         socks5::{Address, Error as Socks5Error},
         tcprelay::{utils::copy_encrypted_bidirectional, ProxyServerStream},
     },
-    timeout::Sleep,
     transport::{
         direct::{TcpAcceptor, TcpConnector},
         Acceptor, Connection, Connector, StreamConnection,
@@ -25,10 +24,9 @@ use shadowsocks::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::Mutex,
     time,
 };
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn, Instrument};
 
 use crate::net::{utils::ignore_until_end, MonProxyStream};
 
@@ -224,9 +222,7 @@ impl TcpServer {
                     ServerAddr::DomainName(..) => unreachable!(),
                 };
 
-                if let Some(cfg_idle_timeout) = svr_cfg.idle_timeout() {
-                    idle_timeout = Some(Arc::new(Mutex::new(Sleep::new(cfg_idle_timeout))));
-                }
+                idle_timeout = svr_cfg.idle_timeout().clone();
 
                 #[cfg(feature = "rate-limit")]
                 if let Some(connection_bound_width) = connection_bound_width {
@@ -238,17 +234,7 @@ impl TcpServer {
                 #[cfg(feature = "rate-limit")]
                 s.set_rate_limit(rate_limiter.clone());
 
-                (
-                    MonProxyStream::from_stream(
-                        s,
-                        flow_stat,
-                        match &idle_timeout {
-                            Some(ref idle_timeout) => Some(idle_timeout.clone()),
-                            None => None,
-                        },
-                    ),
-                    addr,
-                )
+                (MonProxyStream::from_stream(s, flow_stat), addr)
             }) {
                 Ok(s) => s,
                 Err(err) => {
@@ -282,10 +268,13 @@ impl TcpServer {
                                 delay
                             );
                             let delay = *delay;
-                            tokio::spawn(async move {
-                                let _local_stream = local_stream;
-                                tokio::time::sleep(delay).await;
-                            });
+                            tokio::spawn(
+                                async move {
+                                    let _local_stream = local_stream;
+                                    tokio::time::sleep(delay).await;
+                                }
+                                .in_current_span(),
+                            );
                         }
                     }
                     continue;
@@ -322,47 +311,56 @@ impl TcpServer {
                         ss_cfg.clone_user_manager(),
                     );
                     let method = ss_cfg.method();
-                    tokio::spawn(async move {
-                        if let Err(err) = client.serve_ss(method, local_stream, connection_stat.clone()).await {
-                            debug!("tcp server stream aborted with error: {}", err);
+                    tokio::spawn(
+                        async move {
+                            if let Err(err) = client.serve_ss(method, local_stream, connection_stat.clone()).await {
+                                debug!("tcp server stream aborted with error: {}", err);
+                            }
+
+                            #[cfg(feature = "server-limit")]
+                            connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
+
+                            #[cfg(not(feature = "server-limit"))]
+                            connection_stat.remove_in_connection(&conn_id).await;
                         }
-
-                        #[cfg(feature = "server-limit")]
-                        connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
-
-                        #[cfg(not(feature = "server-limit"))]
-                        connection_stat.remove_in_connection(&conn_id).await;
-                    });
+                        .in_current_span(),
+                    );
                 }
                 #[cfg(feature = "trojan")]
                 ServerProtocol::Trojan(cfg) => {
                     let hash = cfg.hash().clone();
-                    tokio::spawn(async move {
-                        if let Err(err) = client.serve_trojan(&hash, local_stream).await {
-                            debug!("tcp server stream aborted with error: {}", err);
+                    tokio::spawn(
+                        async move {
+                            if let Err(err) = client.serve_trojan(&hash, local_stream).await {
+                                debug!("tcp server stream aborted with error: {}", err);
+                            }
+
+                            #[cfg(feature = "server-limit")]
+                            connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
+
+                            #[cfg(not(feature = "server-limit"))]
+                            connection_stat.remove_in_connection(&conn_id).await;
                         }
-
-                        #[cfg(feature = "server-limit")]
-                        connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
-
-                        #[cfg(not(feature = "server-limit"))]
-                        connection_stat.remove_in_connection(&conn_id).await;
-                    });
+                        .in_current_span(),
+                    );
                 }
                 #[cfg(feature = "vless")]
                 ServerProtocol::Vless(..) => {
                     let inbound = vless_inbound.clone();
-                    tokio::spawn(async move {
-                        if let Err(err) = client.serve_vless(inbound.unwrap(), local_stream).await {
-                            debug!("tcp server stream aborted with error: {}", err);
+                    tokio::spawn(
+                        async move {
+                            if let Err(err) = client.serve_vless(inbound.unwrap(), local_stream).await {
+                                debug!("tcp server stream aborted with error: {}", err);
+                            }
+
+                            #[cfg(feature = "server-limit")]
+                            connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
+
+                            #[cfg(not(feature = "server-limit"))]
+                            connection_stat.remove_in_connection(&conn_id).await;
                         }
-
-                        #[cfg(feature = "server-limit")]
-                        connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
-
-                        #[cfg(not(feature = "server-limit"))]
-                        connection_stat.remove_in_connection(&conn_id).await;
-                    });
+                        .in_current_span(),
+                    );
                 }
                 #[cfg(feature = "tuic")]
                 ServerProtocol::Tuic(..) => {
@@ -395,7 +393,7 @@ struct TcpServerClient {
     peer_addr: SocketAddr,
     timeout: Option<Duration>,
     request_recv_timeout: Option<Duration>,
-    idle_timeout: Option<Arc<Mutex<Sleep>>>,
+    idle_timeout: Option<Duration>,
     #[cfg(feature = "rate-limit")]
     rate_limiter: Option<Arc<RateLimiter>>,
 }
@@ -486,14 +484,7 @@ impl TcpServerClient {
             Some(protocol) => match protocol {
                 ServerMockProtocol::DNS => {
                     let (mut r, mut w) = tokio::io::split(stream);
-                    run_dns_tcp_stream(
-                        self.context.dns_resolver(),
-                        &self.peer_addr,
-                        &target_addr,
-                        &mut r,
-                        &mut w,
-                    )
-                    .await?;
+                    run_dns_tcp_stream(self.context.dns_resolver(), &mut r, &mut w, None).await?;
                     return Ok(());
                 }
             },
@@ -527,7 +518,7 @@ impl TcpServerClient {
         };
 
         #[cfg(feature = "rate-limit")]
-        remote_stream.set_rate_limit(self.rate_limiter);
+        remote_stream.set_rate_limit(self.rate_limiter.clone());
 
         // let mut remote_stream = OutboundTcpStream::from_stream(remote_stream, self.rate_limiter);
         let _out_guard = connection_stat.add_out_connection();
@@ -569,8 +560,10 @@ impl TcpServerClient {
             self.context.connect_opts_ref()
         );
 
-        match copy_encrypted_bidirectional(method, &mut stream, &mut remote_stream, &self.idle_timeout).await {
-            Ok((rn, wn)) => {
+        // let timeout_ticker = self.idle_timeout.as_ref().map(|o| o.ticker());
+        let (rn, wn, r) = copy_encrypted_bidirectional(method, &mut stream, &mut remote_stream, None).await;
+        match r {
+            Ok(()) => {
                 trace!(
                     "tcp tunnel {} <-> {} closed, L2R {} bytes, R2L {} bytes",
                     self.peer_addr,

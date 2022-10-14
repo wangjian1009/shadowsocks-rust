@@ -298,7 +298,7 @@ impl Socks5TcpHandler {
                 )
                 .await
             }
-            None => establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, &target_addr, &None).await,
+            None => establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, &target_addr, None).await,
         }
     }
 

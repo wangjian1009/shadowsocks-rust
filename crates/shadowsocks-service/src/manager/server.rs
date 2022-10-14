@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 
 use shadowsocks::{
+    canceler::CancelWaiter,
     config::{Mode, ServerConfig, ServerProtocol, ServerType, ServerUser, ServerUserManager, ShadowsocksConfig},
     context::{Context, SharedContext},
     crypto::CipherKind,
@@ -200,18 +201,18 @@ impl Manager {
 
     pub async fn add_server(&self, svr_cfg: ServerConfig) {
         match self.svr_cfg.server_mode {
-            ManagerServerMode::Builtin => self.add_server_builtin(svr_cfg).await,
+            ManagerServerMode::Builtin => self.add_server_builtin(CancelWaiter::none(), svr_cfg).await,
             #[cfg(unix)]
             ManagerServerMode::Standalone => self.add_server_standalone(svr_cfg).await,
         }
     }
 
-    async fn add_server_builtin(&self, svr_cfg: ServerConfig) {
+    async fn add_server_builtin(&self, cancel_waiter: CancelWaiter, svr_cfg: ServerConfig) {
         // Each server should use a separate Context, but shares
         //
         // * AccessControlList
         // * DNS Resolver
-        let mut server = Server::new(svr_cfg.clone());
+        let mut server = Server::new(cancel_waiter, svr_cfg.clone());
 
         server.set_connect_opts(self.connect_opts.clone());
         server.set_accept_opts(self.accept_opts.clone());
@@ -251,7 +252,7 @@ impl Manager {
 
         let flow_stat = server.flow_stat();
 
-        let abortable = tokio::spawn(async move { server.run().await });
+        let abortable = tokio::spawn(server.run());
 
         servers.insert(
             server_port,

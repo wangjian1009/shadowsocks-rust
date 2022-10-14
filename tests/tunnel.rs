@@ -1,24 +1,24 @@
 #![cfg(all(feature = "local-tunnel", feature = "server"))]
 
 use byte_string::ByteStr;
-use log::debug;
 use tokio::{
     self,
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpStream, UdpSocket},
     time::{self, Duration},
 };
+use tracing::debug;
 
 use shadowsocks_service::{
     config::{Config, ConfigType},
-    run_local,
-    run_server,
+    run_local, run_server,
+    shadowsocks::canceler::CancelWaiter,
 };
+use tracing_test::traced_test;
 
 #[tokio::test]
+#[traced_test]
 async fn tcp_tunnel() {
-    let _ = env_logger::try_init();
-
     let local_config = Config::load_from_str(
         r#"{
             "locals": [
@@ -51,7 +51,7 @@ async fn tcp_tunnel() {
     .unwrap();
 
     tokio::spawn(run_local(local_config));
-    tokio::spawn(run_server(server_config));
+    tokio::spawn(run_server(CancelWaiter::none(), server_config));
 
     time::sleep(Duration::from_secs(1)).await;
 
@@ -72,9 +72,8 @@ async fn tcp_tunnel() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn udp_tunnel() {
-    let _ = env_logger::try_init();
-
     // A UDP echo server
     tokio::spawn(async {
         let socket = UdpSocket::bind("127.0.0.1:9230").await.unwrap();
@@ -125,7 +124,7 @@ async fn udp_tunnel() {
     .unwrap();
 
     tokio::spawn(run_local(local_config));
-    tokio::spawn(run_server(server_config));
+    tokio::spawn(run_server(CancelWaiter::none(), server_config));
 
     time::sleep(Duration::from_secs(1)).await;
 

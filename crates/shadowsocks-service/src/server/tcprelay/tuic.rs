@@ -2,6 +2,7 @@ use super::*;
 
 use async_trait::async_trait;
 use shadowsocks::{config::TuicConfig, lookup_then, net::sys::create_inbound_udp_socket, tuic};
+use tracing::{info, Instrument};
 
 use super::super::udprelay::tuic::TuicUdpSocket;
 use crate::server::policy::ServerPolicy;
@@ -13,12 +14,8 @@ pub struct TuicUdpCreator {
 
 #[async_trait]
 impl tuic::server::UdpSocketCreator for TuicUdpCreator {
-    async fn create_outbound_udp_socket(
-        &self,
-        assoc_id: u32,
-        peer_addr: SocketAddr,
-    ) -> io::Result<Box<dyn tuic::server::UdpSocket>> {
-        let udp_socket = TuicUdpSocket::new(self.context.clone(), self.max_udp_packet_size, peer_addr, assoc_id);
+    async fn create_outbound_udp_socket(&self) -> io::Result<Box<dyn tuic::server::UdpSocket>> {
+        let udp_socket = TuicUdpSocket::new(self.context.clone(), self.max_udp_packet_size);
         Ok(Box::new(udp_socket) as Box<dyn tuic::server::UdpSocket>)
     }
 }
@@ -41,7 +38,7 @@ impl TcpServer {
             ));
         }
 
-        let runtime_cfg = tuic::server::Config::new(match tuic_cfg {
+        let tuic_cfg = match tuic_cfg {
             TuicConfig::Server((c, _)) => c,
             TuicConfig::Client(_c) => {
                 return Err(io::Error::new(
@@ -49,7 +46,23 @@ impl TcpServer {
                     "tuic server can`t run with client config!",
                 ))
             }
-        })?;
+        };
+
+        let authentication_timeout = svr_cfg.timeout().clone().unwrap_or_else(|| Duration::from_secs(1000));
+        let idle_timeout = svr_cfg
+            .idle_timeout()
+            .clone()
+            .unwrap_or_else(|| Duration::from_secs(15000));
+
+        info!(
+            net = "udp",
+            proto = svr_cfg.protocol().name(),
+            tuic.cc = tuic_cfg.congestion_controller.to_string(),
+            tuic.mtu = tuic_cfg.max_udp_relay_packet_size,
+            timeout.idle = idle_timeout.as_millis(),
+            timeout.authentication = authentication_timeout.as_millis(),
+            message = "protocol detail",
+        );
 
         let socket = match svr_cfg.addr() {
             ServerAddr::SocketAddr(sa) => create_inbound_udp_socket(sa, self.accept_opts.ipv6_only).await?,
@@ -61,30 +74,24 @@ impl TcpServer {
             }
         };
 
-        // Spans will be sent to the configured OpenTelemetry exporter
-        let span = tracing::span!(
-            tracing::Level::TRACE,
-            "svr",
-            port = svr_cfg.addr().port(),
-            "net" = "udp",
-            proto = svr_cfg.protocol().name()
-        );
-        let _enter = span.enter();
-        
+        let tokens = tuic_cfg.build_tokens();
+        let server_cfg = tuic_cfg.build_server_config(idle_timeout.clone())?;
+
         let server = tuic::server::Server::init(
-            runtime_cfg.server_config,
+            server_cfg,
             socket.into_std()?,
-            runtime_cfg.token,
-            runtime_cfg.authentication_timeout,
+            tokens,
+            authentication_timeout,
+            idle_timeout,
             Arc::new(Box::new(TuicUdpCreator::new(
                 self.context.clone(),
-                runtime_cfg.max_udp_relay_packet_size,
+                tuic_cfg.max_udp_relay_packet_size,
             ))),
             Arc::new(Box::new(ServerPolicy::new(self.context.clone(), svr_cfg.timeout()))),
         )?;
 
-        info!("{} server listening on {}", svr_cfg.protocol().name(), svr_cfg.addr());
-        server.run().await;
+        info!("tuic listening on {}", svr_cfg.addr());
+        server.run(self.context.cancel_waiter()).in_current_span().await;
         Ok(())
     }
 }

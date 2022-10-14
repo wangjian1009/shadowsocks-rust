@@ -1,15 +1,16 @@
 //! Shadowsocks Server instance
 
 use std::{
-    io::{self, ErrorKind},
+    io,
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
 
 use cfg_if::cfg_if;
-use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::FutureExt;
 use shadowsocks::{
+    canceler::CancelWaiter,
     config::{ManagerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
     dns_resolver::DnsResolver,
     net::{AcceptOpts, ConnectOpts, FlowStat},
@@ -18,7 +19,7 @@ use shadowsocks::{
     ServerAddr,
 };
 use tokio::{io::AsyncReadExt, time};
-use tracing::{error, trace};
+use tracing::{debug, debug_span, error, info, info_span, Instrument};
 
 use crate::{acl::AccessControl, config::SecurityConfig};
 
@@ -50,8 +51,8 @@ pub struct Server {
 
 impl Server {
     /// Create a new server from configuration
-    pub fn new(svr_cfg: ServerConfig) -> Server {
-        Server::with_context(Arc::new(ServiceContext::new()), svr_cfg)
+    pub fn new(cancel_waiter: CancelWaiter, svr_cfg: ServerConfig) -> Server {
+        Server::with_context(Arc::new(ServiceContext::new(cancel_waiter)), svr_cfg)
     }
 
     /// Create a new server with context
@@ -184,7 +185,7 @@ impl Server {
 
     /// Start serving
     pub async fn run(mut self) -> io::Result<()> {
-        let vfut = FuturesUnordered::new();
+        let mut vfut = Vec::with_capacity(3);
 
         let connector = Arc::new(TcpConnector::new(Some(self.context.context())));
 
@@ -215,14 +216,17 @@ impl Server {
                 );
             }
 
-            let tcp_fut = self.run_tcp_server(connector.clone()).boxed();
+            let tcp_fut = self
+                .run_tcp_server(connector.clone())
+                .instrument(info_span!("ss.tcp"))
+                .boxed();
             vfut.push(tcp_fut);
         }
 
         if self.svr_cfg.if_ss(|ss_cfg| ss_cfg.mode().enable_udp()).unwrap_or(false) {
             match &self.svr_cfg.protocol() {
                 ServerProtocol::SS(cfg) => {
-                    let udp_fut = self.run_udp_server(cfg).boxed();
+                    let udp_fut = self.run_udp_server(cfg).instrument(info_span!("ss.udp")).boxed();
                     vfut.push(udp_fut);
                 }
                 #[cfg(feature = "trojan")]
@@ -243,29 +247,44 @@ impl Server {
             if let ServerProtocol::Tuic(tuic_cfg) = self.svr_cfg.protocol() {
                 if let shadowsocks::config::TuicConfig::Server((_, run_noop_tcp)) = tuic_cfg {
                     if *run_noop_tcp {
-                        vfut.push(self.tuic_run_shadow_tcp().boxed());
+                        vfut.push(
+                            self.tuic_run_shadow_tcp()
+                                .instrument(info_span!("tuic.shadow").or_current())
+                                .boxed(),
+                        );
                     }
                 }
             }
         }
 
         if self.manager_addr.is_some() {
-            let manager_fut = self.run_manager_report().boxed();
+            let manager_fut = self
+                .run_manager_report()
+                .instrument(
+                    info_span!("reporter", remote = self.manager_addr.as_ref().unwrap().to_string()).or_current(),
+                )
+                .boxed();
             vfut.push(manager_fut);
         }
 
-        let (res, _) = vfut.into_future().await;
-        if let Some(Err(err)) = res {
-            error!("servers exited with error: {}", err);
-        }
+        loop {
+            let (res, _, vfut_left) = futures::future::select_all(vfut).await;
+            if let Err(err) = res {
+                info!(error = ?err, "one server exited error");
+                return Err(err);
+            }
 
-        let err = io::Error::new(ErrorKind::Other, "server exited unexpectedly");
-        Err(err)
+            if vfut_left.is_empty() {
+                return Ok(());
+            } else {
+                vfut = vfut_left;
+            }
+        }
     }
 
     async fn run_tcp_server(&self, connector: Arc<TcpConnector>) -> io::Result<()> {
         let server = TcpServer::new(self.context.clone(), connector, self.accept_opts.clone());
-        server.run(&self.svr_cfg).await
+        server.run(&self.svr_cfg).in_current_span().await
     }
 
     async fn run_udp_server(&self, cfg: &ShadowsocksConfig) -> io::Result<()> {
@@ -282,6 +301,7 @@ impl Server {
 
     async fn run_manager_report(&self) -> io::Result<()> {
         let manager_addr = self.manager_addr.as_ref().unwrap();
+        let cancel_waiter = self.context.cancel_waiter();
 
         loop {
             match ManagerClient::connect(
@@ -291,9 +311,7 @@ impl Server {
             )
             .await
             {
-                Err(err) => {
-                    error!("failed to connect manager {}, error: {}", manager_addr, err);
-                }
+                Err(err) => error!(error = ?err, "connect failed"),
                 Ok(mut client) => {
                     use super::manager::{ServerStat, StatRequest};
 
@@ -327,18 +345,22 @@ impl Server {
                     );
 
                     if let Err(err) = client.stat(&req).await {
-                        error!(
-                            "failed to send stat to manager {}, error: {}, {:?}",
-                            manager_addr, err, req
-                        );
+                        error!(error = ?err, request = ?req, "report error");
                     } else {
-                        trace!("report to manager {}, {:?}", manager_addr, req);
+                        debug!(request = ?req, "reported");
                     }
                 }
             }
 
+            if cancel_waiter.is_canceled() {
+                return Ok(());
+            }
+
             // Report every 10 seconds
-            time::sleep(Duration::from_secs(10)).await;
+            tokio::select! {
+                _ = time::sleep(Duration::from_secs(10)) => {}
+                _ = cancel_waiter.wait() => {}
+            }
         }
     }
 
@@ -346,7 +368,7 @@ impl Server {
         use bytes::BytesMut;
         use shadowsocks::transport::{direct::TcpAcceptor, Acceptor, Connection};
 
-        tracing::info!("tuic shadow server listening on {}", self.svr_cfg.external_addr());
+        info!("tuic shadow server listening on {}", self.svr_cfg.external_addr());
 
         let mut listener = TcpAcceptor::bind_server_with_opts(
             self.context.context().as_ref(),
@@ -355,8 +377,15 @@ impl Server {
         )
         .await?;
 
+        let cancel_waiter = self.context.cancel_waiter();
         loop {
-            let (s, peer_addr) = listener.accept().await?;
+            let (s, peer_addr) = tokio::select! {
+                r = listener.accept() => r?,
+                _ = cancel_waiter.wait() => {
+                    debug!("canceled");
+                    return Ok(());
+                }
+            };
 
             let mut s = match s {
                 Connection::Stream(s) => s,
@@ -368,25 +397,32 @@ impl Server {
                 ServerAddr::DomainName(..) => unreachable!(),
             };
 
-            tokio::spawn(async move {
-                tracing::info!("tuic shadow connection from {}", peer_addr);
+            let span = debug_span!("incoming", peer.addr = peer_addr.to_string());
+            tokio::spawn(
+                async move {
+                    debug!("established");
 
-                tokio::time::timeout(tokio::time::Duration::from_secs(1), async move {
-                    let mut buffer = BytesMut::with_capacity(10);
-                    loop {
-                        let n = s.read_buf(&mut buffer).await?;
-                        if n == 0 {
-                            tracing::info!("tuic shadow connection from {} closed", peer_addr);
-                            // connection was closed
-                            return io::Result::Ok(());
+                    match tokio::time::timeout(tokio::time::Duration::from_secs(1), async move {
+                        let mut buffer = BytesMut::with_capacity(10);
+                        loop {
+                            let n = s.read_buf(&mut buffer).await?;
+                            if n == 0 {
+                                return io::Result::Ok(());
+                            }
+                            tracing::trace!("recv {} bytes", n);
                         }
-                        tracing::info!("tuic shadow connection from {} ignore {} data", peer_addr, n);
-                    }
-                })
-                .await
+                    })
+                    .await
+                    {
+                        Ok(Ok(())) => debug!("closed by peer"),
+                        Ok(Err(err)) => debug!(error = ?err, "closed for error"),
+                        Err(err) => debug!(error = ?err, "closed for timeout"),
+                    };
 
-                // read 20 bytes at a time from stream echoing back to stream
-            });
+                    // read 20 bytes at a time from stream echoing back to stream
+                }
+                .instrument(span),
+            );
         }
     }
 }

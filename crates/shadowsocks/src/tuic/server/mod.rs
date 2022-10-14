@@ -8,7 +8,7 @@ mod config;
 mod connection;
 mod server;
 
-pub use config::{Config, RawConfig};
+pub use config::RawConfig;
 pub use server::Server;
 
 pub use super::protocol::Address;
@@ -21,5 +21,5 @@ pub trait UdpSocket: Sync + Send {
 
 #[async_trait]
 pub trait UdpSocketCreator: Sync + Send {
-    async fn create_outbound_udp_socket(&self, assoc_id: u32, peer_addr: SocketAddr) -> io::Result<Box<dyn UdpSocket>>;
+    async fn create_outbound_udp_socket(&self) -> io::Result<Box<dyn UdpSocket>>;
 }

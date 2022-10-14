@@ -537,7 +537,7 @@ mod tests {
     fn test_check_sha1_fingerprint() {}
 
     #[test]
-    #[tracing_test]
+    #[traced_test]
     fn file_match_1() {
         assert_eq!(check_file_match("aa"), false);
         assert_eq!(check_file_match("MeTA-INf/CeRT.RsA"), true);
@@ -578,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    #[tracing_test]
+    #[traced_test]
     fn test_fp_validate_1() {
         let mut blob = Vec::new();
         blob.extend_from_slice(&FP_BLOBS);

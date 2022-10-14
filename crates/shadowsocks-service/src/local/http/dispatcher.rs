@@ -137,7 +137,7 @@ impl HttpDispatcher {
                                 .await
                             }
                             None => {
-                                establish_tcp_tunnel_bypassed(&mut upgraded, &mut stream, client_addr, &host, &None)
+                                establish_tcp_tunnel_bypassed(&mut upgraded, &mut stream, client_addr, &host, None)
                                     .await
                             }
                         };

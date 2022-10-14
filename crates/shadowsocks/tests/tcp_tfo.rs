@@ -28,6 +28,7 @@ use tokio::{
     net::TcpStream,
 };
 use tracing::debug;
+use tracing_test::traced_test;
 
 #[tokio::test]
 #[traced_test]

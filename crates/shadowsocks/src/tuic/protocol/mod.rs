@@ -21,7 +21,7 @@ pub const TUIC_PROTOCOL_VERSION: u8 = 0x04;
 /// +-----+------+----------+
 /// ```
 #[non_exhaustive]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Command {
     Response(bool),
     Authenticate { digest: [u8; 32] },
@@ -196,7 +196,7 @@ impl Command {
 /// 0x00: fully-qualified domain name (the first byte indicates the length of the domain name)
 /// 0x01: IPv4 address
 /// 0x02: IPv6 address
-#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd, Debug)]
 pub enum Address {
     DomainAddress(String, u16),
     SocketAddress(SocketAddr),

@@ -40,7 +40,7 @@ async fn establish_client_tcp_redir<'a>(
 ) -> io::Result<()> {
     if balancer.is_empty() {
         let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), addr).await?;
-        return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, addr, &None).await;
+        return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, addr, None).await;
     }
 
     let server = balancer.best_tcp_server();

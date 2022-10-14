@@ -1,175 +1,288 @@
 use bytes::Bytes;
-use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
-use std::io;
+use std::fmt;
+use std::time::Duration;
 use std::{collections::HashMap, io::Error as IoError, net::SocketAddr, sync::Arc};
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tracing::{debug, error, info_span, warn, Instrument, Span};
+
+use crate::{
+    canceler::Canceler,
+    policy::{PacketAction, ServerPolicy},
+    timeout::{TimeoutTicker, TimeoutWaiter},
+};
 
 use super::super::super::protocol::Address;
 use super::super::{UdpSocket, UdpSocketCreator};
 
-#[derive(Clone)]
-pub struct UdpPacketFrom(Arc<AtomicCell<Option<UdpPacketSource>>>);
-
-impl UdpPacketFrom {
-    pub fn new() -> Self {
-        Self(Arc::new(AtomicCell::new(None)))
-    }
-
-    pub fn check(&self) -> Option<UdpPacketSource> {
-        self.0.load()
-    }
-
-    pub fn uni_stream(&self) -> bool {
-        self.0
-            .compare_exchange(None, Some(UdpPacketSource::UniStream))
-            .map_or_else(|from| from == Some(UdpPacketSource::UniStream), |_| true)
-    }
-
-    pub fn datagram(&self) -> bool {
-        self.0
-            .compare_exchange(None, Some(UdpPacketSource::Datagram))
-            .map_or_else(|from| from == Some(UdpPacketSource::Datagram), |_| true)
-    }
-}
-
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub enum UdpPacketSource {
-    UniStream,
-    Datagram,
+pub enum UdpSessionCloseReason {
+    ClientClose,
+    Shutdown,
+    ChannelBroken,
+    OutgoingSockError,
+    IdleTimeout,
 }
 
-pub type SendPacketSender = Sender<(Bytes, Address)>;
-pub type SendPacketReceiver = Receiver<(Bytes, Address)>;
+impl fmt::Debug for UdpSessionCloseReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ClientClose => write!(f, "client-close"),
+            Self::Shutdown => write!(f, "shutdown"),
+            Self::ChannelBroken => write!(f, "channel-broken"),
+            Self::OutgoingSockError => write!(f, "outgoing-sock-error"),
+            Self::IdleTimeout => write!(f, "idle-timeout"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum UdpSessionSource {
+    Datagram,
+    UniStream,
+}
+
+impl fmt::Debug for UdpSessionSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Datagram => write!(f, "datagram"),
+            Self::UniStream => write!(f, "uni-stream"),
+        }
+    }
+}
+
+pub type SessionCloseReceiver = Receiver<(u32, UdpSessionCloseReason)>;
+pub type SessionCloseSender = Sender<(u32, UdpSessionCloseReason)>;
+
+pub type SendPacketSender = Sender<(Bytes, Address, Span)>;
+pub type SendPacketReceiver = Receiver<(Bytes, Address, Span)>;
 pub type RecvPacketSender = Sender<(u32, Bytes, Address)>;
 pub type RecvPacketReceiver = Receiver<(u32, Bytes, Address)>;
 
 pub struct UdpSessionMap {
     map: Mutex<HashMap<u32, UdpSession>>,
     recv_pkt_tx_for_clone: RecvPacketSender,
+    session_close_tx: SessionCloseSender,
     udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
+    idle_timeout: Duration,
 }
 
 impl UdpSessionMap {
-    pub fn new(udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>) -> (Self, RecvPacketReceiver) {
+    pub fn new(
+        idle_timeout: Duration,
+        udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
+    ) -> (Self, RecvPacketReceiver, SessionCloseReceiver) {
+        let (session_close_tx, session_close_rx) = mpsc::channel(1);
         let (recv_pkt_tx, recv_pkt_rx) = mpsc::channel(1);
 
         (
             Self {
                 map: Mutex::new(HashMap::new()),
                 recv_pkt_tx_for_clone: recv_pkt_tx,
+                session_close_tx,
                 udp_socket_creator,
+                idle_timeout,
             },
             recv_pkt_rx,
+            session_close_rx,
         )
     }
 
     #[allow(clippy::await_holding_lock)]
-    pub async fn send(&self, assoc_id: u32, pkt: Bytes, addr: Address, src_addr: SocketAddr) -> Result<(), IoError> {
-        let mut send_pkt_tx = self.map.lock().get(&assoc_id).map(|s| s.0.clone());
+    pub async fn send_to_outgoing(
+        &self,
+        assoc_id: u32,
+        source: UdpSessionSource,
+        pkt: Bytes,
+        addr: Address,
+        src_addr: SocketAddr,
+        server_policy: Arc<Box<dyn ServerPolicy>>,
+    ) -> Result<usize, IoError> {
+        let mut send_pkt_tx = self
+            .map
+            .lock()
+            .get(&assoc_id)
+            .map(|s| (s.packet_sender.clone(), s.span.clone()));
 
         if send_pkt_tx.is_none() {
-            tracing::info!("[{src_addr}] [associate] [{assoc_id}]");
-
             let assoc = UdpSession::new(
                 assoc_id,
+                source,
                 self.recv_pkt_tx_for_clone.clone(),
-                src_addr,
+                self.session_close_tx.clone(),
                 &self.udp_socket_creator,
+                self.idle_timeout.clone(),
             )
+            .instrument(info_span!("udp-session", id = assoc_id, source = format!("{:?}", source)).or_current())
             .await?;
 
-            send_pkt_tx = Some(assoc.0.clone());
+            send_pkt_tx = Some((assoc.packet_sender.clone(), assoc.span.clone()));
 
             let mut map = self.map.lock();
             map.insert(assoc_id, assoc);
-        };
+        }
 
-        match send_pkt_tx.unwrap().send((pkt, addr)).await {
-            Ok(()) => {}
-            Err(_err) => return Err(io::Error::new(io::ErrorKind::Other, "tuic udp send channel closed")),
-        };
+        let (sender, span) = send_pkt_tx.unwrap();
+        async move {
+            let addr_for_log = addr.to_string();
+            let len = pkt.len();
 
-        Ok(())
+            let addr2 = match addr.clone() {
+                Address::DomainAddress(h, p) => crate::relay::Address::DomainNameAddress(h, p),
+                Address::SocketAddress(s) => crate::relay::Address::SocketAddress(s),
+            };
+
+            match server_policy.packet_check(&src_addr, &addr2).await? {
+                PacketAction::ClientBlocked => {
+                    warn!(target = addr_for_log, "client blocked by ACL rules");
+                    return Ok(0);
+                }
+                PacketAction::OutboundBlocked => {
+                    warn!(target = addr_for_log, "outbound blocked by ACL rules");
+                    return Ok(0);
+                }
+                PacketAction::Remote => match sender.send((pkt, addr, Span::current())).await {
+                    Ok(()) => Ok(len),
+                    Err(err) => {
+                        debug!(target = addr_for_log, error = ?err, "send channel closed");
+                        self.dissociate(assoc_id, UdpSessionCloseReason::ChannelBroken).await;
+                        Ok(0)
+                    }
+                },
+            }
+        }
+        .instrument(span)
+        .await
     }
 
-    pub fn dissociate(&self, assoc_id: u32, src_addr: SocketAddr) {
-        tracing::info!("[{src_addr}] [dissociate] [{assoc_id}]");
-        self.map.lock().remove(&assoc_id);
+    pub fn find_session(&self, assoc_id: u32) -> Option<(UdpSessionSource, Span)> {
+        self.map
+            .lock()
+            .get(&assoc_id)
+            .map(|s| (s.source.clone(), s.span.clone()))
+    }
+
+    pub fn session_ids(&self) -> Vec<u32> {
+        self.map.lock().keys().copied().collect()
+    }
+
+    pub async fn dissociate(&self, assoc_id: u32, reason: UdpSessionCloseReason) -> bool {
+        let session = self.map.lock().remove(&assoc_id);
+        if let Some(session) = session {
+            session.close(reason).await;
+            return true;
+        } else {
+            return false;
+        }
     }
 }
 
-struct UdpSession(SendPacketSender);
+struct UdpSession {
+    source: UdpSessionSource,
+    packet_sender: SendPacketSender,
+    span: Span,
+    canceler: Canceler,
+    task: tokio::task::JoinHandle<()>,
+}
 
 impl UdpSession {
     async fn new(
         assoc_id: u32,
+        source: UdpSessionSource,
         recv_pkt_tx: RecvPacketSender,
-        src_addr: SocketAddr,
+        session_close_tx: SessionCloseSender,
         udp_socket_creator: &Box<dyn UdpSocketCreator>,
+        idle_timeout: Duration,
     ) -> Result<Self, IoError> {
-        let socket = Arc::new(
-            udp_socket_creator
-                .create_outbound_udp_socket(assoc_id, src_addr.clone())
-                .await?,
-        );
+        let socket = Arc::new(udp_socket_creator.create_outbound_udp_socket().await?);
         let (send_pkt_tx, send_pkt_rx) = mpsc::channel(1);
+        let canceler = Canceler::new();
 
-        tokio::spawn(async move {
-            match tokio::select!(
-                res = Self::listen_send_packet(socket.clone(), assoc_id, src_addr.clone(), send_pkt_rx) => res,
-                res = Self::listen_receive_packet(socket, assoc_id, recv_pkt_tx) => res,
-            ) {
-                Ok(()) => (),
-                Err(err) => tracing::warn!("[{src_addr}] [udp-session] [{assoc_id}] {err}"),
+        let waiter = canceler.waiter();
+        let task = tokio::spawn(
+            async move {
+                let timeout_waiter = TimeoutWaiter::new(idle_timeout);
+                let timeout_ticker_1 = timeout_waiter.ticker();
+                let timeout_ticker_2 = timeout_waiter.ticker();
+                tokio::pin!(timeout_waiter);
+                let close_reason = tokio::select!(
+                    r = Self::listen_send_packet(socket.clone(), send_pkt_rx, timeout_ticker_1) => r,
+                    r = Self::listen_receive_packet(socket, assoc_id, recv_pkt_tx, timeout_ticker_2) => r,
+                    _ = &mut timeout_waiter => UdpSessionCloseReason::IdleTimeout,
+                    _ = waiter.wait() => { return; }
+                );
+
+                if let Err(err) = session_close_tx.send((assoc_id, close_reason)).await {
+                    error!(error = ?err, reason = ?close_reason, "notify close session fail");
+                }
             }
-        });
+            .in_current_span(),
+        );
 
-        Ok(Self(send_pkt_tx))
+        debug!("created");
+        Ok(Self {
+            source,
+            packet_sender: send_pkt_tx,
+            span: Span::current(),
+            canceler,
+            task,
+        })
+    }
+
+    async fn close(self, reason: UdpSessionCloseReason) {
+        let UdpSession {
+            span, task, canceler, ..
+        } = self;
+
+        async move {
+            canceler.cancel();
+            let _ = task.await;
+            debug!(reason = ?reason, "closed");
+        }
+        .instrument(span)
+        .await
     }
 
     async fn listen_send_packet(
         socket: Arc<Box<dyn UdpSocket>>,
-        assoc_id: u32,
-        src_addr: SocketAddr,
         mut send_pkt_rx: SendPacketReceiver,
-    ) -> Result<(), IoError> {
-        while let Some((pkt, addr)) = send_pkt_rx.recv().await {
-            match socket.send_to(&pkt, addr).await {
-                Ok(()) => {}
-                Err(err) => {
-                    tracing::warn!("[{src_addr}] [udp-session] [{assoc_id}] [] --> {err}")
+        timeout_ticker: TimeoutTicker,
+    ) -> UdpSessionCloseReason {
+        while let Some((pkt, addr, span)) = send_pkt_rx.recv().await {
+            match socket.send_to(&pkt, addr).instrument(span).await {
+                Ok(()) => timeout_ticker.tick(),
+                Err(_err) => {
+                    return UdpSessionCloseReason::OutgoingSockError;
                 }
             }
-
-            // match addr {
-            //     Address::DomainAddress(hostname, port) => {
-            //         socket.send_to(&pkt, (hostname, port)).await?;
-            //     }
-            //     Address::SocketAddress(addr) => {
-            //         socket.send_to(&pkt, addr).await?;
-            //     }
-            // }
         }
 
-        Ok(())
+        return UdpSessionCloseReason::ChannelBroken;
     }
 
     async fn listen_receive_packet(
         socket: Arc<Box<dyn UdpSocket>>,
         assoc_id: u32,
         recv_pkt_tx: RecvPacketSender,
-    ) -> Result<(), IoError> {
+        timeout_ticker: TimeoutTicker,
+    ) -> UdpSessionCloseReason {
         loop {
-            let (pkt, addr) = socket.recv_from().await?;
+            let (pkt, addr) = match socket.recv_from().await {
+                Ok(r) => {
+                    timeout_ticker.tick();
+                    r
+                }
+                Err(err) => {
+                    error!(error = ?err, "outgoing socket recv error");
+                    return UdpSessionCloseReason::OutgoingSockError;
+                }
+            };
 
             match recv_pkt_tx.send((assoc_id, pkt, Address::SocketAddress(addr))).await {
                 Ok(()) => {}
-                Err(_err) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("tuic udp send back channel closed"),
-                    ))
+                Err(err) => {
+                    error!(error = ?err, "tuic udp send back channel closed");
+                    return UdpSessionCloseReason::ChannelBroken;
                 }
             };
         }

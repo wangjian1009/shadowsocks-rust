@@ -3,6 +3,7 @@ use std::{io, net::SocketAddr, sync::Arc};
 use byte_string::ByteStr;
 use tokio::{net::UdpSocket, sync::Barrier};
 use tracing::info;
+use tracing_test::traced_test;
 
 use shadowsocks::{
     config::{ServerConfig, ServerProtocol, ServerType, ShadowsocksConfig},

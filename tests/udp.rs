@@ -3,20 +3,22 @@
 
 use std::net::SocketAddr;
 
-use log::debug;
 use tokio::time::{self, Duration};
+use tracing::debug;
 
 use shadowsocks_service::{
     config::{Config, ConfigType, LocalConfig, ProtocolType},
     local::socks::client::socks5::Socks5UdpClient,
     run_local, run_server,
     shadowsocks::{
+        canceler::CancelWaiter,
         config::{Mode, ServerProtocol, ShadowsocksConfig},
         crypto::CipherKind,
         relay::socks5::Address,
         ServerConfig,
     },
 };
+use tracing_test::traced_test;
 
 const SERVER_ADDR: &str = "127.0.0.1:8093";
 const LOCAL_ADDR: &str = "127.0.0.1:8291";
@@ -55,7 +57,7 @@ fn get_client_addr() -> SocketAddr {
 }
 
 fn start_server() {
-    tokio::spawn(run_server(get_svr_config()));
+    tokio::spawn(run_server(CancelWaiter::none(), get_svr_config()));
 }
 
 fn start_local() {
@@ -82,12 +84,8 @@ fn start_udp_echo_server() {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn udp_relay() {
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Trace)
-        .is_test(true)
-        .try_init();
-
     let remote_addr = Address::SocketAddress(UDP_ECHO_SERVER_ADDR.parse().unwrap());
 
     start_server();

@@ -1,5 +1,5 @@
 use std::{io, net::SocketAddr};
-use tracing::error;
+use tracing::{error, info_span, trace, warn, Instrument};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -11,28 +11,24 @@ use trust_dns_resolver::proto::{
     rr::{RData, Record, RecordType},
 };
 
-use shadowsocks::{dns_resolver::DnsResolver, relay::socks5::Address};
+use shadowsocks::{dns_resolver::DnsResolver, timeout::TimeoutTicker};
 
 pub async fn run_dns_tcp_stream<'a, I: AsyncRead + Unpin, O: AsyncWrite + Unpin>(
     dns_resolver: &'a DnsResolver,
-    peer_addr: &'a SocketAddr,
-    target_addr: &'a Address,
     input: &'a mut I,
     output: &'a mut O,
+    timeout_ticker: Option<TimeoutTicker>,
 ) -> io::Result<()> {
     let mut length_buf = [0u8; 2];
     let mut message_buf = BytesMut::new();
     loop {
         match input.read_exact(&mut length_buf).await {
-            Ok(..) => {}
-            Err(ref err) if err.kind() == io::ErrorKind::UnexpectedEof => {
-                break;
+            Ok(..) => {
+                timeout_ticker.as_ref().map(|o| o.tick());
             }
+            Err(ref err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(err) => {
-                error!(
-                    "mock dns {}: {}: udp tcp read length failed, error: {}",
-                    target_addr, peer_addr, err
-                );
+                error!(error = ?err, "read length failed");
                 return Err(err);
             }
         }
@@ -48,10 +44,7 @@ pub async fn run_dns_tcp_stream<'a, I: AsyncRead + Unpin, O: AsyncWrite + Unpin>
         match input.read_exact(&mut message_buf).await {
             Ok(..) => {}
             Err(err) => {
-                error!(
-                    "mock dns {}: {}: dns tcp read message failed, error: {}",
-                    target_addr, peer_addr, err
-                );
+                error!(error = ?err, "read message failed");
                 return Err(err);
             }
         }
@@ -59,15 +52,12 @@ pub async fn run_dns_tcp_stream<'a, I: AsyncRead + Unpin, O: AsyncWrite + Unpin>
         let request = match Message::from_vec(&message_buf) {
             Ok(m) => m,
             Err(err) => {
-                error!(
-                    "mock dns {}: {}: dns tcp parse message failed, error: {}",
-                    target_addr, peer_addr, err
-                );
+                error!(error = ?err, "parse message failed");
                 return Err(err.into());
             }
         };
 
-        let response = resolve(dns_resolver, peer_addr, target_addr, request).await;
+        let response = resolve(dns_resolver, request).await;
 
         let mut buf = response.to_vec()?;
         let length = buf.len();
@@ -75,35 +65,31 @@ pub async fn run_dns_tcp_stream<'a, I: AsyncRead + Unpin, O: AsyncWrite + Unpin>
         buf.copy_within(..length, 2);
         BigEndian::write_u16(&mut buf[..2], length as u16);
 
-        output.write_all(&buf).await?;
+        match output.write_all(&buf).await {
+            Ok(..) => {}
+            Err(err) => {
+                error!(error = ?err, "write response error");
+                return Err(err);
+            }
+        }
     }
-
-    tracing::trace!("mock dns {}: {}: dns tcp connection closed", target_addr, peer_addr);
 
     Ok(())
 }
 
-pub async fn process_dns_udp_request(
-    dns_resolver: &DnsResolver,
-    peer_addr: &SocketAddr,
-    target_addr: &Address,
-    input: &[u8],
-) -> io::Result<Vec<u8>> {
+pub async fn process_dns_udp_request(dns_resolver: &DnsResolver, input: &[u8]) -> io::Result<Vec<u8>> {
     let request = match Message::from_vec(input) {
         Ok(m) => m,
         Err(err) => {
-            error!(
-                "mock dns {}: {}: dns udp parse message failed, error: {}",
-                target_addr, peer_addr, err
-            );
+            error!(error = ?err, "parse message failed");
             return Err(err.into());
         }
     };
 
-    let response = resolve(dns_resolver, peer_addr, target_addr, request).await;
+    let response = resolve(dns_resolver, request).await;
     match response.to_vec() {
         Ok(r) => {
-            tracing::trace!("mock dns {}: {}: dns udp process complete", target_addr, peer_addr);
+            tracing::trace!("process complete");
             Ok(r)
         }
         Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
@@ -112,12 +98,7 @@ pub async fn process_dns_udp_request(
 
 const DEFAULT_TTL: u32 = 300u32;
 
-async fn resolve(
-    dns_resolver: &DnsResolver,
-    peer_addr: &SocketAddr,
-    target_addr: &Address,
-    request: Message,
-) -> Message {
+async fn resolve(dns_resolver: &DnsResolver, request: Message) -> Message {
     let mut response = Message::new();
 
     response
@@ -137,47 +118,51 @@ async fn resolve(
         response.set_response_code(ResponseCode::NotImp);
     } else if request.query_count() > 0 {
         for query in request.queries().iter() {
-            tracing::trace!(
-                "mock dns {}: {}: DNS lookup {:?} {}",
-                target_addr,
-                peer_addr,
-                query.query_type(),
-                query.name()
-            );
-
             response.add_query(query.clone());
 
-            match dns_resolver.resolve(query.name().to_string().as_str(), 0).await {
-                Ok(response_record_it) => {
-                    for addr in response_record_it {
-                        let record = match addr {
-                            SocketAddr::V4(addr) => {
-                                if query.query_type() != RecordType::A {
-                                    continue;
+            let span = info_span!("dns.query", query = query.to_string());
+            response = async move {
+                match dns_resolver.resolve(query.name().to_string().as_str(), 0).await {
+                    Ok(response_record_it) => {
+                        let mut count = 0;
+                        for addr in response_record_it {
+                            let record = match addr {
+                                SocketAddr::V4(addr) => {
+                                    if query.query_type() != RecordType::A {
+                                        continue;
+                                    }
+                                    let mut record = Record::with(query.name().clone(), RecordType::A, DEFAULT_TTL);
+                                    record.set_data(Some(RData::A(addr.ip().clone())));
+                                    record
                                 }
-                                let mut record = Record::with(query.name().clone(), RecordType::A, DEFAULT_TTL);
-                                record.set_data(Some(RData::A(addr.ip().clone())));
-                                record
-                            }
-                            SocketAddr::V6(addr) => {
-                                if query.query_type() != RecordType::AAAA {
-                                    continue;
+                                SocketAddr::V6(addr) => {
+                                    if query.query_type() != RecordType::AAAA {
+                                        continue;
+                                    }
+                                    let mut record = Record::with(query.name().clone(), RecordType::AAAA, DEFAULT_TTL);
+                                    record.set_data(Some(RData::AAAA(addr.ip().clone())));
+                                    record
                                 }
-                                let mut record = Record::with(query.name().clone(), RecordType::AAAA, DEFAULT_TTL);
-                                record.set_data(Some(RData::AAAA(addr.ip().clone())));
-                                record
-                            }
-                        };
+                            };
 
-                        tracing::trace!("mock dns {}: {}:     add response {}", target_addr, peer_addr, &record);
-                        response.add_answer(record);
+                            count = count + 1;
+                            trace!(answer = ?record.data().unwrap());
+                            response.add_answer(record);
+                        }
+
+                        if count == 0 {
+                            trace!("no answer(filted)");
+                        }
+                    }
+                    Err(err) => {
+                        warn!(error = ?err, "dns resolve error");
+                        response.set_response_code(ResponseCode::ServFail);
                     }
                 }
-                Err(err) => {
-                    tracing::error!("mock dns {}: {}: dns resolve error {}", target_addr, peer_addr, err);
-                    response.set_response_code(ResponseCode::ServFail);
-                }
+                response
             }
+            .instrument(span)
+            .await;
         }
     }
 
@@ -242,13 +227,10 @@ mod test {
         request_buf.copy_within(..length, 2);
         BigEndian::write_u16(&mut request_buf[..2], length as u16);
 
-        let peer_addr = SocketAddr::from_str("1.1.1.1:0").unwrap();
-        let target_address = Address::from_str("1.1.1.1.0").unwrap();
-
         let mut output_buf = Vec::<u8>::new();
         let mut input = BufReader::new(&request_buf[..]);
         let mut output = BufWriter::new(&mut output_buf);
-        run_dns_tcp_stream(resolver, &peer_addr, &target_address, &mut input, &mut output)
+        run_dns_tcp_stream(resolver, &mut input, &mut output, None)
             .await
             .unwrap();
         output.flush().await?;
@@ -297,10 +279,7 @@ mod test {
     async fn udp_process_query(resolver: &DnsResolver, request: &Message) -> io::Result<Message> {
         let request_buf = request.to_vec()?;
 
-        let peer_addr = SocketAddr::from_str("1.1.1.1:0").unwrap();
-        let target_address = Address::from_str("1.1.1.1.0").unwrap();
-
-        let output_buf = process_dns_udp_request(resolver, &peer_addr, &target_address, &request_buf).await?;
+        let output_buf = process_dns_udp_request(resolver, &request_buf).await?;
 
         match Message::from_vec(&output_buf[..]) {
             Ok(response) => Ok(response),

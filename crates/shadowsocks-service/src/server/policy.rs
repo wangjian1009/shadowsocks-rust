@@ -8,8 +8,14 @@ use tokio::{
     time::Duration,
 };
 
-use shadowsocks::net::{FlowStat, TcpStream};
-use shadowsocks::{policy, relay::Address};
+use shadowsocks::{
+    net::{FlowStat, TcpStream},
+    policy,
+    relay::Address,
+    timeout::TimeoutTicker,
+};
+
+use tracing::{error, info_span, Instrument};
 
 use crate::server::dns::run_dns_tcp_stream;
 
@@ -30,12 +36,15 @@ impl Drop for InConnectionGuard {
     fn drop(&mut self) {
         let connection_ctx = self.connection_ctx;
         let context = self.context.clone();
-        tokio::spawn(async move {
-            context
-                .connection_stat_ref()
-                .remove_in_connection(&connection_ctx.0, connection_ctx.1)
-                .await;
-        });
+        tokio::spawn(
+            async move {
+                context
+                    .connection_stat_ref()
+                    .remove_in_connection(&connection_ctx.0, connection_ctx.1)
+                    .await;
+            }
+            .in_current_span(),
+        );
     }
 }
 
@@ -53,8 +62,6 @@ cfg_if! {
         /// LocalProcessor
         pub struct LocalProcessor {
             context: Arc<ServiceContext>,
-            peer_addr: SocketAddr,
-            target_addr: Address,
             protocol: ServerMockProtocol,
             _remote_guard: InConnectionGuard,
         }
@@ -65,18 +72,19 @@ cfg_if! {
                 &self,
                 mut r: Box<dyn AsyncRead + Send + Unpin>,
                 mut w: Box<dyn AsyncWrite + Send + Unpin>,
+                timeout_ticker: Option<TimeoutTicker>,
             ) -> io::Result<()>
             {
                 match self.protocol {
                     ServerMockProtocol::DNS => {
                         run_dns_tcp_stream(
                             self.context.dns_resolver(),
-                            &self.peer_addr,
-                            &self.target_addr,
                             &mut r,
                             &mut w,
+                            timeout_ticker,
                         )
-                            .await?;
+                        .instrument(info_span!("dns"))
+                        .await?;
                         Ok(())
                     }
                 }
@@ -137,13 +145,13 @@ impl policy::ServerPolicy for ServerPolicy {
             Ok((c, b)) => (c.id, b),
             Err(_err) => {
                 match self.context.limit_connection_close_delay() {
-                    None => tracing::error!(
+                    None => error!(
                         "tcp server: from {} limit {} reached, close immediately",
                         src_addr,
                         self.context.limit_connection_per_ip().unwrap(),
                     ),
                     Some(delay) => {
-                        tracing::error!(
+                        error!(
                             "tcp server: from {} limit {} reached, close delay {:?}",
                             src_addr,
                             self.context.limit_connection_per_ip().unwrap(),
@@ -181,8 +189,6 @@ impl policy::ServerPolicy for ServerPolicy {
                     return Ok(policy::StreamAction::Local {
                         processor: Box::new(LocalProcessor {
                             context: self.context.clone(),
-                            peer_addr: src_addr.clone(),
-                            target_addr: target_addr.clone(),
                             protocol: protocol.clone(),
                             _remote_guard: remote_guard,
                         })

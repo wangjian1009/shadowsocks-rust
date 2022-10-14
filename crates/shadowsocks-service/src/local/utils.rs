@@ -1,6 +1,6 @@
 //! Shadowsocks Local Utilities
 
-use std::{io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{io, net::SocketAddr, time::Duration};
 
 use shadowsocks::{
     config::{ServerConfig, ServerProtocol},
@@ -8,11 +8,9 @@ use shadowsocks::{
         socks5::Address,
         tcprelay::{utils::copy_encrypted_bidirectional, utils_copy::copy_bidirectional},
     },
-    timeout::Sleep,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    sync::Mutex,
     time,
 };
 use tracing::{debug, trace};
@@ -50,7 +48,7 @@ where
             svr_cfg.addr(),
         );
     } else {
-        return establish_tcp_tunnel_bypassed(&mut plain, shadow, peer_addr, target_addr, &None).await;
+        return establish_tcp_tunnel_bypassed(&mut plain, shadow, peer_addr, target_addr, None).await;
     }
 
     #[cfg(feature = "sniffer")]
@@ -121,16 +119,17 @@ where
         }
     }
 
-    match match svr_cfg.protocol() {
-        ServerProtocol::SS(ss_cfg) => copy_encrypted_bidirectional(ss_cfg.method(), shadow, &mut plain, &None).await,
+    let (wn, rn, r) = match svr_cfg.protocol() {
+        ServerProtocol::SS(ss_cfg) => copy_encrypted_bidirectional(ss_cfg.method(), shadow, &mut plain, None).await,
         #[cfg(feature = "trojan")]
-        ServerProtocol::Trojan(_cfg) => copy_bidirectional(shadow, &mut plain, &None).await,
+        ServerProtocol::Trojan(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
         #[cfg(feature = "vless")]
-        ServerProtocol::Vless(_cfg) => copy_bidirectional(shadow, &mut plain, &None).await,
+        ServerProtocol::Vless(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
         #[cfg(feature = "tuic")]
-        ServerProtocol::Tuic(_cfg) => copy_bidirectional(shadow, &mut plain, &None).await,
-    } {
-        Ok((wn, rn)) => {
+        ServerProtocol::Tuic(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
+    };
+    match r {
+        Ok(()) => {
             trace!(
                 "tcp tunnel {} <-> {} (proxied) closed, L2R {} bytes, R2L {} bytes",
                 peer_addr,
@@ -157,7 +156,7 @@ pub(crate) async fn establish_tcp_tunnel_bypassed<P, S>(
     shadow: &mut S,
     peer_addr: SocketAddr,
     target_addr: &Address,
-    idle_timeout: &Option<Arc<Mutex<Sleep>>>,
+    idle_timeout: Option<Duration>,
 ) -> io::Result<()>
 where
     P: AsyncRead + AsyncWrite + Unpin,
@@ -165,8 +164,9 @@ where
 {
     debug!("established tcp tunnel {} <-> {} bypassed", peer_addr, target_addr);
 
-    match copy_bidirectional(plain, shadow, idle_timeout).await {
-        Ok((rn, wn)) => {
+    let (rn, wn, r) = copy_bidirectional(plain, shadow, idle_timeout).await;
+    match r {
+        Ok(()) => {
             trace!(
                 "tcp tunnel {} <-> {} (bypassed) closed, L2R {} bytes, R2L {} bytes",
                 peer_addr,

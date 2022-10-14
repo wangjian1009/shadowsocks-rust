@@ -11,9 +11,12 @@ use std::{
 
 use cfg_if::cfg_if;
 use futures::{future, ready};
-use shadowsocks::net::{AcceptOpts, ConnectOpts};
+use shadowsocks::{
+    canceler::CancelWaiter,
+    net::{AcceptOpts, ConnectOpts},
+};
 use tokio::task::JoinHandle;
-use tracing::trace;
+use tracing::{info, info_span, Instrument};
 
 use crate::{
     config::{Config, ConfigType},
@@ -46,11 +49,9 @@ cfg_if! {
 pub(crate) const SERVER_DEFAULT_KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Starts a shadowsocks server
-pub async fn run(config: Config) -> io::Result<()> {
+pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> {
     assert_eq!(config.config_type, ConfigType::Server);
     assert!(!config.server.is_empty());
-
-    trace!("{:?}", config);
 
     // Warning for Stream Ciphers
     #[cfg(feature = "stream-cipher")]
@@ -117,7 +118,7 @@ pub async fn run(config: Config) -> io::Result<()> {
     let acl = config.acl.map(Arc::new);
 
     for svr_cfg in config.server {
-        let mut server = Server::new(svr_cfg);
+        let mut server = Server::new(cancel_waiter.clone(), svr_cfg);
 
         if let Some(ref r) = resolver {
             server.set_dns_resolver(r.clone());
@@ -185,30 +186,45 @@ pub async fn run(config: Config) -> io::Result<()> {
     #[cfg(feature = "server-maintain")]
     if maintain_svr.is_none() && servers.len() == 1 {
         let server = servers.pop().unwrap();
-        return server.run().await;
+        let span = info_span!("svr", port = server.config().addr().port());
+        return server.run().instrument(span.or_current()).await;
     }
 
-    #[cfg(not(efeature = "server-maintain"))]
+    #[cfg(not(feature = "server-maintain"))]
     if servers.len() == 1 {
         let server = servers.pop().unwrap();
-        return server.run().await;
+        let span = info_span!("svr", port = server.config().addr().port());
+        return server.run().instrument(span.or_current()).await;
     }
 
     let mut vfut = Vec::with_capacity(servers.len());
 
     for server in servers {
-        vfut.push(ServerHandle(tokio::spawn(async move { server.run().await })));
+        let span = info_span!("svr", port = server.config().addr().port());
+        vfut.push(ServerHandle(tokio::spawn(server.run().instrument(span.or_current()))));
     }
 
     #[cfg(feature = "server-maintain")]
     if let Some(maintain_svr) = maintain_svr {
-        vfut.push(ServerHandle(tokio::spawn(async move {
-            maintain_svr.run(config.maintain_addr.unwrap()).await
-        })));
+        let span = info_span!("maintain");
+        vfut.push(ServerHandle(tokio::spawn(
+            maintain_svr
+                .run(cancel_waiter.clone(), config.maintain_addr.unwrap())
+                .instrument(span.or_current()),
+        )));
     }
 
-    let (res, ..) = future::select_all(vfut).await;
-    res
+    loop {
+        let (res, _, vfut_left) = future::select_all(vfut).await;
+        let _ = res?;
+
+        if vfut_left.is_empty() {
+            return Ok(());
+        } else {
+            info!("one server exited success, left {}", vfut_left.len());
+            vfut = vfut_left;
+        }
+    }
 }
 
 struct ServerHandle(JoinHandle<io::Result<()>>);

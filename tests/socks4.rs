@@ -15,6 +15,7 @@ use shadowsocks_service::{
     local::socks::client::Socks4TcpClient,
     run_local, run_server,
     shadowsocks::{
+        canceler::CancelWaiter,
         config::{ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::CipherKind,
     },
@@ -61,7 +62,7 @@ impl Socks4TestServer {
 
     pub async fn run(&self) {
         let svr_cfg = self.svr_config.clone();
-        tokio::spawn(run_server(svr_cfg));
+        tokio::spawn(run_server(CancelWaiter::none(), svr_cfg));
 
         let client_cfg = self.cli_config.clone();
         tokio::spawn(run_local(client_cfg));
@@ -71,9 +72,8 @@ impl Socks4TestServer {
 }
 
 #[tokio::test]
+#[tracing_test::traced_test]
 async fn socks4_relay_connect() {
-    let _ = env_logger::try_init();
-
     const SERVER_ADDR: &str = "127.0.0.1:7100";
     const LOCAL_ADDR: &str = "127.0.0.1:7200";
 

@@ -462,7 +462,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
             context.set_fake_mode(crate::local::context::FakeMode::ParamError);
         }
 
-        tokio::time::sleep(Duration::MAX).await;
+        futures::future::pending::<()>().await;
         panic!("check completed");
     })));
 

@@ -1,4 +1,4 @@
-use std::{io, str::FromStr};
+use std::{fmt, io, str::FromStr};
 
 pub mod client;
 mod protocol;
@@ -9,6 +9,16 @@ pub enum CongestionController {
     Cubic,
     NewReno,
     Bbr,
+}
+
+impl fmt::Display for CongestionController {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cubic => write!(f, "cubic"),
+            Self::NewReno => write!(f, "new_reno"),
+            Self::Bbr => write!(f, "bbr"),
+        }
+    }
 }
 
 impl FromStr for CongestionController {
