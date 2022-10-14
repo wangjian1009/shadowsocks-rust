@@ -49,6 +49,10 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
         false
     };
     let filter_fn = filter_fn(move |metadata| {
+        if metadata.target().starts_with("quinn") {
+            return metadata.level() <= &LevelFilter::INFO;
+        }
+
         if is_self_module(metadata.target()) {
             metadata.level() <= &level
         } else {
