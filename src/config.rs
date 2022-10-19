@@ -177,41 +177,39 @@ impl Config {
     pub fn set_options(&mut self, matches: &ArgMatches) {
         #[cfg(feature = "logging")]
         {
-            let debug_level = matches.occurrences_of("VERBOSE");
+            let debug_level = matches.get_count("VERBOSE");
             if debug_level > 0 {
                 self.log.level = debug_level as u32;
             }
 
-            if matches.is_present("LOG_WITHOUT_TIME") {
+            if matches.get_flag("LOG_WITHOUT_TIME") {
                 self.log.format.without_time = true;
             }
 
             #[cfg(feature = "logging-file")]
-            if let Some(log_template) = matches.value_of("LOG_TEMPLATE") {
+            if let Some(log_template) = matches.get_one::<String>("LOG_TEMPLATE") {
                 self.log.log_template = Some(log_template.into());
             }
 
             #[cfg(feature = "logging-jaeger")]
-            if matches.is_present("LOG_JAEGER_URL") {
-                self.log.log_jaeger_url = Some(matches.value_of_t_or_exit::<url::Url>("LOG_JAEGER_URL"));
+            if let Some(log_jaeger_url) = matches.get_one::<url::Url>("LOG_JAEGER_URL").cloned() {
+                self.log.log_jaeger_url = Some(log_jaeger_url);
             }
 
             #[cfg(feature = "logging-apm")]
-            if matches.is_present("LOG_APM_URL") {
-                self.log.log_apm_url = Some(matches.value_of_t_or_exit::<url::Url>("LOG_APM_URL"));
+            if let Some(log_apm_url) = matches.get_one::<url::Url>("LOG_APM_URL").cloned() {
+                self.log.log_apm_url = Some(log_apm_url);
             }
         }
 
         #[cfg(feature = "multi-threaded")]
-        if matches.is_present("SINGLE_THREADED") {
+        if matches.get_flag("SINGLE_THREADED") {
             self.runtime.mode = RuntimeMode::SingleThread;
         }
 
         #[cfg(feature = "multi-threaded")]
-        match matches.value_of_t::<usize>("WORKER_THREADS") {
-            Ok(worker_count) => self.runtime.worker_count = Some(worker_count),
-            Err(ref err) if err.kind() == clap::ErrorKind::ArgumentNotFound => {}
-            Err(err) => err.exit(),
+        if let Some(worker_count) = matches.get_one::<usize>("WORKER_THREADS") {
+            self.runtime.worker_count = Some(*worker_count);
         }
 
         let _ = matches;

@@ -10,7 +10,7 @@ pub mod monitor;
 pub mod password;
 pub mod service;
 pub mod sys;
-pub mod validator;
+pub mod vparser;
 
 #[cfg(feature = "lib-entry")]
 mod libentry;

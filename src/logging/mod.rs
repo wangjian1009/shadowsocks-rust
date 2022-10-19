@@ -61,6 +61,7 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
     })
     .with_max_level_hint(level);
 
+    #[allow(unused_mut)]
     let mut guard = Guard { need_wait: false };
 
     let subscriber = tracing_subscriber::registry();

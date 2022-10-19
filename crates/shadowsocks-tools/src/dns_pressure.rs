@@ -1,7 +1,7 @@
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 use byteorder::{BigEndian, ByteOrder};
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 use shadowsocks::{
     config::{ServerAddr, ServerType},
     context::Context,
@@ -24,50 +24,43 @@ async fn main() {
         .arg(
             Arg::new("OUTBOUND_BIND_INTERFACE")
                 .long("outbound-bind-interface")
-                .takes_value(true),
+                .action(ArgAction::Set),
         )
         .arg(
             Arg::new("NAMESERVER_ADDR")
                 .long("nameserver-addr")
-                .takes_value(true)
+                .action(ArgAction::Set)
                 .required(true),
         )
         .arg(
             Arg::new("DNS_QUERY_NAME")
                 .long("dns-query-name")
-                .takes_value(true)
+                .action(ArgAction::Set)
                 .required(true),
         )
         .arg(
             Arg::new("TOTAL_CLIENT_COUNT")
                 .long("total-client-count")
-                .takes_value(true),
+                .action(ArgAction::Set),
         )
         .arg(Arg::new("UDP").long("udp").conflicts_with("TCP"))
         .arg(Arg::new("TCP").long("tcp").conflicts_with("UDP"))
-        .arg(Arg::new("TIMEOUT").long("timeout").takes_value(true))
+        .arg(Arg::new("TIMEOUT").long("timeout").action(ArgAction::Set))
         .get_matches();
 
     let mut connect_opts = ConnectOpts::default();
-    if let Some(outbound_bind_interface) = matches.value_of("OUTBOUND_BIND_INTERFACE") {
+    if let Some(outbound_bind_interface) = matches.get_one::<String>("OUTBOUND_BIND_INTERFACE") {
         connect_opts.bind_interface = Some(outbound_bind_interface.to_owned());
     }
 
-    let dns_query_name = matches.value_of_t_or_exit::<String>("DNS_QUERY_NAME");
-    let nameserver_addr = matches.value_of_t_or_exit::<SocketAddr>("NAMESERVER_ADDR");
+    let dns_query_name = matches.get_one::<String>("DNS_QUERY_NAME").unwrap();
+    let nameserver_addr = matches.get_one::<String>("NAMESERVER_ADDR").cloned().unwrap();
 
-    let mut total_client_count = 10;
-    if let Ok(c) = matches.value_of_t::<usize>("TOTAL_CLIENT_COUNT") {
-        total_client_count = c;
-    }
+    let total_client_count = matches.get_one::<usize>("TOTAL_CLIENT_COUNT").cloned().unwrap_or(10);
 
-    let use_udp = matches.is_present("UDP") || !matches.is_present("TCP");
+    let use_udp = matches.get_flag("UDP") || !matches.get_flag("TCP");
 
-    let timeout = match matches.value_of_t::<u64>("TIMEOUT") {
-        Ok(t) => t,
-        Err(..) => 5,
-    };
-    let timeout = Duration::from_secs(timeout);
+    let timeout = Duration::from_secs(matches.get_one::<u64>("TIMEOUT").cloned().unwrap_or(5));
 
     let name = Name::from_utf8(dns_query_name).expect("name");
     let query = Query::query(name, RecordType::A);
@@ -85,10 +78,9 @@ async fn main() {
         let context = context.clone();
         let connect_opts = connect_opts.clone();
 
+        let server_addr = nameserver_addr.parse::<ServerAddr>().unwrap();
         let handle = tokio::spawn(async move {
             loop {
-                let server_addr = ServerAddr::from(nameserver_addr);
-
                 message.set_id(rand::random());
 
                 let mut buffer = message.to_vec().expect("query serialize");
