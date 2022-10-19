@@ -5,7 +5,7 @@ use tracing::{info, info_span, trace, Instrument};
 
 use crate::{canceler::CancelWaiter, policy::ServerPolicy};
 
-use super::{connection::Connection, UdpSocketCreator};
+use super::connection::Connection;
 
 pub struct Server {
     endpoint: Endpoint,
@@ -13,7 +13,6 @@ pub struct Server {
     token: Arc<HashSet<[u8; 32]>>,
     authentication_timeout: Duration,
     idle_timeout: Duration,
-    udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
     policy: Arc<Box<dyn ServerPolicy>>,
 }
 
@@ -24,7 +23,6 @@ impl Server {
         token: HashSet<[u8; 32]>,
         auth_timeout: Duration,
         idle_timeout: Duration,
-        udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
         policy: Arc<Box<dyn ServerPolicy>>,
     ) -> Result<Self> {
         let (endpoint, incoming) = Endpoint::server(
@@ -42,7 +40,6 @@ impl Server {
             token: Arc::new(token),
             authentication_timeout: auth_timeout,
             idle_timeout,
-            udp_socket_creator,
             policy,
         })
     }
@@ -61,7 +58,6 @@ impl Server {
                                 token,
                                 self.authentication_timeout,
                                 self.idle_timeout,
-                                self.udp_socket_creator.clone(),
                                 self.policy.clone(),
                                 cancel_waiter.clone(),
                             )

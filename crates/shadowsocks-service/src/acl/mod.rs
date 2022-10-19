@@ -19,7 +19,7 @@ use once_cell::sync::Lazy;
 use regex::bytes::{Regex, RegexBuilder, RegexSet, RegexSetBuilder};
 use tracing::{trace, warn};
 
-use shadowsocks::{context::Context, relay::socks5::Address};
+use shadowsocks::{context::Context, ServerAddr};
 
 use self::sub_domains_tree::SubDomainsTree;
 
@@ -107,10 +107,10 @@ impl Rules {
 
     /// Check if the specified address matches these rules
     #[allow(dead_code)]
-    fn check_address_matched(&self, addr: &Address) -> bool {
+    fn check_address_matched(&self, addr: &ServerAddr) -> bool {
         match *addr {
-            Address::SocketAddress(ref saddr) => self.check_ip_matched(&saddr.ip()),
-            Address::DomainNameAddress(ref domain, ..) => self.check_host_matched(domain),
+            ServerAddr::SocketAddr(ref saddr) => self.check_ip_matched(&saddr.ip()),
+            ServerAddr::DomainName(ref domain, ..) => self.check_host_matched(domain),
         }
     }
 
@@ -509,11 +509,11 @@ impl AccessControl {
     /// Check if target address should be bypassed (for client)
     ///
     /// This function may perform a DNS resolution
-    pub async fn check_target_bypassed(&self, context: &Context, addr: &Address) -> bool {
+    pub async fn check_target_bypassed(&self, context: &Context, addr: &ServerAddr) -> bool {
         match *addr {
-            Address::SocketAddress(ref addr) => !self.check_ip_in_proxy_list(&addr.ip()),
+            ServerAddr::SocketAddr(ref addr) => !self.check_ip_in_proxy_list(&addr.ip()),
             // Resolve hostname and check the list
-            Address::DomainNameAddress(ref host, port) => {
+            ServerAddr::DomainName(ref host, port) => {
                 if let Some(value) = self.check_host_in_proxy_list(host) {
                     return !value;
                 }
@@ -550,10 +550,10 @@ impl AccessControl {
     ///
     /// NOTE: `Address::DomainName` is only validated by regex rules,
     ///       resolved addresses are checked in the `lookup_outbound_then!` macro
-    pub async fn check_outbound_blocked(&self, context: &Context, outbound: &Address) -> bool {
+    pub async fn check_outbound_blocked(&self, context: &Context, outbound: &ServerAddr) -> bool {
         match outbound {
-            Address::SocketAddress(saddr) => self.outbound_block.check_ip_matched(&saddr.ip()),
-            Address::DomainNameAddress(host, port) => {
+            ServerAddr::SocketAddr(saddr) => self.outbound_block.check_ip_matched(&saddr.ip()),
+            ServerAddr::DomainName(host, port) => {
                 if self.outbound_block.check_host_matched(&Self::convert_to_ascii(host)) {
                     return true;
                 }

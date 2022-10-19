@@ -12,10 +12,7 @@ use shadowsocks::{
     config::ServerProtocol,
     crypto::CipherKind,
     net::{AcceptOpts, Destination},
-    relay::{
-        socks5::{Address, Error as Socks5Error},
-        tcprelay::{utils::copy_encrypted_bidirectional, ProxyServerStream},
-    },
+    relay::tcprelay::{utils::copy_encrypted_bidirectional, ProxyServerStream},
     transport::{
         direct::{TcpAcceptor, TcpConnector},
         Acceptor, Connection, Connector, StreamConnection,
@@ -33,6 +30,7 @@ use crate::net::{utils::ignore_until_end, MonProxyStream};
 use super::{
     connection::{ConnectionInfo, ConnectionStat},
     context::ServiceContext,
+    policy::ServerPolicy,
 };
 
 #[cfg(feature = "rate-limit")]
@@ -180,14 +178,29 @@ impl TcpServer {
         }
     }
 
-    async fn run_with_acceptor<A: Acceptor>(self, mut listener: A, svr_cfg: &ServerConfig) -> io::Result<()> {
+    async fn run_with_acceptor(self, mut listener: impl Acceptor, svr_cfg: &ServerConfig) -> io::Result<()> {
+        let server_policy = Arc::new(Box::new(ServerPolicy::new(self.context.clone(), svr_cfg.timeout()))
+            as Box<dyn shadowsocks::policy::ServerPolicy>);
+
         info!(
-            "{} tcp server listening on {}{}, inbound address {}",
-            svr_cfg.protocol().name(),
-            listener.local_addr().expect("listener.local_addr"),
-            svr_cfg.acceptor_transport_tag(),
-            svr_cfg.addr(),
+            proto = svr_cfg.protocol().name(),
+            trans = svr_cfg.acceptor_transport_tag(),
+            "tcp server listening on {}",
+            listener.local_addr().unwrap(),
         );
+
+        #[cfg(feature = "trojan")]
+        if let ServerProtocol::Trojan(trojan_config) = svr_cfg.protocol() {
+            return shadowsocks::trojan::server::serve(
+                listener,
+                self.context.cancel_waiter(),
+                trojan_config,
+                svr_cfg.request_recv_timeout(),
+                svr_cfg.idle_timeout(),
+                server_policy,
+            )
+            .await;
+        }
 
         cfg_if! {
             if #[cfg(feature = "vless")] {
@@ -205,8 +218,6 @@ impl TcpServer {
             #[cfg(feature = "rate-limit")]
             let connection_bound_width = self.context.connection_bound_width();
 
-            let mut idle_timeout = None;
-
             #[cfg(feature = "rate-limit")]
             let mut rate_limiter = None;
 
@@ -221,8 +232,6 @@ impl TcpServer {
                     ServerAddr::SocketAddr(addr) => addr,
                     ServerAddr::DomainName(..) => unreachable!(),
                 };
-
-                idle_timeout = svr_cfg.idle_timeout().clone();
 
                 #[cfg(feature = "rate-limit")]
                 if let Some(connection_bound_width) = connection_bound_width {
@@ -292,8 +301,8 @@ impl TcpServer {
                 conn,
                 peer_addr,
                 timeout: svr_cfg.timeout(),
-                request_recv_timeout: svr_cfg.request_recv_timeout().clone(),
-                idle_timeout,
+                request_recv_timeout: svr_cfg.request_recv_timeout(),
+                idle_timeout: svr_cfg.idle_timeout(),
                 #[cfg(feature = "rate-limit")]
                 rate_limiter,
             };
@@ -326,24 +335,6 @@ impl TcpServer {
                         .in_current_span(),
                     );
                 }
-                #[cfg(feature = "trojan")]
-                ServerProtocol::Trojan(cfg) => {
-                    let hash = cfg.hash().clone();
-                    tokio::spawn(
-                        async move {
-                            if let Err(err) = client.serve_trojan(&hash, local_stream).await {
-                                debug!("tcp server stream aborted with error: {}", err);
-                            }
-
-                            #[cfg(feature = "server-limit")]
-                            connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
-
-                            #[cfg(not(feature = "server-limit"))]
-                            connection_stat.remove_in_connection(&conn_id).await;
-                        }
-                        .in_current_span(),
-                    );
-                }
                 #[cfg(feature = "vless")]
                 ServerProtocol::Vless(..) => {
                     let inbound = vless_inbound.clone();
@@ -362,9 +353,12 @@ impl TcpServer {
                         .in_current_span(),
                     );
                 }
+                #[cfg(feature = "trojan")]
+                ServerProtocol::Trojan(..) => {
+                    unreachable!()
+                }
                 #[cfg(feature = "tuic")]
                 ServerProtocol::Tuic(..) => {
-                    //TODO: Loki
                     unreachable!()
                 }
             }
@@ -373,16 +367,13 @@ impl TcpServer {
 }
 
 #[inline]
-async fn timeout_fut<F, R>(duration: Option<Duration>, f: F) -> io::Result<R>
+async fn timeout_fut<F, R>(duration: Duration, f: F) -> io::Result<R>
 where
     F: Future<Output = io::Result<R>> + Send,
 {
-    match duration {
-        None => f.await,
-        Some(d) => match time::timeout(d, f).await {
-            Ok(o) => o,
-            Err(..) => Err(ErrorKind::TimedOut.into()),
-        },
+    match time::timeout(duration, f).await {
+        Ok(o) => o,
+        Err(..) => Err(ErrorKind::TimedOut.into()),
     }
 }
 
@@ -391,9 +382,9 @@ struct TcpServerClient {
     connector: Arc<TcpConnector>,
     conn: Arc<ConnectionInfo>,
     peer_addr: SocketAddr,
-    timeout: Option<Duration>,
-    request_recv_timeout: Option<Duration>,
-    idle_timeout: Option<Duration>,
+    timeout: Duration,
+    request_recv_timeout: Duration,
+    idle_timeout: Duration,
     #[cfg(feature = "rate-limit")]
     rate_limiter: Option<Arc<RateLimiter>>,
 }
@@ -410,7 +401,7 @@ impl TcpServerClient {
     {
         // let target_addr = match Address::read_from(&mut self.stream).await {
         let target_addr = match timeout_fut(self.timeout, stream.handshake()).await {
-            Ok(a) => a,
+            Ok(a) => ServerAddr::from(a),
             // Err(Socks5Error::IoError(ref err)) if err.kind() == ErrorKind::UnexpectedEof => {
             //     debug!(
             //         "handshake failed, received EOF before a complete target Address, peer: {}",
@@ -585,9 +576,6 @@ impl TcpServerClient {
         Ok(())
     }
 }
-
-#[cfg(feature = "trojan")]
-mod trojan;
 
 #[cfg(feature = "vless")]
 mod vless;

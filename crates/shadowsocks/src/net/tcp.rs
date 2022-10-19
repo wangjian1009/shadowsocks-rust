@@ -20,7 +20,7 @@ use tokio::{
     net::{TcpListener as TokioTcpListener, TcpSocket, TcpStream as TokioTcpStream},
 };
 
-use crate::{context::Context, relay::socks5::Address, ServerAddr};
+use crate::{context::Context, ServerAddr};
 
 use super::{
     is_dual_stack_addr,
@@ -65,13 +65,13 @@ impl TcpStream {
     /// Connects proxy remote target
     pub async fn connect_remote_with_opts(
         context: &Context,
-        addr: &Address,
+        addr: ServerAddr,
         opts: &ConnectOpts,
     ) -> io::Result<TcpStream> {
-        let stream = match *addr {
-            Address::SocketAddress(ref addr) => SysTcpStream::connect(*addr, opts).await?,
-            Address::DomainNameAddress(ref domain, port) => {
-                lookup_then_connect!(context, domain, port, |addr| {
+        let stream = match addr {
+            ServerAddr::SocketAddr(addr) => SysTcpStream::connect(addr, opts).await?,
+            ServerAddr::DomainName(domain, port) => {
+                lookup_then_connect!(context, &domain, port, |addr| {
                     SysTcpStream::connect(addr, opts).await
                 })?
                 .1

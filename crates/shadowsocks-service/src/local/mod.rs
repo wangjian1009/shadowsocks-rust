@@ -11,12 +11,14 @@ use std::{
 
 use futures::{future, ready};
 use shadowsocks::{
+    canceler::CancelWaiter,
     config::{Mode, ServerType},
     context::Context,
     net::{AcceptOpts, ConnectOpts},
+    relay::socks5::Address,
 };
 use tokio::task::JoinHandle;
-use tracing::trace;
+use tracing::{info, info_span, trace, warn, Instrument};
 
 #[cfg(feature = "local-flow-stat")]
 use crate::config::LocalFlowStatAddress;
@@ -97,14 +99,23 @@ pub struct Server {
 
 impl Server {
     /// Create a shadowsocks local server
-    pub async fn create(config: Config) -> io::Result<Server> {
-        create(config).await
+    pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<Server> {
+        create(config, cancel_waiter).await
     }
 
     /// Run local server
-    #[deprecated]
-    pub async fn run(self) -> io::Result<()> {
-        self.wait_until_exit().await
+    pub async fn run(mut self) -> io::Result<()> {
+        loop {
+            let (res, _, vfut_left) = future::select_all(self.vfut).await;
+            let _ = res?;
+
+            if vfut_left.is_empty() {
+                return Ok(());
+            } else {
+                info!("one server exited success, left {}", vfut_left.len());
+                self.vfut = vfut_left;
+            }
+        }
     }
 
     /// Wait until any of the servers were exited
@@ -120,7 +131,7 @@ impl Server {
 }
 
 /// Starts a shadowsocks local server
-pub async fn create(mut config: Config) -> io::Result<Server> {
+pub async fn create(mut config: Config, cancel_waiter: CancelWaiter) -> io::Result<Server> {
     assert!(config.config_type == ConfigType::Local && !config.local.is_empty());
 
     trace!("{:?}", config);
@@ -130,7 +141,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
     for server in config.server.iter() {
         server.if_ss(|ss_cfg| {
             if ss_cfg.method().is_stream() {
-                tracing::warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
+                warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
                             DO NOT USE. It will be removed in the future.", ss_cfg.method(), server.addr());
             }
         });
@@ -140,12 +151,12 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
     if let Some(nofile) = config.nofile {
         use crate::sys::set_nofile;
         if let Err(err) = set_nofile(nofile) {
-            tracing::warn!("set_nofile {} failed, error: {}", nofile, err);
+            warn!("set_nofile {} failed, error: {}", nofile, err);
         }
     }
 
     let context = Context::new_shared(ServerType::Local);
-    let mut context = ServiceContext::new(context);
+    let mut context = ServiceContext::new(context, cancel_waiter.clone());
 
     let mut connect_opts = ConnectOpts {
         #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -196,13 +207,13 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
 
     #[cfg(feature = "rate-limit")]
     if let Some(bound_width) = config.rate_limit.as_ref() {
-        tracing::info!("bound-width={}", bound_width);
+        info!("bound-width={}", bound_width);
         context.rate_limiter().set_rate_limit(Some(bound_width.clone()))?;
     }
 
     #[cfg(feature = "sniffer-bittorrent")]
     if let Some(reject_bittorrent) = config.reject_bittorrent {
-        tracing::info!("reject bittorrent = {}", reject_bittorrent);
+        info!("reject bittorrent = {}", reject_bittorrent);
         if reject_bittorrent {
             context.set_protocol_action(SnifferProtocol::Bittorrent, Some(ProtocolAction::Reject));
             context.set_protocol_action(SnifferProtocol::Utp, Some(ProtocolAction::Reject));
@@ -249,15 +260,19 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
     if let Some(stat_addr) = config.local_stat_addr {
         // For Android's flow statistic
 
-        let report_fut = flow_report_task(stat_addr, context.flow_stat());
-        vfut.push(ServerHandle(tokio::spawn(report_fut)));
+        let report_fut = flow_report_task(stat_addr, context.cancel_waiter(), context.flow_stat());
+        vfut.push(ServerHandle(tokio::spawn(
+            report_fut.instrument(info_span!("flow-report")),
+        )));
     }
 
     // 启动一个维护服务，接受运行时控制
     #[cfg(feature = "local-maintain")]
     if let Some(maintain_addr) = config.maintain_addr {
         let maintain_server = maintain::MaintainServer::new(context.clone());
-        vfut.push(ServerHandle(tokio::spawn(maintain_server.run(maintain_addr))));
+        vfut.push(ServerHandle(tokio::spawn(
+            maintain_server.run(maintain_addr).instrument(info_span!("maintain")),
+        )));
     }
 
     for local_config in config.local {
@@ -286,9 +301,9 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
                     server.set_udp_bind_addr(b.clone());
                 }
 
-                vfut.push(ServerHandle(tokio::spawn(async move {
-                    server.run(&client_addr, balancer).await
-                })));
+                vfut.push(ServerHandle(tokio::spawn(
+                    async move { server.run(&client_addr, balancer).await }.instrument(info_span!("socks")),
+                )));
             }
             #[cfg(feature = "local-tunnel")]
             ProtocolType::Tunnel => {
@@ -301,7 +316,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
 
                 let forward_addr = local_config.forward_addr.expect("tunnel requires forward address");
 
-                let mut server = Tunnel::with_context(context.clone(), forward_addr.clone());
+                let mut server = Tunnel::with_context(context.clone(), Address::from(forward_addr.clone()));
 
                 if let Some(c) = config.udp_max_associations {
                     server.set_udp_capacity(c);
@@ -312,9 +327,9 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
                 server.set_mode(local_config.mode);
 
                 let udp_addr = local_config.udp_addr.unwrap_or_else(|| client_addr.clone());
-                vfut.push(ServerHandle(tokio::spawn(async move {
-                    server.run(&client_addr, &udp_addr, balancer).await
-                })));
+                vfut.push(ServerHandle(tokio::spawn(
+                    async move { server.run(&client_addr, &udp_addr, balancer).await }.instrument(info_span!("tunnel")),
+                )));
             }
             #[cfg(feature = "local-http")]
             ProtocolType::Http => {
@@ -326,9 +341,9 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
                 };
 
                 let server = Http::with_context(context.clone());
-                vfut.push(ServerHandle(tokio::spawn(async move {
-                    server.run(&client_addr, balancer).await
-                })));
+                vfut.push(ServerHandle(tokio::spawn(
+                    async move { server.run(&client_addr, balancer).await }.instrument(info_span!("http")),
+                )));
             }
             #[cfg(feature = "local-redir")]
             ProtocolType::Redir => {
@@ -351,9 +366,9 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
                 server.set_udp_redir(local_config.udp_redir);
 
                 let udp_addr = local_config.udp_addr.unwrap_or_else(|| client_addr.clone());
-                vfut.push(ServerHandle(tokio::spawn(async move {
-                    server.run(&client_addr, &udp_addr, balancer).await
-                })));
+                vfut.push(ServerHandle(tokio::spawn(
+                    async move { server.run(&client_addr, &udp_addr, balancer).await }.instrument(info_span!("redir")),
+                )));
             }
             #[cfg(feature = "local-dns")]
             ProtocolType::Dns => {
@@ -368,18 +383,17 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
                     let local_addr = local_config.local_dns_addr.expect("missing local_dns_addr");
                     let remote_addr = local_config.remote_dns_addr.expect("missing remote_dns_addr");
 
-                    Dns::with_context(context.clone(), local_addr.clone(), remote_addr.clone())
+                    Dns::with_context(context.clone(), local_addr.clone(), Address::from(remote_addr.clone()))
                 };
                 server.set_mode(local_config.mode);
 
-                vfut.push(ServerHandle(tokio::spawn(async move {
-                    server.run(&client_addr, balancer).await
-                })));
+                vfut.push(ServerHandle(tokio::spawn(
+                    async move { server.run(&client_addr, balancer).await }.instrument(info_span!("dns")),
+                )));
             }
             #[cfg(feature = "local-tun")]
             ProtocolType::Tun => {
                 use shadowsocks::net::UnixListener;
-                use tracing::info;
 
                 use self::tun::TunBuilder;
 
@@ -408,7 +422,7 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
                     let listener = match UnixListener::bind(fd_path) {
                         Ok(l) => l,
                         Err(err) => {
-                            tracing::error!("failed to bind uds path \"{}\", error: {}", fd_path.display(), err);
+                            error!("failed to bind uds path \"{}\", error: {}", fd_path.display(), err);
                             return Err(err);
                         }
                     };
@@ -425,10 +439,9 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
                         match stream.recv_with_fd(&mut buffer, &mut fd_buffer).await {
                             Ok((n, fd_size)) => {
                                 if fd_size == 0 {
-                                    tracing::error!(
+                                    error!(
                                         "client {:?} didn't send file descriptors with buffer.size {} bytes",
-                                        peer_addr,
-                                        n
+                                        peer_addr, n
                                     );
                                     continue;
                                 }
@@ -439,36 +452,40 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
                                 break;
                             }
                             Err(err) => {
-                                tracing::error!(
+                                error!(
                                     "failed to receive file descriptors from {:?}, error: {}",
-                                    peer_addr,
-                                    err
+                                    peer_addr, err
                                 );
                             }
                         }
                     }
                 }
                 let server = builder.build().await?;
-                vfut.push(ServerHandle(tokio::spawn(async move { server.run().await })));
+                vfut.push(ServerHandle(tokio::spawn(
+                    async move { server.run().await }.instrument(info_span!("tun")),
+                )));
             }
         }
     }
 
     #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
-    vfut.push(ServerHandle(tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(500 + rand::random::<u64>() % 1500)).await;
-        let result = crate::local::android::validate_sign();
-        if result.error.is_some() {
-            context.set_fake_mode(crate::local::context::FakeMode::ParamError);
-        }
+    vfut.push(ServerHandle(tokio::spawn(
+        async move {
+            tokio::time::sleep(Duration::from_millis(500 + rand::random::<u64>() % 1500)).await;
+            let result = crate::local::android::validate_sign();
+            if result.error.is_some() {
+                context.set_fake_mode(crate::local::context::FakeMode::ParamError);
+            }
 
-        futures::future::pending::<()>().await;
-        panic!("check completed");
-    })));
+            futures::future::pending::<()>().await;
+            panic!("check completed");
+        }
+        .instrument(info_span!("fake")),
+    )));
 
     // vfut.push(async {
     //     tokio::time::sleep(Duration::from_secs(10)).await;
-    //     tracing::error!("xxxxxxxxx: test done!");
+    //     error!("xxxxxxxxx: test done!");
     //     unsafe { *(0 as *mut u32) = 42; }
     //     Ok(())
     // }.boxed());
@@ -480,7 +497,11 @@ pub async fn create(mut config: Config) -> io::Result<Server> {
 }
 
 #[cfg(feature = "local-flow-stat")]
-async fn flow_report_task(stat_addr: LocalFlowStatAddress, flow_stat: Arc<FlowStat>) -> io::Result<()> {
+async fn flow_report_task(
+    stat_addr: LocalFlowStatAddress,
+    cancel_waiter: CancelWaiter,
+    flow_stat: Arc<FlowStat>,
+) -> io::Result<()> {
     use std::slice;
 
     use tokio::{io::AsyncWriteExt, time};
@@ -491,6 +512,14 @@ async fn flow_report_task(stat_addr: LocalFlowStatAddress, flow_stat: Arc<FlowSt
 
     loop {
         // keep it as libev's default, 0.5 seconds
+        tokio::select! {
+            _ = time::sleep(Duration::from_millis(500)) => {
+            }
+            _ = cancel_waiter.wait() => {
+                trace!("canceled");
+                return Ok(());
+            }
+        }
         time::sleep(Duration::from_millis(500)).await;
 
         let tx = flow_stat.tx();
@@ -556,6 +585,6 @@ async fn flow_report_task(stat_addr: LocalFlowStatAddress, flow_stat: Arc<FlowSt
 }
 
 /// Create then run a Local Server
-pub async fn run(config: Config) -> io::Result<()> {
-    create(config).await?.wait_until_exit().await
+pub async fn run(config: Config, cancel_waiter: CancelWaiter) -> io::Result<()> {
+    create(config, cancel_waiter).await?.wait_until_exit().await
 }

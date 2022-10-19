@@ -8,12 +8,10 @@ use tracing::{debug, error, info_span, warn, Instrument, Span};
 
 use crate::{
     canceler::Canceler,
-    policy::{PacketAction, ServerPolicy},
+    policy::{PacketAction, ServerPolicy, UdpSocket},
     timeout::{TimeoutTicker, TimeoutWaiter},
+    ServerAddr,
 };
-
-use super::super::super::protocol::Address;
-use super::super::{UdpSocket, UdpSocketCreator};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum UdpSessionCloseReason {
@@ -54,24 +52,20 @@ impl fmt::Debug for UdpSessionSource {
 pub type SessionCloseReceiver = Receiver<(u32, UdpSessionCloseReason)>;
 pub type SessionCloseSender = Sender<(u32, UdpSessionCloseReason)>;
 
-pub type SendPacketSender = Sender<(Bytes, Address, Span)>;
-pub type SendPacketReceiver = Receiver<(Bytes, Address, Span)>;
-pub type RecvPacketSender = Sender<(u32, Bytes, Address)>;
-pub type RecvPacketReceiver = Receiver<(u32, Bytes, Address)>;
+pub type SendPacketSender = Sender<(Bytes, ServerAddr, Span)>;
+pub type SendPacketReceiver = Receiver<(Bytes, ServerAddr, Span)>;
+pub type RecvPacketSender = Sender<(u32, Bytes, ServerAddr)>;
+pub type RecvPacketReceiver = Receiver<(u32, Bytes, ServerAddr)>;
 
 pub struct UdpSessionMap {
     map: Mutex<HashMap<u32, UdpSession>>,
     recv_pkt_tx_for_clone: RecvPacketSender,
     session_close_tx: SessionCloseSender,
-    udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
     idle_timeout: Duration,
 }
 
 impl UdpSessionMap {
-    pub fn new(
-        idle_timeout: Duration,
-        udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
-    ) -> (Self, RecvPacketReceiver, SessionCloseReceiver) {
+    pub fn new(idle_timeout: Duration) -> (Self, RecvPacketReceiver, SessionCloseReceiver) {
         let (session_close_tx, session_close_rx) = mpsc::channel(1);
         let (recv_pkt_tx, recv_pkt_rx) = mpsc::channel(1);
 
@@ -80,7 +74,6 @@ impl UdpSessionMap {
                 map: Mutex::new(HashMap::new()),
                 recv_pkt_tx_for_clone: recv_pkt_tx,
                 session_close_tx,
-                udp_socket_creator,
                 idle_timeout,
             },
             recv_pkt_rx,
@@ -94,7 +87,7 @@ impl UdpSessionMap {
         assoc_id: u32,
         source: UdpSessionSource,
         pkt: Bytes,
-        addr: Address,
+        addr: ServerAddr,
         src_addr: SocketAddr,
         server_policy: Arc<Box<dyn ServerPolicy>>,
     ) -> Result<usize, IoError> {
@@ -110,7 +103,7 @@ impl UdpSessionMap {
                 source,
                 self.recv_pkt_tx_for_clone.clone(),
                 self.session_close_tx.clone(),
-                &self.udp_socket_creator,
+                server_policy.as_ref(),
                 self.idle_timeout.clone(),
             )
             .instrument(info_span!("udp-session", id = assoc_id, source = format!("{:?}", source)).or_current())
@@ -127,12 +120,10 @@ impl UdpSessionMap {
             let addr_for_log = addr.to_string();
             let len = pkt.len();
 
-            let addr2 = match addr.clone() {
-                Address::DomainAddress(h, p) => crate::relay::Address::DomainNameAddress(h, p),
-                Address::SocketAddress(s) => crate::relay::Address::SocketAddress(s),
-            };
-
-            match server_policy.packet_check(&src_addr, &addr2).await? {
+            match server_policy
+                .packet_check(Some(&ServerAddr::SocketAddr(src_addr.clone())), &addr)
+                .await?
+            {
                 PacketAction::ClientBlocked => {
                     warn!(target = addr_for_log, "client blocked by ACL rules");
                     return Ok(0);
@@ -191,10 +182,10 @@ impl UdpSession {
         source: UdpSessionSource,
         recv_pkt_tx: RecvPacketSender,
         session_close_tx: SessionCloseSender,
-        udp_socket_creator: &Box<dyn UdpSocketCreator>,
+        server_policy: &Box<dyn ServerPolicy>,
         idle_timeout: Duration,
     ) -> Result<Self, IoError> {
-        let socket = Arc::new(udp_socket_creator.create_outbound_udp_socket().await?);
+        let socket = Arc::new(server_policy.create_out_udp_socket().await?);
         let (send_pkt_tx, send_pkt_rx) = mpsc::channel(1);
         let canceler = Canceler::new();
 
@@ -278,7 +269,7 @@ impl UdpSession {
                 }
             };
 
-            match recv_pkt_tx.send((assoc_id, pkt, Address::SocketAddress(addr))).await {
+            match recv_pkt_tx.send((assoc_id, pkt, ServerAddr::SocketAddr(addr))).await {
                 Ok(()) => {}
                 Err(err) => {
                     error!(error = ?err, "tuic udp send back channel closed");

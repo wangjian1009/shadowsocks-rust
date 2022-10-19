@@ -5,7 +5,7 @@ use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 use futures::{future, FutureExt};
 use shadowsocks::{config::Mode, lookup_then, net::TcpListener as ShadowTcpListener, ServerAddr};
 use tokio::{net::TcpStream, time};
-use tracing::{error, info};
+use tracing::{error, info, info_span, trace, Instrument};
 
 use crate::local::{context::ServiceContext, loadbalancing::PingBalancer};
 
@@ -87,14 +87,18 @@ impl Socks {
         let mut vfut = Vec::new();
 
         if self.mode.enable_tcp() {
-            vfut.push(self.run_tcp_server(client_config, balancer.clone()).boxed());
+            vfut.push(
+                self.run_tcp_server(client_config, balancer.clone())
+                    .in_current_span()
+                    .boxed(),
+            );
         }
 
         if self.mode.enable_udp() {
             // NOTE: SOCKS 5 RFC requires TCP handshake for UDP ASSOCIATE command
             // But here we can start a standalone UDP SOCKS 5 relay server, for special use cases
 
-            vfut.push(self.run_udp_server(client_config, balancer).boxed());
+            vfut.push(self.run_udp_server(client_config, balancer).in_current_span().boxed());
         }
 
         let (res, ..) = future::select_all(vfut).await;
@@ -114,7 +118,11 @@ impl Socks {
             }
         };
 
-        info!("shadowsocks socks TCP listening on {}", listener.local_addr()?);
+        info!(
+            mode = self.mode.to_string(),
+            "shadowsocks socks TCP listening on {}",
+            listener.local_addr()?
+        );
 
         // If UDP is enabled, SOCK5 UDP_ASSOCIATE command will let client to send requests to this address
         let udp_bind_addr = if self.mode.enable_udp() {
@@ -125,13 +133,22 @@ impl Socks {
             self.udp_bind_addr.clone().map(Arc::new)
         };
 
+        let cancel_waiter = self.context.cancel_waiter();
         loop {
-            let (stream, peer_addr) = match listener.accept().await {
-                Ok(s) => s,
-                Err(err) => {
-                    error!("accept failed with error: {}", err);
-                    time::sleep(Duration::from_secs(1)).await;
-                    continue;
+            let (stream, peer_addr) = tokio::select! {
+                r = listener.accept() => {
+                    match r {
+                        Ok(s) => s,
+                        Err(err) => {
+                            error!("accept failed with error: {}", err);
+                            time::sleep(Duration::from_secs(1)).await;
+                            continue;
+                        }
+                    }
+                }
+                _ = cancel_waiter.wait() => {
+                    trace!("shadowsocks socks TCP listening canceled");
+                    return Ok(());
                 }
             };
 
@@ -141,14 +158,18 @@ impl Socks {
             let mode = self.mode;
             let socks5_auth = self.socks5_auth.clone();
 
-            tokio::spawn(async move {
-                if let Err(err) =
-                    Socks::handle_tcp_client(context, udp_bind_addr, stream, balancer, peer_addr, mode, socks5_auth)
-                        .await
-                {
-                    error!("socks5 tcp client handler error: {}", err);
+            let span = info_span!("socks.client", net = "tcp", peer.addr = peer_addr.to_string());
+            tokio::spawn(
+                async move {
+                    if let Err(err) =
+                        Socks::handle_tcp_client(context, udp_bind_addr, stream, balancer, peer_addr, mode, socks5_auth)
+                            .await
+                    {
+                        error!("socks5 tcp client handler error: {}", err);
+                    }
                 }
-            });
+                .instrument(span),
+            );
         }
     }
 

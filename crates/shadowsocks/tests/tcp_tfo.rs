@@ -95,7 +95,7 @@ async fn tcp_tunnel_tfo() {
         } else {
             unreachable!();
         },
-        &("www.example.com".to_owned(), 80).into(),
+        ("www.example.com".to_owned(), 80).into(),
         &connect_opts,
     )
     .await

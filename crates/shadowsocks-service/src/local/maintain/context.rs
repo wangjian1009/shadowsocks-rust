@@ -6,8 +6,8 @@ use crate::local::ServiceContext;
 
 use super::GenericResult;
 
-pub struct MaintainServerContext {
-    service_context: Arc<ServiceContext>,
+pub(super) struct MaintainServerContext {
+    pub(super) service_context: Arc<ServiceContext>,
 }
 
 impl MaintainServerContext {

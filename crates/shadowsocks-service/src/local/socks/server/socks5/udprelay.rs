@@ -20,7 +20,7 @@ use shadowsocks::{
     ServerAddr,
 };
 use tokio::{net::UdpSocket, time};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info};
 
 use crate::{
     local::{
@@ -157,13 +157,6 @@ impl Socks5UdpServer {
 
                     let pos = cur.position() as usize;
                     let payload = &data[pos..];
-
-                    trace!(
-                        "UDP ASSOCIATE {} -> {}, {} bytes",
-                        peer_addr,
-                        header.address,
-                        payload.len()
-                    );
 
                     if let Err(err) = manager.send_to(peer_addr, header.address, payload).await {
                         debug!(

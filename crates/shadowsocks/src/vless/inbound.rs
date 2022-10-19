@@ -2,7 +2,7 @@ use bytes::BytesMut;
 use std::{collections::HashMap, future::Future, io, net::SocketAddr, time::Duration};
 use tokio::{io::AsyncWriteExt, time};
 
-use crate::transport::StreamConnection;
+use crate::{transport::StreamConnection, ServerAddr};
 
 use super::{
     encoding, mux, new_error,
@@ -79,13 +79,13 @@ impl InboundHandler {
         IS: StreamConnection + 'static,
         // 处理Stream
         FutPS: Future<Output = io::Result<()>> + Send,
-        PS: (Fn(Box<dyn StreamConnection + 'static>, protocol::Address) -> FutPS) + Send + Sync + Clone + 'static,
+        PS: (Fn(Box<dyn StreamConnection + 'static>, ServerAddr) -> FutPS) + Send + Sync + Clone + 'static,
         // 处理Packet
         FutPU: Future<Output = io::Result<()>>,
         PU: (Fn(
                 VlessUdpReader<Box<dyn StreamConnection + 'static>>,
                 VlessUdpWriter<Box<dyn StreamConnection + 'static>>,
-                protocol::Address,
+                ServerAddr,
             ) -> FutPU)
             + Send
             + Clone
@@ -140,7 +140,7 @@ impl InboundHandler {
         match request.command {
             protocol::RequestCommand::TCP => {
                 if let Some(address) = request.address {
-                    serve_stream(Box::new(stream), address).await
+                    serve_stream(Box::new(stream), ServerAddr::from(address)).await
                 } else {
                     Err(new_error(format!("TCP rquest no target address")))
                 }
@@ -149,7 +149,7 @@ impl InboundHandler {
                 if let Some(address) = request.address {
                     let stream = Box::new(stream) as Box<dyn StreamConnection + 'static>;
                     let (reader, writer) = new_vless_packet_connection(stream);
-                    serve_udp(reader, writer, address).await
+                    serve_udp(reader, writer, ServerAddr::from(address)).await
                 } else {
                     Err(new_error(format!("udp rquest no target address")))
                 }

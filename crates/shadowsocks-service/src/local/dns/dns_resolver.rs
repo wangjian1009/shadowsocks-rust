@@ -7,7 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::future;
-use tracing::{debug, trace};
+use tracing::{debug, debug_span, trace, Instrument};
 use trust_dns_resolver::proto::{
     op::{Message, Query},
     rr::{DNSClass, Name, RData, RecordType},
@@ -60,6 +60,7 @@ impl DnsResolver {
             }
         }
 
+        debug!(error = ?last_err, "failed to resolve AAAA records");
         Err(last_err)
     }
 
@@ -126,7 +127,12 @@ impl DnsResolve for DnsResolver {
         msgv6.set_recursion_desired(true);
         msgv6.add_query(queryv6);
 
-        match future::join(self.lookup(msgv4), self.lookup(msgv6)).await {
+        match future::join(
+            self.lookup(msgv4).instrument(debug_span!("V4")),
+            self.lookup(msgv6).instrument(debug_span!("V6")),
+        )
+        .await
+        {
             (Err(res_v4), Err(res_v6)) => {
                 if self.ipv6_first {
                     Err(res_v6)
@@ -139,24 +145,24 @@ impl DnsResolve for DnsResolver {
                 let mut vaddr: Vec<SocketAddr> = vec![];
 
                 if self.ipv6_first {
-                    match res_v6 {
-                        Ok(res) => vaddr = store_dns(res, port),
-                        Err(err) => debug!("failed to resolve AAAA records, error: {}", err),
+                    if let Ok(res) = res_v6 {
+                        vaddr = store_dns(res, port);
                     }
 
-                    match res_v4 {
-                        Ok(res) => vaddr = store_dns(res, port),
-                        Err(err) => debug!("failed to resolve A records, error: {}", err),
+                    if vaddr.is_empty() {
+                        if let Ok(res) = res_v4 {
+                            vaddr = store_dns(res, port);
+                        }
                     }
                 } else {
-                    match res_v4 {
-                        Ok(res) => vaddr = store_dns(res, port),
-                        Err(err) => debug!("failed to resolve A records, error: {}", err),
+                    if let Ok(res) = res_v4 {
+                        vaddr = store_dns(res, port);
                     }
 
-                    match res_v6 {
-                        Ok(res) => vaddr = store_dns(res, port),
-                        Err(err) => debug!("failed to resolve AAAA records, error: {}", err),
+                    if vaddr.is_empty() {
+                        if let Ok(res) = res_v6 {
+                            vaddr = store_dns(res, port);
+                        }
                     }
                 }
 

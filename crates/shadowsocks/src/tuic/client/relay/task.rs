@@ -1,13 +1,16 @@
-use super::super::super::protocol::{Address as TuicAddress, Command as TuicCommand};
-use super::{stream::BiStream, Address, Connection, UdpRelayMode};
 use bytes::{Bytes, BytesMut};
 use std::io::Result;
 use tokio::{io::AsyncWriteExt, sync::oneshot::Sender as OneshotSender};
 
+use crate::ServerAddr;
+
+use super::super::super::protocol::{Address, Command as TuicCommand};
+use super::{stream::BiStream, Connection, UdpRelayMode};
+
 impl Connection {
-    pub async fn handle_connect(self, addr: Address, tx: OneshotSender<BiStream>) {
-        async fn negotiate_connect(conn: Connection, addr: Address) -> Result<Option<BiStream>> {
-            let cmd = TuicCommand::new_connect(TuicAddress::from(addr));
+    pub async fn handle_connect(self, addr: ServerAddr, tx: OneshotSender<BiStream>) {
+        async fn negotiate_connect(conn: Connection, addr: ServerAddr) -> Result<Option<BiStream>> {
+            let cmd = TuicCommand::new_connect(Address::from(addr));
 
             let mut stream = conn.get_bi_stream().await?;
             cmd.write_to(&mut stream).await?;
@@ -40,15 +43,15 @@ impl Connection {
         }
     }
 
-    pub async fn handle_packet_to(self, assoc_id: u32, pkt: Bytes, addr: Address, mode: UdpRelayMode<(), ()>) {
+    pub async fn handle_packet_to(self, assoc_id: u32, pkt: Bytes, addr: ServerAddr, mode: UdpRelayMode<(), ()>) {
         async fn send_packet(
             conn: Connection,
             assoc_id: u32,
             pkt: Bytes,
-            addr: Address,
+            addr: ServerAddr,
             mode: UdpRelayMode<(), ()>,
         ) -> Result<()> {
-            let cmd = TuicCommand::new_packet(assoc_id, pkt.len() as u16, TuicAddress::from(addr));
+            let cmd = TuicCommand::new_packet(assoc_id, pkt.len() as u16, Address::from(addr));
 
             match mode {
                 UdpRelayMode::Native(()) => {
@@ -80,7 +83,7 @@ impl Connection {
         }
     }
 
-    pub async fn handle_packet_from(self, assoc_id: u32, pkt: Bytes, addr: Address) {
+    pub async fn handle_packet_from(self, assoc_id: u32, pkt: Bytes, addr: ServerAddr) {
         self.update_max_udp_relay_packet_size();
         let display_addr = format!("{addr}");
 

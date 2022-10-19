@@ -18,11 +18,8 @@ use shadowsocks::{
     crypto::{CipherCategory, CipherKind},
     lookup_then,
     net::{AcceptOpts, AddrFamily, UdpSocket as OutboundUdpSocket},
-    relay::{
-        socks5::Address,
-        udprelay::{options::UdpSocketControlData, ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
-    },
-    ServerConfig,
+    relay::udprelay::{options::UdpSocketControlData, ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
+    ServerAddr, ServerConfig,
 };
 use tokio::{sync::mpsc, task::JoinHandle, time};
 use tracing::{debug, error, info, trace, warn, Instrument};
@@ -33,9 +30,6 @@ use crate::net::{
 };
 
 use super::context::ServiceContext;
-
-#[cfg(any(feature = "trojan", feature = "vless"))]
-use shadowsocks::transport::PacketMutWrite;
 
 #[derive(Debug, Clone, Copy)]
 enum NatKey {
@@ -211,7 +205,7 @@ impl UdpServer {
             tasks: &mut other_receivers,
         };
 
-        type QueuedDataType = (SocketAddr, Address, Option<UdpSocketControlData>, Bytes);
+        type QueuedDataType = (SocketAddr, ServerAddr, Option<UdpSocketControlData>, Bytes);
 
         #[inline]
         async fn multicore_recv(orx_opt: &mut Option<mpsc::Receiver<QueuedDataType>>) -> QueuedDataType {
@@ -274,7 +268,7 @@ impl UdpServer {
         context: &ServiceContext,
         l: &MonProxySocket,
         buffer: &mut [u8],
-    ) -> Option<(usize, SocketAddr, Address, Option<UdpSocketControlData>)> {
+    ) -> Option<(usize, SocketAddr, ServerAddr, Option<UdpSocketControlData>)> {
         let (n, peer_addr, target_addr, control) = match l.recv_from_with_ctrl(buffer).await {
             Ok(s) => s,
             Err(err) => {
@@ -314,7 +308,7 @@ impl UdpServer {
         &mut self,
         listener: &Arc<MonProxySocket>,
         peer_addr: SocketAddr,
-        target_addr: Address,
+        target_addr: ServerAddr,
         control: Option<UdpSocketControlData>,
         data: Bytes,
     ) -> io::Result<()> {
@@ -374,7 +368,7 @@ impl UdpServer {
     }
 }
 
-type UdpAssociationSendMessage = (SocketAddr, Address, Bytes, Option<UdpSocketControlData>);
+type UdpAssociationSendMessage = (SocketAddr, ServerAddr, Bytes, Option<UdpSocketControlData>);
 
 struct UdpAssociation {
     assoc_handle: JoinHandle<()>,
@@ -443,8 +437,6 @@ impl ClientSessionContext {
 
 enum MultiProtocolSocket {
     SS(Arc<MonProxySocket>),
-    #[cfg(feature = "trojan")]
-    Trojan(trojan::TrojanUdpWriter),
     #[cfg(feature = "vless")]
     Vless(vless::VlessUdpWriter),
 }
@@ -539,7 +531,7 @@ impl UdpAssociationContext {
                         }
                     };
 
-                    let addr = Address::from(addr);
+                    let addr = ServerAddr::from(addr);
                     self.send_received_respond_packet(addr, &outbound_ipv4_buffer[..n]).await;
                 }
 
@@ -554,7 +546,7 @@ impl UdpAssociationContext {
                         }
                     };
 
-                    let addr = Address::from(addr);
+                    let addr = ServerAddr::from(addr);
                     self.send_received_respond_packet(addr, &outbound_ipv6_buffer[..n]).await;
                 }
 
@@ -598,7 +590,7 @@ impl UdpAssociationContext {
     async fn dispatch_received_packet(
         &mut self,
         peer_addr: SocketAddr,
-        target_addr: &Address,
+        target_addr: &ServerAddr,
         data: &[u8],
         control: &Option<UdpSocketControlData>,
     ) {
@@ -658,15 +650,13 @@ impl UdpAssociationContext {
         }
     }
 
-    async fn dispatch_received_outbound_packet(&mut self, target_addr: &Address, data: &[u8]) -> io::Result<()> {
+    async fn dispatch_received_outbound_packet(&mut self, target_addr: &ServerAddr, data: &[u8]) -> io::Result<()> {
         match *target_addr {
-            Address::SocketAddress(sa) => self.send_received_outbound_packet(sa, data).await,
-            Address::DomainNameAddress(ref dname, port) => {
-                lookup_then!(self.context.context_ref(), dname, port, |sa| {
-                    self.send_received_outbound_packet(sa, data).await
-                })
-                .map(|_| ())
-            }
+            ServerAddr::SocketAddr(sa) => self.send_received_outbound_packet(sa, data).await,
+            ServerAddr::DomainName(ref dname, port) => lookup_then!(self.context.context_ref(), dname, port, |sa| {
+                self.send_received_outbound_packet(sa, data).await
+            })
+            .map(|_| ()),
         }
     }
 
@@ -738,7 +728,7 @@ impl UdpAssociationContext {
         Ok(())
     }
 
-    async fn send_received_respond_packet(&mut self, mut addr: Address, data: &[u8]) {
+    async fn send_received_respond_packet(&mut self, mut addr: ServerAddr, data: &[u8]) {
         trace!("udp relay {} <- {} received {} bytes", self.peer_addr, addr, data.len());
 
         // Keep association alive in map
@@ -749,9 +739,9 @@ impl UdpAssociationContext {
         // It is an undefined behavior in shadowsocks' protocol about how to handle IPv4-mapped-IPv6.
         // But for some implementations, they may expect the target address to be IPv4, because
         // the peer address is IPv4 when calling `sendto`.
-        if let Address::SocketAddress(SocketAddr::V6(ref v6)) = addr {
+        if let ServerAddr::SocketAddr(SocketAddr::V6(ref v6)) = addr {
             if let Some(v4) = to_ipv4_mapped(v6.ip()) {
-                addr = Address::SocketAddress(SocketAddr::new(v4.into(), v6.port()));
+                addr = ServerAddr::SocketAddr(SocketAddr::new(v4.into(), v6.port()));
             }
         }
 
@@ -760,12 +750,6 @@ impl UdpAssociationContext {
                 // Naive route, send data directly back to client without session
                 if let Err(err) = match &mut self.inbound {
                     MultiProtocolSocket::SS(socket) => socket.send_to(self.peer_addr, &addr, data).await,
-                    #[cfg(feature = "trojan")]
-                    MultiProtocolSocket::Trojan(udp_writer) => {
-                        udp_writer
-                            .write_to_mut(data, &shadowsocks::ServerAddr::from(addr.clone()))
-                            .await
-                    }
                     #[cfg(feature = "vless")]
                     MultiProtocolSocket::Vless(writer) => writer.write_to_mut(data).await,
                 } {
@@ -811,10 +795,6 @@ impl UdpAssociationContext {
                     MultiProtocolSocket::SS(socket) => {
                         socket.send_to_with_ctrl(self.peer_addr, &addr, &control, data).await
                     }
-                    #[cfg(feature = "trojan")]
-                    MultiProtocolSocket::Trojan(..) => {
-                        unreachable!()
-                    }
                     #[cfg(feature = "vless")]
                     MultiProtocolSocket::Vless(..) => {
                         unreachable!()
@@ -842,11 +822,5 @@ impl UdpAssociationContext {
     }
 }
 
-#[cfg(feature = "trojan")]
-pub mod trojan;
-
 #[cfg(feature = "vless")]
 pub mod vless;
-
-#[cfg(feature = "tuic")]
-pub mod tuic;

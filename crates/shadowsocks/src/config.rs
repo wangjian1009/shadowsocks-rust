@@ -303,7 +303,7 @@ pub struct ServerConfig {
     /// Server address
     addr: ServerAddr,
     /// Handshake timeout (connect)
-    timeout: Option<Duration>,
+    timeout: Duration,
 
     /// Remark (Profile Name), normally used as an identifier of this erver
     remarks: Option<String>,
@@ -312,10 +312,10 @@ pub struct ServerConfig {
     weight: ServerWeight,
 
     /// 请求超时配置
-    request_recv_timeout: Option<Duration>,
+    request_recv_timeout: Duration,
 
     /// 空闲超时配置
-    idle_timeout: Option<Duration>,
+    idle_timeout: Duration,
 
     /// 协议配置
     protocol: ServerProtocol,
@@ -440,21 +440,21 @@ impl ServerConfig {
     }
 
     /// 接收连接请求超时
-    pub fn request_recv_timeout(&self) -> Option<Duration> {
+    pub fn request_recv_timeout(&self) -> Duration {
         self.request_recv_timeout
     }
 
     pub fn set_request_recv_timeout(&mut self, timeout: Duration) {
-        self.request_recv_timeout = Some(timeout);
+        self.request_recv_timeout = timeout;
     }
 
     /// 无数据传输超时
-    pub fn idle_timeout(&self) -> Option<Duration> {
+    pub fn idle_timeout(&self) -> Duration {
         self.idle_timeout
     }
 
     pub fn set_idle_timeout(&mut self, idle_timeout: Duration) {
-        self.idle_timeout = Some(idle_timeout);
+        self.idle_timeout = idle_timeout;
     }
 
     /// Create a new `ServerConfig`
@@ -466,11 +466,11 @@ impl ServerConfig {
             addr: addr.into(),
             remarks: None,
             protocol,
-            timeout: None,
+            timeout: Duration::from_secs(30),
             weight: ServerWeight::new(),
 
-            request_recv_timeout: None,
-            idle_timeout: None,
+            request_recv_timeout: Duration::from_secs(60),
+            idle_timeout: Duration::from_secs(1740),
 
             #[cfg(feature = "transport")]
             acceptor_transport: None,
@@ -508,11 +508,11 @@ impl ServerConfig {
 
     /// Set timeout
     pub fn set_timeout(&mut self, timeout: Duration) {
-        self.timeout = Some(timeout);
+        self.timeout = timeout;
     }
 
     /// Timeout
-    pub fn timeout(&self) -> Option<Duration> {
+    pub fn timeout(&self) -> Duration {
         self.timeout
     }
 

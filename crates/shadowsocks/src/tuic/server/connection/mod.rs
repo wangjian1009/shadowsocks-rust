@@ -19,7 +19,6 @@ use std::{
 use tracing::{debug, error, info, trace, Instrument};
 
 use super::super::protocol::Command;
-use super::UdpSocketCreator;
 
 use crate::{
     canceler::{CancelWaiter, Canceler},
@@ -50,7 +49,6 @@ impl Connection {
         token: Arc<HashSet<[u8; 32]>>,
         auth_timeout: Duration,
         idle_timeout: Duration,
-        udp_socket_creator: Arc<Box<dyn UdpSocketCreator>>,
         server_policy: Arc<Box<dyn ServerPolicy>>,
         cancel_waiter: CancelWaiter,
     ) {
@@ -76,8 +74,7 @@ impl Connection {
 
         info!("establish");
 
-        let (udp_sessions, mut recv_pkt_rx, mut session_close_rx) =
-            UdpSessionMap::new(idle_timeout.clone(), udp_socket_creator.clone());
+        let (udp_sessions, mut recv_pkt_rx, mut session_close_rx) = UdpSessionMap::new(idle_timeout.clone());
         let is_closed = IsClosed::new();
         let is_authed = IsAuthenticated::new(is_closed.clone());
 

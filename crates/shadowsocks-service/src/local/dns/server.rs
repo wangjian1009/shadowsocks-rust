@@ -21,7 +21,7 @@ use tokio::{
     net::{TcpStream, UdpSocket},
     time,
 };
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, info, info_span, trace, warn, Instrument};
 use trust_dns_resolver::proto::{
     op::{header::MessageType, response_code::ResponseCode, Message, OpCode, Query},
     rr::{DNSClass, Name, RData, RecordType},
@@ -32,7 +32,7 @@ use shadowsocks::{
     lookup_then,
     net::{TcpListener, UdpSocket as ShadowUdpSocket},
     relay::{udprelay::MAXIMUM_UDP_PAYLOAD_SIZE, Address},
-    ServerAddr,
+    ServerAddr, ServerConfig,
 };
 
 use crate::{
@@ -76,8 +76,8 @@ impl Dns {
     pub async fn run(self, bind_addr: &ServerAddr, balancer: PingBalancer) -> io::Result<()> {
         let client = Arc::new(DnsClient::new(self.context.clone(), balancer, self.mode));
 
-        let tcp_fut = self.run_tcp_server(bind_addr, client.clone());
-        let udp_fut = self.run_udp_server(bind_addr, client);
+        let tcp_fut = self.run_tcp_server(bind_addr, client.clone()).in_current_span();
+        let udp_fut = self.run_udp_server(bind_addr, client).in_current_span();
 
         tokio::pin!(tcp_fut, udp_fut);
 
@@ -99,36 +99,49 @@ impl Dns {
         };
 
         info!(
-            "shadowsocks dns TCP listening on {}, local: {}, remote: {}",
+            local_dns = self.local_addr.to_string(),
+            remote_dns = self.remote_addr.to_string(),
+            "shadowsocks dns TCP listening on {}",
             listener.local_addr()?,
-            self.local_addr,
-            self.remote_addr
         );
 
+        let cancel_waiter = self.context.cancel_waiter();
         loop {
-            let (stream, peer_addr) = match listener.accept().await {
-                Ok(s) => s,
-                Err(err) => {
-                    error!("accept failed with error: {}", err);
-                    time::sleep(Duration::from_secs(1)).await;
-                    continue;
+            let (stream, peer_addr) = tokio::select! {
+                r = listener.accept() => {
+                    match r {
+                        Ok(s) => s,
+                        Err(err) => {
+                            error!("accept failed with error: {}", err);
+                            time::sleep(Duration::from_secs(1)).await;
+                            continue;
+                        }
+                    }
+                }
+                _ = cancel_waiter.wait() => {
+                    trace!("shadowsocks dns TCP listening canceled");
+                    break;
                 }
             };
 
-            tokio::spawn(Dns::handle_tcp_stream(
-                client.clone(),
-                stream,
-                peer_addr,
-                self.local_addr.clone(),
-                self.remote_addr.clone(),
-            ));
+            let span = info_span!("dns.client", net = "tcp", peer.addr = peer_addr.to_string());
+            tokio::spawn(
+                Dns::handle_tcp_stream(
+                    client.clone(),
+                    stream,
+                    self.local_addr.clone(),
+                    self.remote_addr.clone(),
+                )
+                .instrument(span),
+            );
         }
+
+        Ok(())
     }
 
     async fn handle_tcp_stream(
         client: Arc<DnsClient>,
         mut stream: TcpStream,
-        peer_addr: SocketAddr,
         local_addr: Arc<NameServerAddr>,
         remote_addr: Arc<Address>,
     ) -> io::Result<()> {
@@ -141,7 +154,7 @@ impl Dns {
                     break;
                 }
                 Err(err) => {
-                    error!("udp tcp {} read length failed, error: {}", peer_addr, err);
+                    error!(error = ?err, "read length failed");
                     return Err(err);
                 }
             }
@@ -157,7 +170,7 @@ impl Dns {
             match stream.read_exact(&mut message_buf).await {
                 Ok(..) => {}
                 Err(err) => {
-                    error!("dns tcp {} read message failed, error: {}", peer_addr, err);
+                    error!(error = ?err, "read message failed");
                     return Err(err);
                 }
             }
@@ -165,7 +178,7 @@ impl Dns {
             let message = match Message::from_vec(&message_buf) {
                 Ok(m) => m,
                 Err(err) => {
-                    error!("dns tcp {} parse message failed, error: {}", peer_addr, err);
+                    error!(error = ?err, "parse message failed");
                     return Err(err.into());
                 }
             };
@@ -173,7 +186,7 @@ impl Dns {
             let respond_message = match client.resolve(message, &local_addr, &remote_addr).await {
                 Ok(m) => m,
                 Err(err) => {
-                    error!("dns tcp {} lookup error: {}", peer_addr, err);
+                    error!(error = ?err, "lookup error");
                     return Err(err);
                 }
             };
@@ -187,7 +200,7 @@ impl Dns {
             stream.write_all(&buf).await?;
         }
 
-        trace!("dns tcp connection {} closed", peer_addr);
+        trace!("dns tcp connection closed");
 
         Ok(())
     }
@@ -205,43 +218,58 @@ impl Dns {
         let socket: UdpSocket = socket.into();
 
         info!(
-            "shadowsocks dns UDP listening on {}, local: {}, remote: {}",
+            local_dns = self.local_addr.to_string(),
+            remote_dns = self.remote_addr.to_string(),
+            "shadowsocks dns UDP listening on {}",
             socket.local_addr()?,
-            self.local_addr,
-            self.remote_addr
         );
 
         let listener = Arc::new(socket);
 
+        let cancel_waiter = self.context.cancel_waiter();
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         loop {
-            let (n, peer_addr) = match listener.recv_from(&mut buffer).await {
-                Ok(s) => s,
-                Err(err) => {
-                    error!("udp server recv_from failed with error: {}", err);
-                    time::sleep(Duration::from_secs(1)).await;
-                    continue;
+            let (n, peer_addr) = tokio::select! {
+                r = listener.recv_from(&mut buffer) => {
+                    match r {
+                        Ok(s) => s,
+                        Err(err) => {
+                            error!(error = ?err, "udp server recv_from failed with error");
+                            time::sleep(Duration::from_secs(1)).await;
+                            continue;
+                        }
+                    }
+                }
+                _ = cancel_waiter.wait() => {
+                    trace!("shadowsocks dns UDP listening canceled");
+                    return Ok(());
                 }
             };
 
-            let data = &buffer[..n];
-
-            let message = match Message::from_vec(data) {
-                Ok(m) => m,
-                Err(err) => {
-                    error!("dns udp {} query message parse error: {}", peer_addr, err);
-                    continue;
+            let span = info_span!("dns.client", net = "udp", peer.addr = peer_addr.to_string());
+            let message = {
+                let _ender = span.clone().entered();
+                let data = &buffer[..n];
+                match Message::from_vec(data) {
+                    Ok(m) => m,
+                    Err(err) => {
+                        error!(error = ?err, "query message parse error");
+                        continue;
+                    }
                 }
             };
 
-            tokio::spawn(Dns::handle_udp_packet(
-                client.clone(),
-                listener.clone(),
-                peer_addr,
-                message,
-                self.local_addr.clone(),
-                self.remote_addr.clone(),
-            ));
+            tokio::spawn(
+                Dns::handle_udp_packet(
+                    client.clone(),
+                    listener.clone(),
+                    peer_addr,
+                    message,
+                    self.local_addr.clone(),
+                    self.remote_addr.clone(),
+                )
+                .instrument(span),
+            );
         }
     }
 
@@ -256,7 +284,7 @@ impl Dns {
         let respond_message = match client.resolve(message, &local_addr, &remote_addr).await {
             Ok(m) => m,
             Err(err) => {
-                error!("dns udp {} lookup failed, error: {}", peer_addr, err);
+                error!(error = ?err, "lookup failed");
                 return Err(err);
             }
         };
@@ -493,7 +521,9 @@ impl DnsClient {
         } else if request.query_count() > 0 {
             // Make queries according to ACL rules
 
-            let (r, forward) = self.acl_lookup(&request.queries()[0], local_addr, remote_addr).await;
+            let query = &request.queries()[0];
+            let span = info_span!("dns.query", query = query.to_string());
+            let (r, forward) = self.acl_lookup(query, local_addr, remote_addr).instrument(span).await;
             if let Ok(result) = r {
                 for rec in result.answers() {
                     trace!("dns answer: {:?}", rec);
@@ -518,9 +548,6 @@ impl DnsClient {
         local_addr: &NameServerAddr,
         remote_addr: &Address,
     ) -> (io::Result<Message>, bool) {
-        // Start querying name servers
-        debug!("DNS lookup {:?} {}", query.query_type(), query.name());
-
         // 原版的检查对于域名没有在acl配置中的，交由默认处理
         // 此处将默认处理改为根据acl的黑、白名单配置确定
         let mut acl_check_result = should_forward_by_query(&self.context, &self.balancer, query);
@@ -547,13 +574,17 @@ impl DnsClient {
         let decider = async {
             let local_response = self.lookup_local(query, local_addr).await;
             if should_forward_by_response(self.context.acl(), &local_response, query) {
+                info!("local response blocked");
                 None
             } else {
                 Some(local_response)
             }
-        };
+        }
+        .instrument(info_span!("dns.local"));
 
-        let remote_response_fut = self.lookup_remote(query, remote_addr);
+        let remote_response_fut = self
+            .lookup_remote(query, remote_addr)
+            .instrument(info_span!("dns.remote"));
         tokio::pin!(remote_response_fut, decider);
 
         let mut use_remote = false;
@@ -610,21 +641,24 @@ impl DnsClient {
         match self.mode {
             Mode::TcpOnly => {
                 let server = self.balancer.best_tcp_server();
-                self.client_cache
-                    .lookup_remote(&self.context, server.as_ref(), remote_addr, message, false)
+                self.lookup_remote_via_miner(message, remote_addr, server.as_ref(), false, false)
                     .await
-                    .map_err(From::from)
             }
             Mode::UdpOnly => {
                 let server = self.balancer.best_udp_server();
-                self.client_cache
-                    .lookup_remote(&self.context, server.as_ref(), remote_addr, message, true)
+                self.lookup_remote_via_miner(message, remote_addr, server.as_ref(), true, false)
                     .await
-                    .map_err(From::from)
             }
             Mode::TcpAndUdp => {
-                // Query TCP & UDP simutaneously
+                let udp_server = self.balancer.best_udp_server();
+                if !Self::support_udp_lookup(udp_server.server_config()) {
+                    let server = self.balancer.best_tcp_server();
+                    return self
+                        .lookup_remote_via_miner(message, remote_addr, server.as_ref(), false, false)
+                        .await;
+                }
 
+                // Query TCP & UDP simutaneously
                 let message2 = message.clone();
                 let tcp_fut = async {
                     // For most cases UDP query will return in 1s,
@@ -635,16 +669,10 @@ impl DnsClient {
                     time::sleep(Duration::from_millis(sleep_time)).await;
 
                     let server = self.balancer.best_tcp_server();
-                    self.client_cache
-                        .lookup_remote(&self.context, server.as_ref(), remote_addr, message2, false)
+                    self.lookup_remote_via_miner(message2, remote_addr, server.as_ref(), false, true)
                         .await
                 };
-                let udp_fut = async {
-                    let server = self.balancer.best_udp_server();
-                    self.client_cache
-                        .lookup_remote(&self.context, server.as_ref(), remote_addr, message, true)
-                        .await
-                };
+                let udp_fut = self.lookup_remote_via_miner(message, remote_addr, udp_server.as_ref(), true, false);
 
                 tokio::pin!(tcp_fut);
                 tokio::pin!(udp_fut);
@@ -661,6 +689,41 @@ impl DnsClient {
                 }
             }
         }
+    }
+
+    async fn lookup_remote_via_miner(
+        &self,
+        message: Message,
+        remote_addr: &Address,
+        server: &super::super::loadbalancing::ServerIdent,
+        is_udp: bool,
+        is_second: bool,
+    ) -> io::Result<Message> {
+        let span = info_span!(
+            "miner",
+            addr = server.server_config().addr().to_string(),
+            score = server.tcp_score().score(),
+            net = if is_udp { "udp" } else { "tcp" },
+            dns.mode = self.mode.to_string(),
+            dns.order = if is_second { "second" } else { "first" },
+        );
+
+        self.client_cache
+            .lookup_remote(&self.context, server, remote_addr, message, false)
+            .instrument(span)
+            .await
+            .map_err(From::from)
+    }
+
+    fn support_udp_lookup(server_config: &ServerConfig) -> bool {
+        if let Some(b) = server_config.protocol().support_native_packet() {
+            return b;
+        }
+
+        server_config
+            .connector_transport()
+            .map(|e| e.support_native_packet())
+            .unwrap_or(true)
     }
 
     async fn lookup_local(&self, query: &Query, local_addr: &NameServerAddr) -> io::Result<Message> {

@@ -9,6 +9,8 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use crate::ServerAddr;
+
 pub const TUIC_PROTOCOL_VERSION: u8 = 0x04;
 
 /// Command
@@ -325,6 +327,24 @@ impl Display for Address {
         match self {
             Self::DomainAddress(addr, port) => write!(f, "{addr}:{port}"),
             Self::SocketAddress(addr) => write!(f, "{addr}"),
+        }
+    }
+}
+
+impl From<Address> for ServerAddr {
+    fn from(addr: Address) -> ServerAddr {
+        match addr {
+            Address::SocketAddress(sa) => ServerAddr::SocketAddr(sa),
+            Address::DomainAddress(dn, port) => ServerAddr::DomainName(dn, port),
+        }
+    }
+}
+
+impl From<ServerAddr> for Address {
+    fn from(addr: ServerAddr) -> Address {
+        match addr {
+            ServerAddr::SocketAddr(sa) => Address::SocketAddress(sa),
+            ServerAddr::DomainName(dn, port) => Address::DomainAddress(dn, port),
         }
     }
 }

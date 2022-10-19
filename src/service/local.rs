@@ -10,17 +10,13 @@ use std::{
     time::Duration,
 };
 
-use cfg_if::cfg_if;
-
 use clap::{Arg, ArgGroup, ArgMatches, Command, ErrorKind as ClapErrorKind};
 use futures::future::{self, Either};
 use tokio::{self, runtime::Builder};
-use tracing::info;
+use tracing::{error, info};
 
 #[cfg(feature = "local-redir")]
 use shadowsocks_service::config::RedirType;
-#[cfg(any(feature = "local-dns", feature = "local-tunnel"))]
-use shadowsocks_service::shadowsocks::relay::socks5::Address;
 use shadowsocks_service::{
     acl::AccessControl,
     config::{read_variable_field_value, Config, ConfigType, LocalConfig, ProtocolType},
@@ -224,13 +220,37 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
                 Arg::new("LOG_WITHOUT_TIME")
                     .long("log-without-time")
                     .help("Log without datetime prefix"),
-            )
-            .arg(
-                Arg::new("LOG_TEMPLATE")
-                    .long("log-template")
-                    .takes_value(true)
-                    .help("log template file name"),
             );
+    }
+
+    #[cfg(feature = "logging-file")]
+    {
+        app = app.arg(
+            Arg::new("LOG_TEMPLATE")
+                .long("log-template")
+                .takes_value(true)
+                .help("log template file name"),
+        );
+    }
+
+    #[cfg(feature = "logging-apm")]
+    {
+        app = app.arg(
+            Arg::new("LOG_APM_URL")
+                .long("log-apm-url")
+                .takes_value(true)
+                .help("log apm server url"),
+        );
+    }
+
+    #[cfg(feature = "logging-jaeger")]
+    {
+        app = app.arg(
+            Arg::new("LOG_JAEGER_URL")
+                .long("log-jaeger-url")
+                .takes_value(true)
+                .help("log jaeger server url"),
+        );
     }
 
     #[cfg(feature = "local-tunnel")]
@@ -487,7 +507,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
 
 /// Program entrance `main`
 pub fn main(matches: &ArgMatches) -> ExitCode {
-    let (config, runtime) = {
+    let (config, runtime, service_config) = {
         let config_path_opt = matches
             .value_of("CONFIG")
             .map(|p| {
@@ -537,11 +557,6 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             None => ServiceConfig::default(),
         };
         service_config.set_options(matches);
-
-        #[cfg(feature = "logging")]
-        logging::init_with_config("sslocal", &service_config.log);
-
-        tracing::trace!("{:?}", service_config);
 
         let mut config = match config_opt {
             Some(config) => match Config::load_from_str(&config, ConfigType::Local) {
@@ -719,7 +734,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             }
 
             #[cfg(feature = "local-tunnel")]
-            match matches.value_of_t::<Address>("FORWARD_ADDR") {
+            match matches.value_of_t::<ServerAddr>("FORWARD_ADDR") {
                 Ok(addr) => local_config.forward_addr = Some(addr),
                 Err(ref err) if err.kind() == ClapErrorKind::ArgumentNotFound => {}
                 Err(err) => err.exit(),
@@ -746,27 +761,27 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
             #[cfg(feature = "local-dns")]
             {
-                use shadowsocks_service::{local::dns::NameServerAddr, shadowsocks::relay::socks5::AddressError};
+                use shadowsocks_service::{local::dns::NameServerAddr, shadowsocks::config::ServerAddrError};
                 use std::{net::SocketAddr, str::FromStr};
 
-                struct RemoteDnsAddress(Address);
+                struct RemoteDnsAddress(ServerAddr);
 
                 impl FromStr for RemoteDnsAddress {
-                    type Err = AddressError;
+                    type Err = ServerAddrError;
 
                     fn from_str(a: &str) -> Result<RemoteDnsAddress, Self::Err> {
                         if let Ok(ip) = a.parse::<IpAddr>() {
-                            return Ok(RemoteDnsAddress(Address::SocketAddress(SocketAddr::new(ip, 53))));
+                            return Ok(RemoteDnsAddress(ServerAddr::SocketAddr(SocketAddr::new(ip, 53))));
                         }
 
                         if let Ok(saddr) = a.parse::<SocketAddr>() {
-                            return Ok(RemoteDnsAddress(Address::SocketAddress(saddr)));
+                            return Ok(RemoteDnsAddress(ServerAddr::SocketAddr(saddr)));
                         }
 
                         if a.find(':').is_some() {
-                            a.parse::<Address>().map(RemoteDnsAddress)
+                            a.parse::<ServerAddr>().map(RemoteDnsAddress)
                         } else {
-                            Ok(RemoteDnsAddress(Address::DomainNameAddress(a.to_owned(), 53)))
+                            Ok(RemoteDnsAddress(ServerAddr::DomainName(a.to_owned(), 53)))
                         }
                     }
                 }
@@ -1017,7 +1032,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             crate::sys::run_as_user(uname);
         }
 
-        info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
+        println!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
 
         let mut builder = match service_config.runtime.mode {
             RuntimeMode::SingleThread => Builder::new_current_thread(),
@@ -1034,89 +1049,91 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
 
-        (config, runtime)
+        (config, runtime, service_config)
     };
 
     runtime.block_on(async move {
-        let config_path = config.config_path.clone();
+        #[cfg(feature = "logging")]
+        let log_guard = logging::init_with_config("sslocal", &service_config.log);
 
-        let instance = create_local(config).await.expect("create local");
+        tracing::trace!("{:?}", service_config);
+
+        let config_path = config.config_path.clone();
+        let canceler = Arc::new(Canceler::new());
+
+        let instance = create_local(config, canceler.waiter()).await.expect("create local");
 
         if let Some(config_path) = config_path {
-            launch_reload_server_task(config_path, instance.server_balancer().clone());
+            launch_reload_server_task(config_path, instance.server_balancer().clone(), canceler.waiter());
         }
 
-        let app_cancel = Arc::new(Canceler::new());
-
-        let abort_signal = monitor::create_signal_monitor(app_cancel);
-        let server = instance.wait_until_exit();
+        let abort_signal = monitor::create_signal_monitor(canceler);
+        let server = instance.run();
 
         tokio::pin!(abort_signal);
         tokio::pin!(server);
 
-        match future::select(server, abort_signal).await {
+        let exit_code = match future::select(server, abort_signal).await {
             // Server future resolved without an error. This should never happen.
             Either::Left((Ok(..), ..)) => {
-                eprintln!("server exited unexpectedly");
-                crate::EXIT_CODE_SERVER_EXIT_UNEXPECTEDLY.into()
+                info!("all server exited");
+                ExitCode::SUCCESS
             }
             // Server future resolved with error, which are listener errors in most cases
             Either::Left((Err(err), ..)) => {
-                eprintln!("server aborted with {}", err);
+                error!(error = ?err, "server aborted");
                 crate::EXIT_CODE_SERVER_ABORTED.into()
             }
             // The abort signal future resolved. Means we should just exit.
             Either::Right(_) => ExitCode::SUCCESS,
-        }
+        };
+
+        #[cfg(feature = "logging")]
+        log_guard.close().await;
+
+        exit_code
     })
 }
 
-cfg_if! {
-    if #[cfg(all(feature = "logging", feature = "tracing"))] {
-        struct TracingWriter;
-
-        impl std::io::Write for TracingWriter {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                print!(
-                    "{}",
-                    std::str::from_utf8(buf).expect("tried to log invalid UTF-8")
-                );
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> io::Result<()> {
-                io::stdout().flush()
-            }
-        }
-    }
-}
+#[cfg(unix)]
+use shadowsocks_service::shadowsocks::canceler::CancelWaiter;
 
 #[cfg(unix)]
-fn launch_reload_server_task(config_path: PathBuf, balancer: PingBalancer) {
+fn launch_reload_server_task(config_path: PathBuf, balancer: PingBalancer, cancel_waiter: CancelWaiter) {
     use tokio::signal::unix::{signal, SignalKind};
-    use tracing::error;
+    use tracing::{info_span, Instrument};
 
-    tokio::spawn(async move {
-        let mut sigusr1 = signal(SignalKind::user_defined1()).expect("signal");
+    tokio::spawn(
+        async move {
+            let mut sigusr1 = signal(SignalKind::user_defined1()).expect("signal");
 
-        while sigusr1.recv().await.is_some() {
-            let config = match Config::load_from_file(&config_path, ConfigType::Local) {
-                Ok(c) => c,
-                Err(err) => {
-                    error!("auto-reload {} failed with error: {}", config_path.display(), err);
-                    continue;
+            while tokio::select! {
+                r = sigusr1.recv() => { r.is_some() },
+                _ = cancel_waiter.wait() => {
+                    info!("canceled");
+                    return;
                 }
-            };
+            } {
+                let config = match Config::load_from_file(&config_path, ConfigType::Local) {
+                    Ok(c) => c,
+                    Err(err) => {
+                        error!("auto-reload {} failed with error: {}", config_path.display(), err);
+                        continue;
+                    }
+                };
 
-            let servers = config.server;
-            info!("auto-reload {} with {} servers", config_path.display(), servers.len());
+                let servers = config.server;
+                info!("auto-reload {} with {} servers", config_path.display(), servers.len());
 
-            let r = balancer.reset_servers(servers).await;
+                let r = balancer.reset_servers(servers).await;
 
-            if let Err(err) = r {
-                error!("auto-reload {} but found error: {}", config_path.display(), err);
+                if let Err(err) = r {
+                    error!("auto-reload {} but found error: {}", config_path.display(), err);
+                }
             }
         }
-    });
+        .instrument(info_span!("reload")),
+    );
 }
 
 #[cfg(not(feature = "local-android-protect"))]

@@ -1,7 +1,7 @@
 use super::super::super::protocol::Command as TuicCommand;
 use super::{
     stream::{IncomingUniStreams, RecvStream},
-    Address, Connection, UdpRelayMode,
+    Connection, UdpRelayMode,
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -14,6 +14,8 @@ use tokio::{
     io::AsyncReadExt,
     sync::oneshot::{self, error::RecvError, Receiver as OneshotReceiver, Sender as OneshotSender},
 };
+
+use crate::ServerAddr;
 
 pub async fn listen_incoming(mut next_incoming_rx: UdpRelayMode<Receiver<Datagrams>, Receiver<IncomingUniStreams>>) {
     loop {
@@ -68,7 +70,7 @@ pub async fn listen_incoming(mut next_incoming_rx: UdpRelayMode<Receiver<Datagra
 
 impl Connection {
     async fn process_incoming_datagram(self, pkt: Bytes) {
-        async fn parse_header(pkt: Bytes) -> Result<(u32, Bytes, Address)> {
+        async fn parse_header(pkt: Bytes) -> Result<(u32, Bytes, ServerAddr)> {
             let cmd = TuicCommand::read_from(&mut pkt.as_ref()).await?;
             let cmd_len = cmd.serialized_len();
 
@@ -76,7 +78,7 @@ impl Connection {
                 TuicCommand::Packet { assoc_id, len, addr } => Ok((
                     assoc_id,
                     pkt.slice(cmd_len..cmd_len + len as usize),
-                    Address::from(addr),
+                    ServerAddr::from(addr),
                 )),
                 _ => Err(Error::new(
                     ErrorKind::InvalidData,
@@ -92,7 +94,7 @@ impl Connection {
     }
 
     async fn process_incoming_uni_stream(self, recv: RecvStream) {
-        async fn parse_header(mut recv: RecvStream) -> Result<(u32, Bytes, Address)> {
+        async fn parse_header(mut recv: RecvStream) -> Result<(u32, Bytes, ServerAddr)> {
             let cmd = TuicCommand::read_from(&mut recv).await?;
 
             match cmd {
@@ -100,7 +102,7 @@ impl Connection {
                     let mut buf = vec![0; len as usize];
                     recv.read_exact(&mut buf).await?;
                     let pkt = Bytes::from(buf);
-                    Ok((assoc_id, pkt, Address::from(addr)))
+                    Ok((assoc_id, pkt, ServerAddr::from(addr)))
                 }
                 _ => Err(Error::new(
                     ErrorKind::InvalidData,

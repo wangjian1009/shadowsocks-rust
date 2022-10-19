@@ -11,15 +11,19 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     time,
 };
+use tracing::error;
 
 use crate::{
-    config::{ServerConfig, TrojanConfig},
+    config::ServerConfig,
     net::{ConnectOpts, Destination},
-    relay::Address,
     transport::{Connection, Connector, DeviceOrGuard, StreamConnection},
+    ServerAddr,
 };
 
-use super::protocol::RequestHeader;
+use super::super::{
+    protocol::{Address, RequestHeader},
+    Config,
+};
 
 enum ClientStreamWriteState {
     Connect(RequestHeader),
@@ -29,13 +33,13 @@ enum ClientStreamWriteState {
 
 /// A stream for sending / receiving data stream from remote server via trojan' proxy server
 #[pin_project]
-pub struct ClientStream<S> {
+pub struct DelayConnectStream<S> {
     #[pin]
     stream: S,
     state: ClientStreamWriteState,
 }
 
-impl<S: StreamConnection> StreamConnection for ClientStream<S> {
+impl<S: StreamConnection> StreamConnection for DelayConnectStream<S> {
     fn check_connected(&self) -> bool {
         self.stream.check_connected()
     }
@@ -50,103 +54,47 @@ impl<S: StreamConnection> StreamConnection for ClientStream<S> {
     }
 }
 
-impl<S: StreamConnection> ClientStream<S> {
+impl<S: StreamConnection> DelayConnectStream<S> {
     /// Connect to target `addr` via trojan' server configured by `svr_cfg`, maps `TcpStream` to customized stream with `map_fn`
     pub async fn connect_stream<C, F>(
         connector: &C,
         svr_cfg: &ServerConfig,
-        svr_trojan_cfg: &TrojanConfig,
-        addr: Address,
+        svr_trojan_cfg: &Config,
+        addr: ServerAddr,
         opts: &ConnectOpts,
         map_fn: F,
-    ) -> io::Result<ClientStream<S>>
+    ) -> io::Result<DelayConnectStream<S>>
     where
         C: Connector,
         F: FnOnce(C::TS) -> S,
     {
         let destination = Destination::Tcp(svr_cfg.external_addr().clone());
 
-        let stream = match svr_cfg.timeout() {
-            Some(d) => match time::timeout(d, connector.connect(&destination, opts)).await {
-                Ok(Ok(s)) => s,
-                Ok(Err(e)) => return Err(e),
-                Err(..) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("connect {} timeout", svr_cfg.addr()),
-                    ))
-                }
-            },
-            None => connector.connect(&destination, opts).await?,
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(&destination, opts)).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                error!(error = ?e, "connect error");
+                return Err(e);
+            }
+            Err(e) => {
+                error!(error = ?e, "connect timeout");
+                return Err(io::ErrorKind::TimedOut.into());
+            }
         };
 
-        tracing::trace!(
-            "connected trojan tcp remote {}{} (outbound: {}) with {:?}",
-            svr_cfg.addr(),
-            svr_cfg.external_addr(),
-            svr_cfg.acceptor_transport_tag(),
-            opts
-        );
-
         match stream {
-            Connection::Stream(stream) => Ok(ClientStream::new_stream(map_fn(stream), svr_trojan_cfg, addr)),
+            Connection::Stream(stream) => Ok(DelayConnectStream::new_stream(map_fn(stream), svr_trojan_cfg, addr)),
             Connection::Packet { .. } => panic!(),
         }
     }
 
-    /// Connect to target `addr` via trojan' server configured by `svr_cfg`, maps `TcpStream` to customized stream with `map_fn`
-    pub async fn connect_packet<C, F>(
-        connector: &C,
-        svr_cfg: &ServerConfig,
-        svr_trojan_cfg: &TrojanConfig,
-        opts: &ConnectOpts,
-        map_fn: F,
-    ) -> io::Result<ClientStream<S>>
-    where
-        C: Connector,
-        F: FnOnce(C::TS) -> S,
-    {
-        let destination = Destination::Tcp(svr_cfg.external_addr().clone());
-
-        let stream = match svr_cfg.timeout() {
-            Some(d) => match time::timeout(d, connector.connect(&destination, opts)).await {
-                Ok(Ok(s)) => s,
-                Ok(Err(e)) => return Err(e),
-                Err(..) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("connect {} timeout", svr_cfg.addr()),
-                    ))
-                }
-            },
-            None => connector.connect(&destination, opts).await?,
-        };
-
-        tracing::trace!(
-            "connected trojan tcp remote {}{} (outbound: {}) with {:?}",
-            svr_cfg.addr(),
-            svr_cfg.external_addr(),
-            svr_cfg.acceptor_transport_tag(),
-            opts
-        );
-
-        match stream {
-            Connection::Stream(stream) => Ok(ClientStream::new_packet(map_fn(stream), svr_trojan_cfg)),
-            Connection::Packet { .. } => panic!(),
-        }
-    }
-
-    pub fn new_stream(stream: S, svr_trojan_cfg: &TrojanConfig, addr: Address) -> ClientStream<S> {
-        ClientStream {
+    fn new_stream(stream: S, svr_trojan_cfg: &Config, addr: ServerAddr) -> DelayConnectStream<S> {
+        DelayConnectStream {
             stream,
-            state: ClientStreamWriteState::Connect(RequestHeader::TcpConnect(svr_trojan_cfg.hash().clone(), addr)),
-        }
-    }
-
-    pub fn new_packet(stream: S, svr_trojan_cfg: &TrojanConfig) -> ClientStream<S> {
-        ClientStream {
-            stream,
-            state: ClientStreamWriteState::Connect(RequestHeader::UdpAssociate(svr_trojan_cfg.hash().clone())),
+            state: ClientStreamWriteState::Connect(RequestHeader::TcpConnect(
+                svr_trojan_cfg.hash().clone(),
+                Address::from(addr),
+            )),
         }
     }
 
@@ -155,7 +103,7 @@ impl<S: StreamConnection> ClientStream<S> {
     }
 }
 
-impl<S> AsyncRead for ClientStream<S>
+impl<S> AsyncRead for DelayConnectStream<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -166,7 +114,7 @@ where
     }
 }
 
-impl<S> AsyncWrite for ClientStream<S>
+impl<S> AsyncWrite for DelayConnectStream<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {

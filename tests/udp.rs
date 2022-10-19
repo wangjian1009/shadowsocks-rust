@@ -61,7 +61,7 @@ fn start_server() {
 }
 
 fn start_local() {
-    tokio::spawn(run_local(get_cli_config()));
+    tokio::spawn(run_local(get_cli_config(), CancelWaiter::none()));
 }
 
 fn start_udp_echo_server() {

@@ -8,7 +8,7 @@ use shadowsocks::{
     context::{Context, SharedContext},
     dns_resolver::DnsResolver,
     net::{ConnectOpts, FlowStat},
-    relay::Address,
+    ServerAddr,
 };
 
 use crate::{acl::AccessControl, config::SecurityConfig};
@@ -61,7 +61,7 @@ pub struct ServiceContext {
     limit_connection_close_delay: Option<Duration>,
 
     #[cfg(feature = "server-mock")]
-    mock_servers: Option<HashMap<Address, ServerMockProtocol>>,
+    mock_servers: Option<HashMap<ServerAddr, ServerMockProtocol>>,
 }
 
 impl Default for ServiceContext {
@@ -157,7 +157,7 @@ impl ServiceContext {
     }
 
     #[cfg(feature = "server-mock")]
-    pub fn set_mock_server_protocol(&mut self, addr: Address, protocol: ServerMockProtocol) {
+    pub fn set_mock_server_protocol(&mut self, addr: ServerAddr, protocol: ServerMockProtocol) {
         if self.mock_servers.is_none() {
             self.mock_servers = Some(HashMap::new());
         }
@@ -166,7 +166,7 @@ impl ServiceContext {
     }
 
     #[cfg(feature = "server-mock")]
-    pub fn mock_server_protocol(&self, addr: &Address) -> Option<ServerMockProtocol> {
+    pub fn mock_server_protocol(&self, addr: &ServerAddr) -> Option<ServerMockProtocol> {
         match &self.mock_servers {
             Some(mock_servers) => mock_servers.get(addr).copied(),
 
@@ -210,7 +210,7 @@ impl ServiceContext {
     }
 
     /// Check if target should be bypassed
-    pub async fn check_outbound_blocked(&self, addr: &Address) -> bool {
+    pub async fn check_outbound_blocked(&self, addr: &ServerAddr) -> bool {
         match self.acl {
             None => false,
             Some(ref acl) => acl.check_outbound_blocked(&self.context, addr).await,

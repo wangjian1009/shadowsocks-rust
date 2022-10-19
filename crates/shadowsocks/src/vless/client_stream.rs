@@ -17,9 +17,9 @@ use tokio::{
 use crate::{
     config::ServerConfig,
     net::{ConnectOpts, Destination},
-    relay::Address,
     transport::{Connection, Connector, DeviceOrGuard, StreamConnection},
     vless::{new_error, Config},
+    ServerAddr,
 };
 
 use super::{encoding, protocol};
@@ -69,7 +69,7 @@ impl<S: StreamConnection> ClientStream<S> {
         svr_cfg: &ServerConfig,
         svr_vless_cfg: &Config,
         command: protocol::RequestCommand,
-        target_address: Option<Address>,
+        target_address: Option<ServerAddr>,
         opts: &ConnectOpts,
         map_fn: F,
     ) -> io::Result<ClientStream<S>>
@@ -79,18 +79,15 @@ impl<S: StreamConnection> ClientStream<S> {
     {
         let destination = Destination::Tcp(svr_cfg.external_addr().clone());
 
-        let stream = match svr_cfg.timeout() {
-            Some(d) => match time::timeout(d, connector.connect(&destination, opts)).await {
-                Ok(Ok(s)) => s,
-                Ok(Err(e)) => return Err(e),
-                Err(..) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("connect {} timeout", svr_cfg.addr()),
-                    ))
-                }
-            },
-            None => connector.connect(&destination, opts).await?,
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(&destination, opts)).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return Err(e),
+            Err(..) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("connect {} timeout", svr_cfg.addr()),
+                ))
+            }
         };
 
         tracing::trace!(
@@ -108,7 +105,7 @@ impl<S: StreamConnection> ClientStream<S> {
                     version: 0,
                     user: Self::pick_user(svr_vless_cfg)?.account.id.clone(),
                     command,
-                    address: target_address,
+                    address: target_address.map(|o| protocol::Address::from(o)),
                 };
 
                 Ok(ClientStream::new(map_fn(stream), request))

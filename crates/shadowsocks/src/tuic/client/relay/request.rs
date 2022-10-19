@@ -1,4 +1,4 @@
-use super::{stream::BiStream, Address, Connection};
+use super::{stream::BiStream, Connection};
 use bytes::Bytes;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -19,6 +19,8 @@ use tokio::{
     },
     time,
 };
+
+use crate::ServerAddr;
 
 pub fn listen_requests(
     conn: Arc<AsyncMutex<Option<Connection>>>,
@@ -71,7 +73,7 @@ async fn process_request(conn: Arc<AsyncMutex<Option<Connection>>>, req: Request
 
 pub enum Request {
     Connect {
-        addr: Address,
+        addr: ServerAddr,
         tx: ConnectResponseSender,
     },
     Associate {
@@ -83,13 +85,13 @@ pub enum Request {
 
 type ConnectResponseSender = OneshotSender<BiStream>;
 type ConnectResponseReceiver = OneshotReceiver<BiStream>;
-pub type AssociateSendPacketSender = MpscSender<(Bytes, Address)>;
-type AssociateSendPacketReceiver = MpscReceiver<(Bytes, Address)>;
-type AssociateRecvPacketSender = MpscSender<(Bytes, Address)>;
-pub type AssociateRecvPacketReceiver = MpscReceiver<(Bytes, Address)>;
+pub type AssociateSendPacketSender = MpscSender<(Bytes, ServerAddr)>;
+type AssociateSendPacketReceiver = MpscReceiver<(Bytes, ServerAddr)>;
+type AssociateRecvPacketSender = MpscSender<(Bytes, ServerAddr)>;
+pub type AssociateRecvPacketReceiver = MpscReceiver<(Bytes, ServerAddr)>;
 
 impl Request {
-    pub fn new_connect(addr: Address) -> (Self, ConnectResponseReceiver) {
+    pub fn new_connect(addr: ServerAddr) -> (Self, ConnectResponseReceiver) {
         let (tx, rx) = oneshot::channel();
         (Request::Connect { addr, tx }, rx)
     }

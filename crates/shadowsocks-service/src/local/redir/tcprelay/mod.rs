@@ -95,13 +95,22 @@ pub async fn run_tcp_redir(
         redir_ty, actual_local_addr
     );
 
+    let cancel_waiter = context.cancel_waiter();
     loop {
-        let (socket, peer_addr) = match listener.accept().await {
-            Ok(s) => s,
-            Err(err) => {
-                error!("accept failed with error: {}", err);
-                time::sleep(Duration::from_secs(1)).await;
-                continue;
+        let (socket, peer_addr) = tokio::select! {
+            r = listener.accept() => {
+                match r {
+                    Ok(s) => s,
+                    Err(err) => {
+                        error!("accept failed with error: {}", err);
+                        time::sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
+                }
+            }
+            _ = cancel_waiter.wait() => {
+                tracing::trace!("canceled");
+                return Ok(())
             }
         };
 

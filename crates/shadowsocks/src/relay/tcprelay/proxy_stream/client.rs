@@ -25,14 +25,15 @@ use crate::{
     crypto::CipherKind,
     net::{ConnectOpts, Destination},
     relay::{
-        socks5::Address,
+        socks5,
         tcprelay::crypto_io::{CryptoRead, CryptoStream, CryptoWrite, StreamType},
     },
     transport::{Connection, Connector, DeviceOrGuard, StreamConnection},
+    ServerAddr,
 };
 
 enum ProxyClientStreamWriteState {
-    Connect(Address),
+    Connect(ServerAddr),
     Connecting(BytesMut),
     Connected,
 }
@@ -77,7 +78,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         connector: &C,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
-        addr: &Address,
+        addr: ServerAddr,
     ) -> io::Result<ProxyClientStream<S>>
     where
         C: Connector + Connector<TS = S>,
@@ -91,7 +92,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         connector: &C,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
-        addr: &Address,
+        addr: ServerAddr,
         opts: &ConnectOpts,
     ) -> io::Result<ProxyClientStream<S>>
     where
@@ -106,7 +107,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         connector: &C,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
-        addr: &Address,
+        addr: ServerAddr,
         map_fn: F,
     ) -> io::Result<ProxyClientStream<S>>
     where
@@ -131,7 +132,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         connector: &C,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
-        addr: &Address,
+        addr: ServerAddr,
         opts: &ConnectOpts,
         map_fn: F,
     ) -> io::Result<ProxyClientStream<S>>
@@ -141,18 +142,15 @@ impl<S: StreamConnection> ProxyClientStream<S> {
     {
         let destination = Destination::Tcp(svr_cfg.external_addr().clone());
 
-        let stream = match svr_cfg.timeout() {
-            Some(d) => match time::timeout(d, connector.connect(&destination, opts)).await {
-                Ok(Ok(s)) => s,
-                Ok(Err(e)) => return Err(e),
-                Err(..) => {
-                    return Err(io::Error::new(
-                        ErrorKind::TimedOut,
-                        format!("connect {} timeout", svr_cfg.addr()),
-                    ))
-                }
-            },
-            None => connector.connect(&destination, opts).await?,
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(&destination, opts)).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => return Err(e),
+            Err(..) => {
+                return Err(io::Error::new(
+                    ErrorKind::TimedOut,
+                    format!("connect {} timeout", svr_cfg.addr()),
+                ))
+            }
         };
 
         trace!(
@@ -176,15 +174,12 @@ impl<S: StreamConnection> ProxyClientStream<S> {
     /// Create a `ProxyClientStream` with a connected `stream` to a shadowsocks' server
     ///
     /// NOTE: `stream` must be connected to the server with the same configuration as `svr_cfg`, otherwise strange errors would occurs
-    pub fn from_stream<A>(
+    pub fn from_stream(
         context: SharedContext,
         stream: S,
         svr_ss_cfg: &ShadowsocksConfig,
-        addr: A,
-    ) -> ProxyClientStream<S>
-    where
-        A: Into<Address>,
-    {
+        addr: ServerAddr,
+    ) -> ProxyClientStream<S> {
         let addr = addr.into();
         let stream = CryptoStream::from_stream_with_identity(
             &context,
@@ -285,10 +280,11 @@ where
 }
 
 #[inline]
-fn make_first_packet_buffer(method: CipherKind, addr: &Address, buf: &[u8]) -> BytesMut {
+fn make_first_packet_buffer(method: CipherKind, addr: &ServerAddr, buf: &[u8]) -> BytesMut {
     // Target Address should be sent with the first packet together,
     // which would prevent from being detected.
 
+    let addr = socks5::Address::from(addr);
     let addr_length = addr.serialized_len();
     let mut buffer = BytesMut::new();
 

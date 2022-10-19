@@ -9,20 +9,21 @@ use shadowsocks::{
     config::{ServerConfig, ServerProtocol, ServerType, ShadowsocksConfig},
     context::{Context, SharedContext},
     crypto::CipherKind,
-    relay::{socks5::Address, udprelay::ProxySocket},
+    relay::udprelay::ProxySocket,
+    ServerAddr,
 };
 
 async fn handle_udp_server_client(
     peer_addr: SocketAddr,
-    remote_addr: Address,
+    remote_addr: ServerAddr,
     payload: &[u8],
     socket: &ProxySocket,
 ) -> io::Result<()> {
     let remote_socket = UdpSocket::bind("0.0.0.0:0").await?;
 
     match remote_addr {
-        Address::SocketAddress(sa) => remote_socket.connect(sa).await?,
-        Address::DomainNameAddress(ref domain, port) => remote_socket.connect((domain.as_str(), port)).await?,
+        ServerAddr::SocketAddr(sa) => remote_socket.connect(sa).await?,
+        ServerAddr::DomainName(ref domain, port) => remote_socket.connect((domain.as_str(), port)).await?,
     }
 
     remote_socket.send(payload).await?;
@@ -40,7 +41,7 @@ async fn handle_udp_local_client(
     svr_cfg: &ServerConfig,
     svr_ss_cfg: &ShadowsocksConfig,
     peer_addr: SocketAddr,
-    remote_addr: Address,
+    remote_addr: ServerAddr,
     payload: &[u8],
     socket: &UdpSocket,
 ) -> io::Result<()> {

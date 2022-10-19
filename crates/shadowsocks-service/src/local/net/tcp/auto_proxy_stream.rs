@@ -16,6 +16,7 @@ use shadowsocks::{
     net::{ConnectOpts, FlowStat},
     relay::{socks5::Address, tcprelay::proxy_stream::ProxyClientStream},
     transport::{DeviceOrGuard, RateLimitedStream, StreamConnection},
+    ServerAddr,
 };
 
 #[cfg(feature = "rate-limit")]
@@ -57,7 +58,7 @@ type CloseWaiter = Pin<Box<dyn Future<Output = ()> + Send + Sync>>;
 enum AutoProxyClientStreamStream {
     Proxied(#[pin] ProxyClientStream<Box<dyn StreamConnection>>),
     #[cfg(feature = "trojan")]
-    ProxiedTrojan(#[pin] trojan::ClientStream<Box<dyn StreamConnection>>),
+    ProxiedTrojan(#[pin] Box<dyn StreamConnection>),
     #[cfg(feature = "vless")]
     ProxiedVless(#[pin] vless::ClientStream<Box<dyn StreamConnection>>),
     #[cfg(feature = "tuic")]
@@ -98,7 +99,7 @@ impl AutoProxyClientStream {
         // Connect directly.
         let stream = shadowsocks::net::TcpStream::connect_remote_with_opts(
             context.context_ref(),
-            addr,
+            ServerAddr::from(addr.clone()),
             context.connect_opts_ref(),
         )
         .await?;
@@ -169,7 +170,7 @@ impl AutoProxyClientStream {
                         connector.as_ref(),
                         svr_cfg,
                         effect_ss_cfg,
-                        addr,
+                        ServerAddr::from(addr),
                         connect_opts,
                         |#[allow(unused_mut)] stream| {
                             #[cfg(feature = "rate-limit")]
@@ -202,11 +203,11 @@ impl AutoProxyClientStream {
                         effect_trojan_cfg = _trojan_cfg_buf.as_ref().unwrap();
                     }
 
-                    let stream = trojan::ClientStream::connect_stream(
+                    let stream = trojan::client::connect_stream(
                         connector.as_ref(),
                         svr_cfg,
                         effect_trojan_cfg,
-                        addr.clone(),
+                        ServerAddr::from(addr.clone()),
                         connect_opts,
                         |stream| {
                             #[cfg(feature = "rate-limit")]
@@ -244,7 +245,7 @@ impl AutoProxyClientStream {
                         svr_cfg,
                         effect_vless_cfg,
                         vless::protocol::RequestCommand::TCP,
-                        Some(addr.clone()),
+                        Some(ServerAddr::from(addr.clone())),
                         connect_opts,
                         |stream| {
                             #[cfg(feature = "rate-limit")]
@@ -266,15 +267,9 @@ impl AutoProxyClientStream {
                 #[cfg(feature = "tuic")]
                 shadowsocks::config::ServerProtocol::Tuic(_tuic_cfg) => {
                     use shadowsocks::tuic;
-                    use tuic::client::{Address as RelayAddress, Request as RelayRequest};
+                    use tuic::client::Request as RelayRequest;
 
-                    let target_addr = match addr {
-                        Address::DomainNameAddress(domain, port) => {
-                            RelayAddress::DomainAddress(domain.clone(), port.clone())
-                        }
-                        Address::SocketAddress(addr) => RelayAddress::SocketAddress(addr.clone()),
-                    };
-
+                    let target_addr = ServerAddr::from(addr);
                     let (relay_req, relay_resp_rx) = RelayRequest::new_connect(target_addr);
 
                     svr.tuic_dispatcher()

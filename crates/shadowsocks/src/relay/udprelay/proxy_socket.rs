@@ -18,7 +18,8 @@ use crate::{
     context::SharedContext,
     crypto::CipherKind,
     net::{AcceptOpts, ConnectOpts, UdpSocket as ShadowUdpSocket},
-    relay::{socks5::Address, udprelay::options::UdpSocketControlData},
+    relay::udprelay::options::UdpSocketControlData,
+    vless::protocol::Address,
 };
 
 use super::crypto_io::{
@@ -182,7 +183,7 @@ impl ProxySocket {
 
     fn encrypt_send_buffer(
         &self,
-        addr: &Address,
+        addr: &ServerAddr,
         control: &UdpSocketControlData,
         identity_keys: &[Bytes],
         payload: &[u8],
@@ -193,7 +194,7 @@ impl ProxySocket {
                 &self.context,
                 self.method,
                 &self.key,
-                addr,
+                &Address::from(addr.clone()),
                 control,
                 identity_keys,
                 payload,
@@ -207,7 +208,15 @@ impl ProxySocket {
                     key = user.key();
                 }
 
-                encrypt_server_payload(&self.context, self.method, key, addr, control, payload, send_buf)
+                encrypt_server_payload(
+                    &self.context,
+                    self.method,
+                    key,
+                    &Address::from(addr),
+                    control,
+                    payload,
+                    send_buf,
+                )
             }
         }
 
@@ -216,7 +225,7 @@ impl ProxySocket {
 
     /// Send a UDP packet to addr through proxy
     #[inline]
-    pub async fn send(&self, addr: &Address, payload: &[u8]) -> ProxySocketResult<usize> {
+    pub async fn send(&self, addr: &ServerAddr, payload: &[u8]) -> ProxySocketResult<usize> {
         self.send_with_ctrl(addr, &DEFAULT_SOCKET_CONTROL, payload)
             .await
             .map_err(Into::into)
@@ -225,7 +234,7 @@ impl ProxySocket {
     /// Send a UDP packet to addr through proxy
     pub async fn send_with_ctrl(
         &self,
-        addr: &Address,
+        addr: &ServerAddr,
         control: &UdpSocketControlData,
         payload: &[u8],
     ) -> ProxySocketResult<usize> {
@@ -264,7 +273,7 @@ impl ProxySocket {
     pub async fn send_to<A: ToSocketAddrs>(
         &self,
         target: A,
-        addr: &Address,
+        addr: &ServerAddr,
         payload: &[u8],
     ) -> ProxySocketResult<usize> {
         self.send_to_with_ctrl(target, addr, &DEFAULT_SOCKET_CONTROL, payload)
@@ -276,7 +285,7 @@ impl ProxySocket {
     pub async fn send_to_with_ctrl<A: ToSocketAddrs>(
         &self,
         target: A,
-        addr: &Address,
+        addr: &ServerAddr,
         control: &UdpSocketControlData,
         payload: &[u8],
     ) -> ProxySocketResult<usize> {
@@ -329,7 +338,7 @@ impl ProxySocket {
     /// This function will use `recv_buf` to store intermediate data, so it has to be big enough to store the whole shadowsocks' packet
     ///
     /// It is recommended to allocate a buffer to have at least 65536 bytes.
-    pub async fn recv(&self, recv_buf: &mut [u8]) -> ProxySocketResult<(usize, Address, usize)> {
+    pub async fn recv(&self, recv_buf: &mut [u8]) -> ProxySocketResult<(usize, ServerAddr, usize)> {
         self.recv_with_ctrl(recv_buf).await.map(|(n, a, rn, _)| (n, a, rn))
     }
 
@@ -341,7 +350,7 @@ impl ProxySocket {
     pub async fn recv_with_ctrl(
         &self,
         recv_buf: &mut [u8],
-    ) -> ProxySocketResult<(usize, Address, usize, Option<UdpSocketControlData>)> {
+    ) -> ProxySocketResult<(usize, ServerAddr, usize, Option<UdpSocketControlData>)> {
         // Waiting for response from server SERVER -> CLIENT
         let recv_n = match self.recv_timeout {
             None => self.socket.recv(recv_buf).await?,
@@ -368,7 +377,7 @@ impl ProxySocket {
             n
         );
 
-        Ok((n, addr, recv_n, control))
+        Ok((n, ServerAddr::from(addr), recv_n, control))
     }
 
     /// Receive packet from Shadowsocks' UDP server
@@ -376,7 +385,7 @@ impl ProxySocket {
     /// This function will use `recv_buf` to store intermediate data, so it has to be big enough to store the whole shadowsocks' packet
     ///
     /// It is recommended to allocate a buffer to have at least 65536 bytes.
-    pub async fn recv_from(&self, recv_buf: &mut [u8]) -> ProxySocketResult<(usize, SocketAddr, Address, usize)> {
+    pub async fn recv_from(&self, recv_buf: &mut [u8]) -> ProxySocketResult<(usize, SocketAddr, ServerAddr, usize)> {
         self.recv_from_with_ctrl(recv_buf)
             .await
             .map(|(n, sa, a, rn, _)| (n, sa, a, rn))
@@ -390,7 +399,7 @@ impl ProxySocket {
     pub async fn recv_from_with_ctrl(
         &self,
         recv_buf: &mut [u8],
-    ) -> ProxySocketResult<(usize, SocketAddr, Address, usize, Option<UdpSocketControlData>)> {
+    ) -> ProxySocketResult<(usize, SocketAddr, ServerAddr, usize, Option<UdpSocketControlData>)> {
         // Waiting for response from server SERVER -> CLIENT
         let (recv_n, target_addr) = match self.recv_timeout {
             None => self.socket.recv_from(recv_buf).await?,
@@ -418,7 +427,7 @@ impl ProxySocket {
             n,
         );
 
-        Ok((n, target_addr, addr, recv_n, control))
+        Ok((n, target_addr, ServerAddr::from(addr), recv_n, control))
     }
 
     /// Get local addr of socket

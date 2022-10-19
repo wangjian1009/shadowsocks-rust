@@ -101,7 +101,7 @@ impl VlessUdpContext {
                     svr_cfg,
                     svr_vless_cfg,
                     protocol::RequestCommand::UDP,
-                    target_addr.clone().into(),
+                    ServerAddr::from(target_addr.clone()).into(),
                     self.context.connect_opts_ref(),
                     |f| f,
                 )
@@ -127,27 +127,30 @@ impl VlessUdpContext {
         let peer_addr = peer_addr.clone();
         let r2l_task = {
             let target_addr = target_addr.clone();
-            tokio::spawn(async move {
-                let mut buf = vec![0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
-                loop {
-                    let size = r.read_from(&mut buf).await?;
+            tokio::spawn(
+                async move {
+                    let mut buf = vec![0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
+                    loop {
+                        let size = r.read_from(&mut buf).await?;
 
-                    match packet_sender
-                        .send((target_addr.clone(), Bytes::copy_from_slice(&buf[..size])))
-                        .await
-                    {
-                        Ok(()) => (),
-                        Err(err) => {
-                            tracing::error!(
-                                "udp relay {} <- {} (vless) : send to channel error {}",
-                                peer_addr,
-                                target_addr,
-                                err
-                            );
-                        }
-                    };
+                        match packet_sender
+                            .send((target_addr.clone(), Bytes::copy_from_slice(&buf[..size])))
+                            .await
+                        {
+                            Ok(()) => (),
+                            Err(err) => {
+                                tracing::error!(
+                                    "udp relay {} <- {} (vless) : send to channel error {}",
+                                    peer_addr,
+                                    target_addr,
+                                    err
+                                );
+                            }
+                        };
+                    }
                 }
-            })
+                .in_current_span(),
+            )
         };
 
         let mut assoc = VlessUdpAssoiation { w, r2l_task };
@@ -167,16 +170,12 @@ impl VlessUdpContext {
 
     pub async fn vless_receive_from(
         &mut self,
-        peer_addr: &SocketAddr,
         buf: &mut Vec<u8>,
     ) -> io::Result<(usize, Address, Option<UdpSocketControlData>)> {
         let (addr, mut bytes) = match self.packet_receiver.recv().await {
             Some(v) => v,
             None => {
-                tracing::error!(
-                    "udp relay {} <- ... (vless) failed, error: receiver chanel break",
-                    peer_addr,
-                );
+                tracing::error!("<- ... (vless) failed, error: receiver chanel break",);
                 return Err(io::ErrorKind::UnexpectedEof.into());
             }
         };
@@ -186,8 +185,7 @@ impl VlessUdpContext {
 
         if origin_len > recv_len {
             tracing::error!(
-                "udp relay {} <- {} (vless) receive packet overflow, input-len={}, capacity={}",
-                peer_addr,
+                "<- {} (vless) receive packet overflow, input-len={}, capacity={}",
                 addr,
                 origin_len,
                 buf.len(),

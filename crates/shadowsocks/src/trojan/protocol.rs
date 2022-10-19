@@ -5,12 +5,11 @@ use std::{
     fmt::Write,
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub use crate::relay::socks5::{Address, Error};
-
-use super::new_error;
 
 pub const HASH_STR_LEN: usize = 56;
 
@@ -58,39 +57,24 @@ const CRLF: &[u8; 2] = b"\r\n";
 /// o  DST.PORT desired destination port in network octet order
 /// ```
 pub enum RequestHeader {
-    TcpConnect([u8; HASH_STR_LEN], Address),
-    UdpAssociate([u8; HASH_STR_LEN]),
+    TcpConnect(Arc<[u8; HASH_STR_LEN]>, Address),
+    UdpAssociate(Arc<[u8; HASH_STR_LEN]>),
 }
 
 static UDP_DUMMY_ADDR: Lazy<Address> =
     Lazy::new(|| Address::SocketAddress(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0)));
 
 impl RequestHeader {
-    pub async fn read_from<R>(
-        stream: &mut R,
-        valid_hash: &[u8],
-        first_packet: Option<&mut Vec<u8>>,
-    ) -> Result<Self, Error>
+    pub async fn read_from<R>(stream: &mut R, valid_hash: &[u8]) -> Result<Self, Error>
     where
         R: AsyncRead + Unpin,
     {
         let mut hash_buf = [0u8; HASH_STR_LEN];
-        let len = stream.read(&mut hash_buf).await?;
-        if len != HASH_STR_LEN {
-            if let Some(first_packet) = first_packet {
-                first_packet.extend_from_slice(&hash_buf[..len]);
-            }
-            return Err(Error::IoError(new_error("first packet too short")));
-        }
+        let len = stream.read_exact(&mut hash_buf).await?;
+        assert!(len == HASH_STR_LEN);
 
         if valid_hash != hash_buf {
-            if let Some(first_packet) = first_packet {
-                first_packet.extend_from_slice(&hash_buf);
-            }
-            return Err(Error::IoError(new_error(format!(
-                "invalid password hash: {}",
-                String::from_utf8_lossy(&hash_buf)
-            ))));
+            return Err(Error::PasswdAuthInvalidRequest);
         }
 
         let mut crlf_buf = [0u8; 2];
@@ -102,8 +86,8 @@ impl RequestHeader {
         stream.read_exact(&mut crlf_buf).await?;
 
         match cmd_buf[0] {
-            CMD_TCP_CONNECT => Ok(Self::TcpConnect(hash_buf, addr)),
-            CMD_UDP_ASSOCIATE => Ok(Self::UdpAssociate(hash_buf)),
+            CMD_TCP_CONNECT => Ok(Self::TcpConnect(Arc::new(hash_buf), addr)),
+            CMD_UDP_ASSOCIATE => Ok(Self::UdpAssociate(Arc::new(hash_buf))),
             _ => Err(Error::UnsupportedCommand(cmd_buf[0])),
         }
     }
@@ -125,7 +109,7 @@ impl RequestHeader {
             RequestHeader::UdpAssociate(hash) => (hash, &UDP_DUMMY_ADDR as &Address, CMD_UDP_ASSOCIATE),
         };
 
-        cursor.put_slice(hash);
+        cursor.put_slice(hash.as_ref());
         cursor.put_slice(CRLF);
         cursor.put_u8(cmd);
         addr.write_to_buf(cursor);
@@ -163,7 +147,6 @@ impl UdpHeader {
         stream.read_exact(&mut buf).await?;
         let len = ((buf[0] as u16) << 8) | (buf[1] as u16);
         stream.read_exact(&mut buf).await?;
-        tracing::debug!("udp addr={} len={}", addr, len);
         Ok(Self {
             address: addr,
             payload_len: len,

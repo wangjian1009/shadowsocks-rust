@@ -12,7 +12,7 @@ use hyper::{
     Body, Client, Request, Server,
 };
 use shadowsocks::{config::ServerAddr, lookup_then, net::TcpListener};
-use tracing::{error, info};
+use tracing::{error, info, trace};
 
 use crate::local::{
     context::ServiceContext, http::connector::Connector, loadbalancing::PingBalancer, LOCAL_DEFAULT_KEEPALIVE_TIMEOUT,
@@ -117,11 +117,19 @@ impl Http {
 
         info!("shadowsocks HTTP listening on {}", server.local_addr());
 
-        if let Err(err) = server.await {
-            use std::io::Error;
+        let cancel_waiter = self.context.cancel_waiter();
+        tokio::select! {
+            r = server => {
+                if let Err(err) = r {
+                    use std::io::Error;
 
-            error!("hyper server exited with error: {}", err);
-            return Err(Error::new(ErrorKind::Other, err));
+                    error!("hyper server exited with error: {}", err);
+                    return Err(Error::new(ErrorKind::Other, err));
+                }
+            }
+            _ = cancel_waiter.wait() => {
+                trace!("canceled");
+            }
         }
 
         Ok(())

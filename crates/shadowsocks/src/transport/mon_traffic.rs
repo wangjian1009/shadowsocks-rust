@@ -23,7 +23,14 @@ pub struct MonTraffic<T> {
 
 impl<T> MonTraffic<T> {
     #[inline]
-    pub fn new(s: T, tx: Option<Arc<FlowStat>>, rx: Option<Arc<FlowStat>>) -> Self {
+    pub fn new_with_tx_rx(s: T, tx: Option<Arc<FlowStat>>, rx: Option<Arc<FlowStat>>) -> Self {
+        Self { tx, rx, s }
+    }
+
+    #[inline]
+    pub fn new(s: T, flow_stat: Option<Arc<FlowStat>>) -> Self {
+        let tx = flow_stat.clone();
+        let rx = flow_stat;
         Self { tx, rx, s }
     }
 

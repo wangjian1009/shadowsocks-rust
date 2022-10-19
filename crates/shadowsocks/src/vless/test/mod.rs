@@ -52,7 +52,7 @@ mod stream;
 //         .await
 // }
 
-async fn connect_stream(cfg: &Config, proxy_port: u16, target_addr: Address) -> io::Result<ClientStream<TcpStream>> {
+async fn connect_stream(cfg: &Config, proxy_port: u16, target_addr: ServerAddr) -> io::Result<ClientStream<TcpStream>> {
     let connector = TcpConnector::new(None);
 
     let svr_cfg = ServerConfig::new(
@@ -172,7 +172,7 @@ async fn start_server(
 
 async fn serve_tcp(
     stream: Box<dyn StreamConnection>,
-    target_addr: Address,
+    target_addr: ServerAddr,
     modifiler: Arc<DataModifiler>,
 ) -> io::Result<()> {
     let total = AtomicU32::new(0);
@@ -199,11 +199,9 @@ async fn serve_tcp(
 async fn serve_udp(
     mut r: VlessUdpReader<Box<dyn StreamConnection + 'static>>,
     mut w: VlessUdpWriter<Box<dyn StreamConnection + 'static>>,
-    target_addr: Address,
+    target_addr: ServerAddr,
     modifiler: Arc<DataModifiler>,
 ) -> io::Result<()> {
-    let target_addr: ServerAddr = target_addr.into();
-
     let (channel_w, mut channel_r) = mpsc::channel(1);
 
     let process_read = {

@@ -17,7 +17,7 @@ use shadowsocks::{
     ServerAddr,
 };
 use tokio::net::TcpStream;
-use tracing::{debug, error, trace, warn};
+use tracing::{error, info_span, trace, warn, Instrument};
 
 use crate::{
     local::{
@@ -179,11 +179,11 @@ impl Socks5TcpHandler {
         let handshake_req = match HandshakeRequest::read_from(&mut stream).await {
             Ok(r) => r,
             Err(Socks5Error::IoError(ref err)) if err.kind() == ErrorKind::UnexpectedEof => {
-                trace!("socks5 handshake early eof. peer: {}", peer_addr);
+                trace!("socks5 handshake early eof");
                 return Ok(());
             }
             Err(err) => {
-                error!("socks5 handshake error: {}", err);
+                error!(error = ?err, "socks5 handshake error");
                 return Err(err.into());
             }
         };
@@ -195,29 +195,24 @@ impl Socks5TcpHandler {
         let header = match TcpRequestHeader::read_from(&mut stream).await {
             Ok(h) => h,
             Err(err) => {
-                error!("failed to get TcpRequestHeader: {}, peer: {}", err, peer_addr);
+                error!(error = ?err, "failed to get TcpRequestHeader");
                 let rh = TcpResponseHeader::new(err.as_reply(), Address::SocketAddress(peer_addr));
                 rh.write_to(&mut stream).await?;
                 return Err(err.into());
             }
         };
 
-        trace!("socks5 {:?} peer: {}", header, peer_addr);
+        trace!("socks5 {:?}", header);
 
         let addr = header.address;
 
         // 3. Handle Command
         match header.command {
             Command::TcpConnect => {
-                debug!("CONNECT {}", addr);
-
-                self.handle_tcp_connect(stream, peer_addr, addr).await
+                let span = info_span!("tcp", target = addr.to_string());
+                self.handle_tcp_connect(stream, peer_addr, addr).instrument(span).await
             }
-            Command::UdpAssociate => {
-                debug!("UDP ASSOCIATE from {}", addr);
-
-                self.handle_udp_associate(stream, addr).await
-            }
+            Command::UdpAssociate => self.handle_udp_associate(stream, addr).await,
             Command::TcpBind => {
                 warn!("BIND is not supported");
                 let rh = TcpResponseHeader::new(socks5::Reply::CommandNotSupported, addr);
@@ -243,63 +238,86 @@ impl Socks5TcpHandler {
             return Ok(());
         }
 
-        let mut server_opt = None;
-        let remote_result = if self.balancer.is_empty() {
-            AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &target_addr).await
-        } else {
-            let server = self.balancer.best_tcp_server();
-
-            let r = AutoProxyClientStream::connect(&self.context, &server, &target_addr).await;
-            server_opt = Some(server);
-
-            r
-        };
-
-        let mut remote = match remote_result {
-            Ok(remote) => {
-                // Tell the client that we are ready
-                let header =
-                    TcpResponseHeader::new(socks5::Reply::Succeeded, Address::SocketAddress(remote.local_addr()?));
-                header.write_to(&mut stream).await?;
-
-                trace!("sent header: {:?}", header);
-
-                remote
-            }
-            Err(err) => {
-                let reply = match err.kind() {
-                    ErrorKind::ConnectionRefused => Reply::ConnectionRefused,
-                    ErrorKind::ConnectionAborted => Reply::HostUnreachable,
-                    _ => Reply::NetworkUnreachable,
-                };
-
-                let dummy_address = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
-                let header = TcpResponseHeader::new(reply, Address::SocketAddress(dummy_address));
-                header.write_to(&mut stream).await?;
-
-                return Err(err);
-            }
-        };
-
-        match server_opt {
-            Some(server) => {
-                #[cfg(feature = "rate-limit")]
-                let mut stream =
-                    shadowsocks::transport::RateLimitedStream::from_stream(stream, Some(self.context.rate_limiter()));
-
-                let svr_cfg = server.server_config();
-                establish_tcp_tunnel(
-                    self.context.as_ref(),
-                    svr_cfg,
-                    &mut stream,
-                    &mut remote,
-                    peer_addr,
-                    &target_addr,
+        let (remote_result, server_opt, span) = {
+            if self.balancer.is_empty() {
+                let span = info_span!("bypass");
+                (
+                    AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &target_addr)
+                        .instrument(span.clone())
+                        .await,
+                    None,
+                    span,
                 )
-                .await
+            } else {
+                let server = self.balancer.best_tcp_server();
+
+                let span = info_span!(
+                    "miner",
+                    addr = server.server_config().addr().to_string(),
+                    score = server.tcp_score().score()
+                );
+
+                (
+                    AutoProxyClientStream::connect(&self.context, &server, &target_addr)
+                        .instrument(span.clone())
+                        .await,
+                    Some(server),
+                    span,
+                )
             }
-            None => establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, &target_addr, None).await,
+        };
+
+        async move {
+            let mut remote = match remote_result {
+                Ok(remote) => {
+                    // Tell the client that we are ready
+                    let header =
+                        TcpResponseHeader::new(socks5::Reply::Succeeded, Address::SocketAddress(remote.local_addr()?));
+                    header.write_to(&mut stream).await?;
+
+                    trace!("sent header: {:?}", header);
+
+                    remote
+                }
+                Err(err) => {
+                    let reply = match err.kind() {
+                        ErrorKind::ConnectionRefused => Reply::ConnectionRefused,
+                        ErrorKind::ConnectionAborted => Reply::HostUnreachable,
+                        _ => Reply::NetworkUnreachable,
+                    };
+
+                    let dummy_address = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+                    let header = TcpResponseHeader::new(reply, Address::SocketAddress(dummy_address));
+                    header.write_to(&mut stream).await?;
+
+                    return Err(err);
+                }
+            };
+
+            match server_opt {
+                Some(server) => {
+                    #[cfg(feature = "rate-limit")]
+                    let mut stream = shadowsocks::transport::RateLimitedStream::from_stream(
+                        stream,
+                        Some(self.context.rate_limiter()),
+                    );
+
+                    let svr_cfg = server.server_config();
+                    establish_tcp_tunnel(
+                        self.context.as_ref(),
+                        svr_cfg,
+                        &mut stream,
+                        &mut remote,
+                        peer_addr,
+                        &target_addr,
+                    )
+                    .await
+                }
+                None => establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, &target_addr, None).await,
+            }
         }
+        .instrument(span)
+        .await
     }
 
     async fn handle_udp_associate(self, mut stream: TcpStream, client_addr: Address) -> io::Result<()> {

@@ -1,21 +1,28 @@
 use async_trait::async_trait;
+use bytes::Bytes;
 use cfg_if::cfg_if;
-use shadowsocks::policy::StreamAction;
-use std::{future::Future, io, net::SocketAddr, sync::Arc};
+use shadowsocks::{policy::StreamAction, ServerAddr};
+use std::{
+    future::Future,
+    io,
+    net::{SocketAddr, SocketAddrV6},
+    sync::Arc,
+};
 
 use tokio::{
     io::{AsyncRead, AsyncWrite},
+    sync::mpsc::{Receiver, Sender},
     time::Duration,
 };
 
 use shadowsocks::{
-    net::{FlowStat, TcpStream},
+    lookup_then,
+    net::{AddrFamily, FlowStat, TcpStream, UdpSocket},
     policy,
-    relay::Address,
     timeout::TimeoutTicker,
 };
 
-use tracing::{error, info_span, Instrument};
+use tracing::{error, info_span, trace, Instrument};
 
 use crate::server::dns::run_dns_tcp_stream;
 
@@ -95,11 +102,11 @@ cfg_if! {
 
 pub struct ServerPolicy {
     context: Arc<ServiceContext>,
-    connect_timeout: Option<Duration>,
+    connect_timeout: Duration,
 }
 
 impl ServerPolicy {
-    pub fn new(context: Arc<ServiceContext>, connect_timeout: Option<Duration>) -> Self {
+    pub fn new(context: Arc<ServiceContext>, connect_timeout: Duration) -> Self {
         Self {
             context,
             connect_timeout,
@@ -115,7 +122,7 @@ impl policy::ServerPolicy for ServerPolicy {
 
     async fn create_out_connection(
         &self,
-        target_addr: &Address,
+        target_addr: ServerAddr,
     ) -> io::Result<(TcpStream, Box<dyn policy::ConnectionGuard>)> {
         let stream = timeout_fut(
             self.connect_timeout.clone(),
@@ -135,7 +142,27 @@ impl policy::ServerPolicy for ServerPolicy {
         ))
     }
 
-    async fn stream_check(&self, src_addr: &SocketAddr, target_addr: &Address) -> io::Result<policy::StreamAction> {
+    async fn create_out_udp_socket(&self) -> io::Result<Box<dyn policy::UdpSocket>> {
+        Ok(Box::new(OutgoingUdpSocket::new(
+            self.context.clone(),
+            shadowsocks::relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE,
+        )) as Box<dyn policy::UdpSocket>)
+    }
+
+    async fn stream_check(
+        &self,
+        src_addr: Option<&ServerAddr>,
+        target_addr: &ServerAddr,
+    ) -> io::Result<policy::StreamAction> {
+        // 后续支持不同地址的处理
+        let src_addr = match src_addr {
+            Some(src_addr) => match src_addr {
+                ServerAddr::SocketAddr(src_addr) => src_addr,
+                _ => unreachable!(),
+            },
+            None => unreachable!(),
+        };
+
         let connection_stat = self.context.connection_stat();
 
         let connection_ctx = match connection_stat
@@ -204,10 +231,23 @@ impl policy::ServerPolicy for ServerPolicy {
         })
     }
 
-    async fn packet_check(&self, src_addr: &SocketAddr, target_addr: &Address) -> io::Result<policy::PacketAction> {
-        if self.context.check_client_blocked(src_addr) {
-            return Ok(policy::PacketAction::ClientBlocked);
-        }
+    async fn packet_check(
+        &self,
+        src_addr: Option<&ServerAddr>,
+        target_addr: &ServerAddr,
+    ) -> io::Result<policy::PacketAction> {
+        // 后续支持不同地址的处理
+        match src_addr {
+            Some(src_addr) => match src_addr {
+                ServerAddr::SocketAddr(src_addr) => {
+                    if self.context.check_client_blocked(src_addr) {
+                        return Ok(policy::PacketAction::ClientBlocked);
+                    }
+                }
+                _ => unreachable!(),
+            },
+            None => {}
+        };
 
         if self.context.check_outbound_blocked(target_addr).await {
             return Ok(policy::PacketAction::OutboundBlocked);
@@ -217,15 +257,179 @@ impl policy::ServerPolicy for ServerPolicy {
     }
 }
 
-async fn timeout_fut<F, R>(duration: Option<Duration>, f: F) -> io::Result<R>
+pub struct OutgoingUdpSocket {
+    context: Arc<ServiceContext>,
+    max_udp_packet_size: usize,
+    outbound_ipv4_socket: spin::Mutex<Option<Arc<UdpSocket>>>,
+    outbound_ipv6_socket: spin::Mutex<Option<Arc<UdpSocket>>>,
+    socket_update_tx: Sender<()>,
+    socket_update_rx: tokio::sync::Mutex<Receiver<()>>,
+}
+
+impl OutgoingUdpSocket {
+    pub fn new(context: Arc<ServiceContext>, max_udp_packet_size: usize) -> Self {
+        let (socket_update_tx, socket_update_rx) = tokio::sync::mpsc::channel(1);
+
+        Self {
+            context,
+            max_udp_packet_size,
+            outbound_ipv4_socket: spin::Mutex::new(None),
+            outbound_ipv6_socket: spin::Mutex::new(None),
+            socket_update_tx,
+            socket_update_rx: tokio::sync::Mutex::new(socket_update_rx),
+        }
+    }
+
+    async fn send_to_sock_addr(&self, mut target_addr: SocketAddr, data: &[u8]) -> io::Result<()> {
+        const UDP_SOCKET_SUPPORT_DUAL_STACK: bool = cfg!(any(
+            target_os = "linux",
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "watchos",
+            target_os = "tvos",
+            target_os = "freebsd",
+            // target_os = "dragonfly",
+            // target_os = "netbsd",
+            target_os = "windows",
+        ));
+
+        let mut socket_updated = false;
+
+        let socket = if UDP_SOCKET_SUPPORT_DUAL_STACK {
+            let mut outbound_ipv6_socket = self.outbound_ipv6_socket.lock();
+            match *outbound_ipv6_socket {
+                Some(ref socket) => socket.clone(),
+                None => {
+                    let socket =
+                        UdpSocket::connect_any_with_opts(AddrFamily::Ipv6, self.context.connect_opts_ref()).await?;
+
+                    trace!("OUTGOING: socket ipv6 created",);
+
+                    socket_updated = true;
+                    outbound_ipv6_socket.insert(Arc::new(socket)).clone()
+                }
+            }
+        } else {
+            match target_addr {
+                SocketAddr::V4(..) => {
+                    let mut outbound_ipv4_socket = self.outbound_ipv4_socket.lock();
+                    match *outbound_ipv4_socket {
+                        Some(ref socket) => socket.clone(),
+                        None => {
+                            let socket =
+                                UdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref()).await?;
+
+                            trace!("OUTGOING: socket ipv4 created");
+
+                            socket_updated = true;
+                            outbound_ipv4_socket.insert(Arc::new(socket)).clone()
+                        }
+                    }
+                }
+                SocketAddr::V6(..) => {
+                    let mut outbound_ipv6_socket = self.outbound_ipv6_socket.lock();
+                    match *outbound_ipv6_socket {
+                        Some(ref socket) => socket.clone(),
+                        None => {
+                            let socket =
+                                UdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref()).await?;
+
+                            trace!("OUTGOING: socket ipv6 created");
+
+                            socket_updated = true;
+                            outbound_ipv6_socket.insert(Arc::new(socket)).clone()
+                        }
+                    }
+                }
+            }
+        };
+
+        if socket_updated {
+            self.socket_update_tx
+                .send(())
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("notify reader sock update error {}", e)))?;
+        }
+
+        if UDP_SOCKET_SUPPORT_DUAL_STACK {
+            if let SocketAddr::V4(saddr) = target_addr {
+                let mapped_ip = saddr.ip().to_ipv6_mapped();
+                target_addr = SocketAddr::V6(SocketAddrV6::new(mapped_ip, saddr.port(), 0, 0));
+            }
+        }
+
+        let n = socket.send_to(data, target_addr).await?;
+        if n != data.len() {
+            error!("OUTGOING: --> {n} bytes mismatch, expected {} bytes", data.len());
+        } else {
+            trace!("OUTGOING: --> {n} bytes");
+        }
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl policy::UdpSocket for OutgoingUdpSocket {
+    async fn recv_from(&self) -> io::Result<(Bytes, SocketAddr)> {
+        #[inline]
+        async fn receive_from_outbound_opt(
+            socket: &Option<Arc<UdpSocket>>,
+            max_udp_packet_size: usize,
+        ) -> io::Result<(Bytes, SocketAddr)> {
+            match *socket {
+                None => unreachable!(),
+                Some(ref s) => {
+                    let mut buf = vec![0; max_udp_packet_size];
+                    let (len, addr) = s.recv_from(&mut buf).await?;
+                    buf.truncate(len);
+
+                    trace!("OUTGOING: <-- {len} bytes");
+
+                    Ok((Bytes::from(buf), addr))
+                }
+            }
+        }
+
+        loop {
+            let outbound_ipv4_socket = self.outbound_ipv4_socket.lock().clone();
+            let outbound_ipv6_socket = self.outbound_ipv6_socket.lock().clone();
+            let mut socket_update_rx = self.socket_update_rx.lock().await;
+
+            tokio::select! {
+                received_opt = receive_from_outbound_opt(&outbound_ipv4_socket, self.max_udp_packet_size)
+                    , if outbound_ipv4_socket.is_some() => {
+                        return received_opt;
+                }
+                received_opt = receive_from_outbound_opt(&outbound_ipv6_socket, self.max_udp_packet_size)
+                    , if outbound_ipv6_socket.is_some() => {
+                        return received_opt;
+                }
+                _socket_updated = socket_update_rx.recv() => {
+                    trace!("OUTGOING: socket updated");
+                }
+            }
+        }
+    }
+
+    async fn send_to(&self, buf: &[u8], addr: ServerAddr) -> io::Result<()> {
+        match addr {
+            ServerAddr::SocketAddr(sa) => self.send_to_sock_addr(sa, buf).await,
+            ServerAddr::DomainName(ref dname, port) => lookup_then!(self.context.context_ref(), dname, port, |sa| {
+                self.send_to_sock_addr(sa, buf).await
+            })
+            .map(|_| ()),
+        }
+    }
+}
+
+async fn timeout_fut<F, R>(duration: Duration, f: F) -> io::Result<R>
 where
     F: Future<Output = io::Result<R>> + Send,
 {
-    match duration {
-        None => f.await,
-        Some(d) => match tokio::time::timeout(d, f).await {
-            Ok(o) => o,
-            Err(..) => Err(io::ErrorKind::TimedOut.into()),
-        },
+    match tokio::time::timeout(duration, f).await {
+        Ok(o) => o,
+        Err(..) => Err(io::ErrorKind::TimedOut.into()),
     }
 }

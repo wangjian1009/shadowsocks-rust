@@ -13,15 +13,15 @@ use std::{
 use thiserror::Error;
 use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::timeout::TimeoutWaiter;
 use crate::{
     net::FlowStat,
     policy::{ServerPolicy, StreamAction},
     relay::tcprelay::utils_copy::copy_bidirectional,
+    timeout::TimeoutWaiter,
     transport::MonTraffic,
+    ServerAddr,
 };
 
-use super::super::super::protocol::Address;
 use super::write_response;
 
 #[cfg(feature = "rate-limit")]
@@ -29,19 +29,17 @@ use crate::transport::RateLimitedStream;
 
 pub async fn connect(
     server_policy: Arc<Box<dyn ServerPolicy>>,
-    rmt_addr: &SocketAddr,
+    peer_addr: &SocketAddr,
     mut send: SendStream,
     recv: RecvStream,
-    addr: Address,
+    addr: ServerAddr,
     flow_state: Option<Arc<FlowStat>>,
     idle_timeout: Duration,
 ) {
-    let addr2 = match addr.clone() {
-        Address::DomainAddress(h, p) => crate::relay::Address::DomainNameAddress(h, p),
-        Address::SocketAddress(s) => crate::relay::Address::SocketAddress(s),
-    };
-
-    match server_policy.stream_check(rmt_addr, &addr2).await {
+    match server_policy
+        .stream_check(Some(&ServerAddr::SocketAddr(peer_addr.clone())), &addr)
+        .await
+    {
         Err(err) => {
             warn!(error = ?err, "ack check error");
             let _ = write_response(send, false).await;
@@ -68,7 +66,7 @@ pub async fn connect(
             rate_limit,
         }) => {
             #[allow(unused_mut)]
-            let (mut target, _guard) = match server_policy.create_out_connection(&addr2).await {
+            let (mut target, _guard) = match server_policy.create_out_connection(addr).await {
                 Ok(s) => {
                     send = match write_response(send, true).await {
                         Some(send) => send,
@@ -86,7 +84,7 @@ pub async fn connect(
             let flow_state_tx = flow_state.clone();
 
             #[allow(unused_mut)]
-            let mut tunnel = MonTraffic::new(BiStream(send, recv), flow_state_tx, flow_state.clone());
+            let mut tunnel = MonTraffic::new_with_tx_rx(BiStream(send, recv), flow_state_tx, flow_state.clone());
 
             cfg_if! {
                 if #[cfg(feature = "rate-limit")] {
@@ -118,8 +116,8 @@ pub async fn connect(
 
             let flow_state_tx = flow_state.clone();
             let flow_state_rx = flow_state;
-            let send = MonTraffic::new(send, flow_state_tx, None);
-            let recv = MonTraffic::new(recv, None, flow_state_rx);
+            let send = MonTraffic::new_with_tx_rx(send, flow_state_tx, None);
+            let recv = MonTraffic::new_with_tx_rx(recv, None, flow_state_rx);
 
             let timeout_waiter = TimeoutWaiter::new(idle_timeout);
             let timeout_ticker = timeout_waiter.ticker();

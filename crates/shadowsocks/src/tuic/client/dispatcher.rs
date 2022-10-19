@@ -13,7 +13,7 @@ use tokio::{
 use crate::context::SharedContext;
 use crate::net::ConnectOpts;
 
-use super::{relay_init, Config, Request, ServerAddr};
+use super::{relay_init, Config, Request, ServerAddrWithName};
 
 struct Runing {
     task: JoinHandle<()>,
@@ -30,7 +30,7 @@ pub type ConfigProvider = Box<dyn Fn() -> io::Result<Config> + Send + Sync>;
 
 pub struct Dispatcher {
     context: SharedContext,
-    addr: ServerAddr,
+    addr: ServerAddrWithName,
     config_provider: ConfigProvider,
     connect_opts: ConnectOpts,
     runing: RwLock<Option<Runing>>,
@@ -45,7 +45,7 @@ impl Debug for Dispatcher {
 impl Dispatcher {
     pub fn new(
         context: SharedContext,
-        addr: ServerAddr,
+        addr: ServerAddrWithName,
         config_provider: ConfigProvider,
         connect_opts: ConnectOpts,
     ) -> Self {

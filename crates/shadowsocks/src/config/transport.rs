@@ -311,6 +311,21 @@ impl TransportConnectorConfig {
         find_all_arg(args, "cipher").map(|cipher| config.cipher = Some(cipher.iter().map(|c| c.to_string()).collect()));
         Ok(config)
     }
+
+    pub fn support_native_packet(&self) -> bool {
+        match self {
+            #[cfg(feature = "transport-ws")]
+            Self::Ws(..) => false,
+            #[cfg(feature = "transport-tls")]
+            Self::Tls(..) => false,
+            #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+            Self::Wss(..) => false,
+            #[cfg(feature = "transport-mkcp")]
+            Self::Mkcp(..) => false,
+            #[cfg(feature = "transport-skcp")]
+            Self::Skcp(..) => false,
+        }
+    }
 }
 
 #[cfg(feature = "transport-mkcp")]

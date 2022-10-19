@@ -14,30 +14,27 @@ use shadowsocks::{
     config::{ServerConfig, ServerProtocol, ServerType, ShadowsocksConfig},
     context::Context,
     crypto::CipherKind,
-    relay::{
-        socks5::Address,
-        tcprelay::{
-            proxy_stream::ProxyServerStream,
-            utils::{copy_from_encrypted, copy_to_encrypted},
-        },
+    relay::tcprelay::{
+        proxy_stream::ProxyServerStream,
+        utils::{copy_from_encrypted, copy_to_encrypted},
     },
     transport::{
         direct::{TcpAcceptor, TcpConnector},
         Acceptor, Connection, Connector, StreamConnection,
     },
-    ProxyClientStream,
+    ProxyClientStream, ServerAddr,
 };
 
 async fn handle_tcp_tunnel_server_client<S: StreamConnection>(
     method: CipherKind,
     mut stream: ProxyServerStream<S>,
 ) -> io::Result<()> {
-    let addr = stream.handshake().await?;
+    let addr = ServerAddr::from(stream.handshake().await?);
 
     let mut remote = {
         let remote = match addr {
-            Address::SocketAddress(ref sa) => TcpStream::connect(sa).await?,
-            Address::DomainNameAddress(ref dname, port) => TcpStream::connect((dname.as_str(), port)).await?,
+            ServerAddr::SocketAddr(ref sa) => TcpStream::connect(sa).await?,
+            ServerAddr::DomainName(ref dname, port) => TcpStream::connect((dname.as_str(), port)).await?,
         };
 
         info!("connected to remote {}", addr);
@@ -66,7 +63,7 @@ async fn handle_tcp_tunnel_local_client<C: Connector>(
     svr_cfg: Arc<ServerConfig>,
     mut stream: TcpStream,
 ) -> io::Result<()> {
-    let target_addr = Address::from(("www.example.com".to_owned(), 80));
+    let target_addr = ServerAddr::from(("www.example.com".to_owned(), 80));
 
     let remote = ProxyClientStream::connect(
         context,
@@ -77,7 +74,7 @@ async fn handle_tcp_tunnel_local_client<C: Connector>(
         } else {
             unreachable!()
         },
-        &target_addr,
+        target_addr,
     )
     .await?;
 

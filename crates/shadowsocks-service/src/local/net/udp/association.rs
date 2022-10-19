@@ -2,7 +2,7 @@
 
 use std::{
     cell::RefCell,
-    io::{self, ErrorKind},
+    io,
     marker::PhantomData,
     net::{SocketAddr, SocketAddrV6},
     sync::Arc,
@@ -15,7 +15,7 @@ use futures::future;
 use lru_time_cache::LruCache;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use tokio::{sync::mpsc, task::JoinHandle, time};
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info_span, trace, warn, Instrument, Span};
 
 use shadowsocks::{
     config::ServerProtocol,
@@ -26,7 +26,7 @@ use shadowsocks::{
         Address,
     },
     transport::StreamConnection,
-    ServerConfig,
+    ServerAddr, ServerConfig,
 };
 
 use crate::{
@@ -120,6 +120,35 @@ where
 
     /// Sends `data` from `peer_addr` to `target_addr`
     pub async fn send_to(&mut self, peer_addr: SocketAddr, target_addr: Address, data: &[u8]) -> io::Result<()> {
+        // Check or (re)create an association
+
+        let mut assoc = self.assoc_map.get(&peer_addr);
+        let mut is_new = false;
+
+        if assoc.is_none() {
+            let new_assoc = UdpAssociation::new(
+                self.context.clone(),
+                peer_addr.clone(),
+                self.keepalive_tx.clone(),
+                self.balancer.clone(),
+                self.respond_writer.clone(),
+                self.server_session_expire_duration,
+            );
+            self.assoc_map.insert(peer_addr, new_assoc);
+
+            assoc = self.assoc_map.get(&peer_addr);
+            is_new = true;
+        }
+
+        let assoc = assoc.unwrap();
+        let _enter = assoc.span.clone().entered();
+        if is_new {
+            debug!("udp association created");
+        }
+
+        let span = info_span!("udp.local", target = target_addr.to_string());
+        let _enter = span.enter();
+
         cfg_if! {
             if #[cfg(all(feature = "sniffer-bittorrent"))] {
 
@@ -135,10 +164,7 @@ where
                     Err(SnifferCheckError::NoClue) => None,
                     Err(SnifferCheckError::Reject) => None,
                     Err(SnifferCheckError::Other(err)) => {
-                        tracing::error!(
-                            "sniffer package from {} to {} for error {}",
-                            peer_addr, target_addr, err
-                        );
+                        error!(error = ?err, "sniffer package for error");
                         return Err(io::Error::new(io::ErrorKind::Other, err));
                     }
                 };
@@ -147,9 +173,7 @@ where
                 match action {
                     Some(action) => match action {
                         ProtocolAction::Reject => {
-                            trace!(
-                                "reject udp from {} to {} for protocol {:?}",
-                                peer_addr, target_addr, protocol.unwrap());
+                            trace!(protocol = format!("{:?}", protocol.unwrap()), "reject");
                             return Ok(());
                         }
                     }
@@ -158,25 +182,12 @@ where
             }
         }
 
-        // Check or (re)create an association
-
-        if let Some(assoc) = self.assoc_map.get(&peer_addr) {
-            return assoc.try_send((target_addr, Bytes::copy_from_slice(data)));
+        if let Err(err) = assoc
+            .sender
+            .try_send((target_addr, Bytes::copy_from_slice(data), span.clone()))
+        {
+            debug!(error = ?err, "send to context fail");
         }
-
-        let assoc = UdpAssociation::new(
-            self.context.clone(),
-            peer_addr,
-            self.keepalive_tx.clone(),
-            self.balancer.clone(),
-            self.respond_writer.clone(),
-            self.server_session_expire_duration,
-        );
-
-        debug!("created udp association for {}", peer_addr);
-
-        assoc.try_send((target_addr, Bytes::copy_from_slice(data)))?;
-        self.assoc_map.insert(peer_addr, assoc);
 
         Ok(())
     }
@@ -197,8 +208,9 @@ where
     W: UdpInboundWrite + Send + Sync + Unpin + 'static,
 {
     assoc_handle: JoinHandle<()>,
-    sender: mpsc::Sender<(Address, Bytes)>,
+    sender: mpsc::Sender<(Address, Bytes, Span)>,
     writer: PhantomData<W>,
+    span: Span,
 }
 
 impl<W> Drop for UdpAssociation<W>
@@ -222,6 +234,7 @@ where
         respond_writer: W,
         server_session_expire_duration: Duration,
     ) -> UdpAssociation<W> {
+        let span = info_span!("udp-session", peer.addr = peer_addr.to_string());
         let (assoc_handle, sender) = UdpAssociationContext::create(
             context,
             peer_addr,
@@ -229,20 +242,14 @@ where
             balancer,
             respond_writer,
             server_session_expire_duration,
+            span.clone(),
         );
         UdpAssociation {
             assoc_handle,
             sender,
             writer: PhantomData,
+            span: span.clone(),
         }
-    }
-
-    fn try_send(&self, data: (Address, Bytes)) -> io::Result<()> {
-        if let Err(..) = self.sender.try_send(data) {
-            let err = io::Error::new(ErrorKind::Other, "udp relay channel full");
-            return Err(err);
-        }
-        Ok(())
     }
 }
 
@@ -294,6 +301,7 @@ where
     client_packet_id: u64,
     server_session: Option<ServerSessionContext>,
     server_session_expire_duration: Duration,
+    span: Span,
 }
 
 impl<W> Drop for UdpAssociationContext<W>
@@ -301,7 +309,8 @@ where
     W: UdpInboundWrite + Send + Sync + Unpin + 'static,
 {
     fn drop(&mut self) {
-        debug!("udp association for {} is closed", self.peer_addr);
+        let _enter = self.span.enter();
+        debug!("udp association destoried");
     }
 }
 
@@ -325,7 +334,8 @@ where
         balancer: PingBalancer,
         respond_writer: W,
         server_session_expire_duration: Duration,
-    ) -> (JoinHandle<()>, mpsc::Sender<(Address, Bytes)>) {
+        span: Span,
+    ) -> (JoinHandle<()>, mpsc::Sender<(Address, Bytes, Span)>) {
         // Pending packets UDP_ASSOCIATION_SEND_CHANNEL_SIZE for each association should be good enough for a server.
         // If there are plenty of packets stuck in the channel, dropping excessive packets is a good way to protect the server from
         // being OOM.
@@ -347,8 +357,9 @@ where
             client_packet_id: 0,
             server_session: None,
             server_session_expire_duration,
+            span: span.clone(),
         };
-        let handle = tokio::spawn(async move { assoc.dispatch_packet(receiver).await });
+        let handle = tokio::spawn(async move { assoc.dispatch_packet(receiver).await }.instrument(span));
 
         (handle, sender)
     }
@@ -427,7 +438,7 @@ where
         }
     }
 
-    async fn dispatch_packet(&mut self, mut receiver: mpsc::Receiver<(Address, Bytes)>) {
+    async fn dispatch_packet(&mut self, mut receiver: mpsc::Receiver<(Address, Bytes, Span)>) {
         let mut bypassed_ipv4_buffer = Vec::new();
         let mut bypassed_ipv6_buffer = Vec::new();
         let mut proxied_buffer = Vec::new();
@@ -449,57 +460,63 @@ where
                 }
 
                 packet_received_opt = receiver.recv() => {
-                    let (target_addr, data) = match packet_received_opt {
+                    let (target_addr, data, span) = match packet_received_opt {
                         Some(d) => d,
                         None => {
-                            trace!("udp association for {} -> ... channel closed", self.peer_addr);
+                            trace!("channel closed");
                             break;
                         }
                     };
 
-                    self.dispatch_received_packet(&target_addr, &data, &mut check_rate_limit_size).await
+                    self.dispatch_received_packet(&target_addr, &data, &mut check_rate_limit_size).instrument(span).await
                 }
 
                 received_opt = receive_from_bypassed_opt(&self.bypassed_ipv4_socket, &mut bypassed_ipv4_buffer), if self.bypassed_ipv4_socket.is_some() => {
                     let (n, addr) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
-                            error!("udp relay {} <- ... (bypassed) failed, error: {}", self.peer_addr, err);
+                            error!(error = ?err, "receive from bypassed(ipv4) fail");
                             // Socket failure. Reset for recreation.
                             self.bypassed_ipv4_socket = None;
                             continue;
                         }
                     };
 
+                    let span = info_span!("udp.remote", target = addr.to_string(), source = "bypass");
                     let addr = Address::from(addr);
-                    self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true, &mut check_rate_limit_size).await;
+                    self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true, &mut check_rate_limit_size).instrument(span).await;
                 }
 
                 received_opt = receive_from_bypassed_opt(&self.bypassed_ipv6_socket, &mut bypassed_ipv6_buffer), if self.bypassed_ipv6_socket.is_some() => {
                     let (n, addr) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
-                            error!("udp relay {} <- ... (bypassed) failed, error: {}", self.peer_addr, err);
+                            error!(error = ?err, "receive from bypassed(ipv6) fail");
                             // Socket failure. Reset for recreation.
                             self.bypassed_ipv6_socket = None;
                             continue;
                         }
                     };
 
+                    let span = info_span!("udp.remote", target = addr.to_string(), source = "bypass");
                     let addr = Address::from(addr);
-                    self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut check_rate_limit_size).await;
+                    self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut check_rate_limit_size).instrument(span).await;
                 }
 
-                received_opt = receive_from_proxied_opt(&mut self.proxied_socket, &self.peer_addr, &mut proxied_buffer), if check_rate_limit_size == 0 && self.proxied_socket.is_some() => {
+                received_opt = receive_from_proxied_opt(&mut self.proxied_socket, &mut proxied_buffer), if check_rate_limit_size == 0 && self.proxied_socket.is_some() => {
                     let (n, addr, control_opt) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
-                            error!("udp relay {} <- ... (proxied) failed, error: {}", self.peer_addr, err);
+                            error!(error = ?err, "receive from proxied failed");
                             // Socket failure. Reset for recreation.
                             self.proxied_socket = None;
                             continue;
                         }
                     };
+
+                    let span = info_span!("udp.remote", target = addr.to_string(), source = "proxied");
+                    let _enter = span.enter();
+
                     flow_state.incr_rx(n as u64);
 
                     if let Some(control) = control_opt {
@@ -515,9 +532,8 @@ where
                             .entry(control.server_session_id)
                             .or_insert_with(|| {
                                 trace!(
-                                    "udp server with session {} for {} created",
+                                    "udp server with session {} created",
                                     control.client_session_id,
-                                    self.peer_addr,
                                 );
 
                                 ServerContext {
@@ -526,18 +542,18 @@ where
                             });
 
                         if !session_context.packet_window_filter.validate_packet_id(packet_id, u64::MAX) {
-                            error!("udp {} packet_id {} out of window", self.peer_addr, packet_id);
+                            error!("packet_id {} out of window", packet_id);
                             continue;
                         }
                     }
 
-                    self.send_received_respond_packet(&addr, &proxied_buffer[..n], false, &mut check_rate_limit_size).await;
+                    self.send_received_respond_packet(&addr, &proxied_buffer[..n], false, &mut check_rate_limit_size).instrument(span.clone()).await;
                 }
 
                 _ = keepalive_interval.tick() => {
                     if self.keepalive_flag {
                         if let Err(..) = self.keepalive_tx.try_send(self.peer_addr) {
-                            debug!("udp relay {} keep-alive failed, channel full or closed", self.peer_addr);
+                            debug!("keep-alive failed, channel full or closed");
                         } else {
                             self.keepalive_flag = false;
                         }
@@ -545,7 +561,7 @@ where
                 }
 
                 _ = close_notify.notified() => {
-                    // tracing::error!("xxxxxx: udp association for {} -> ... fake closed", self.peer_addr);
+                    debug!("fake closed");
                     break;
                 }
             }
@@ -570,7 +586,6 @@ where
         #[inline]
         async fn receive_from_proxied_opt(
             socket: &mut Option<MultiProtocolProxySocket>,
-            _peer_addr: &SocketAddr,
             buf: &mut Vec<u8>,
         ) -> io::Result<(usize, Address, Option<UdpSocketControlData>)> {
             match socket {
@@ -583,18 +598,14 @@ where
                     match socket {
                         MultiProtocolProxySocket::SS(ref s) => {
                             let (size, addr, _recv_size, control_data) = s.recv_with_ctrl(buf).await?;
-                            Ok((size, addr, control_data))
+                            Ok((size, Address::from(addr), control_data))
                         }
                         #[cfg(feature = "trojan")]
                         MultiProtocolProxySocket::Trojan { ref mut r, .. } => trojan::trojan_receive_from(r, buf).await,
                         #[cfg(feature = "vless")]
-                        MultiProtocolProxySocket::Vless(ref mut context) => {
-                            context.vless_receive_from(_peer_addr, buf).await
-                        }
+                        MultiProtocolProxySocket::Vless(ref mut context) => context.vless_receive_from(buf).await,
                         #[cfg(feature = "tuic")]
-                        MultiProtocolProxySocket::Tuic(ref mut context) => {
-                            context.tuic_receive_from(_peer_addr, buf).await
-                        }
+                        MultiProtocolProxySocket::Tuic(ref mut context) => context.tuic_receive_from(buf).await,
                     }
                 }
             }
@@ -616,43 +627,18 @@ where
             bypassed = self.context.fake_mode().is_bypass();
         }
 
-        trace!(
-            "udp relay {} -> {} ({}) with {} bytes",
-            self.peer_addr,
-            target_addr,
-            if bypassed { "bypassed" } else { "proxied" },
-            data.len()
-        );
-
         if bypassed {
             if let Err(err) = self.dispatch_received_bypassed_packet(target_addr, data).await {
-                error!(
-                    "udp relay {} -> {} (bypassed) with {} bytes, error: {}",
-                    self.peer_addr,
-                    target_addr,
-                    data.len(),
-                    err
-                );
+                error!(error = ?err, "==> {} bytes error", data.len());
             }
         } else {
             if *check_rate_limit_size > 0 {
-                tracing::info!(
-                    "udp relay {} -> {} (proxied) with {} bytes, error: rate-limited",
-                    self.peer_addr,
-                    target_addr,
-                    data.len(),
-                );
+                trace!("==> {} bytes, discard for rate-limited", data.len());
                 return;
             }
 
             if let Err(err) = self.dispatch_received_proxied_packet(target_addr, data).await {
-                error!(
-                    "udp relay {} -> {} (proxied) with {} bytes, error: {}",
-                    self.peer_addr,
-                    target_addr,
-                    data.len(),
-                    err
-                );
+                error!(error = ?err, "==> {} bytes error", data.len());
             } else {
                 *check_rate_limit_size += data.len();
             }
@@ -727,13 +713,9 @@ where
 
         let n = socket.send_to(data, target_addr).await?;
         if n != data.len() {
-            warn!(
-                "{} -> {} sent {} bytes != expected {} bytes",
-                self.peer_addr,
-                target_addr,
-                n,
-                data.len()
-            );
+            warn!("==> {} bytes send mismatched, expected={}", n, data.len());
+        } else {
+            trace!("==> {} bytes", n);
         }
 
         Ok(())
@@ -753,8 +735,8 @@ where
 
                 let new_session_id = generate_client_session_id();
                 warn!(
-                    "{} -> {} (proxied) packet id overflowed. socket reset and session renewed ({} -> {})",
-                    self.peer_addr, target_addr, self.client_session_id, new_session_id
+                    "packet id overflowed. socket reset and session renewed ({} -> {})",
+                    self.client_session_id, new_session_id
                 );
 
                 self.proxied_socket.take();
@@ -859,7 +841,7 @@ where
             }
             #[cfg(feature = "tuic")]
             MultiProtocolProxySocket::Tuic(ref mut context) => {
-                context.tuic_try_send_to(&self.peer_addr, target_addr, data)?;
+                context.tuic_try_send_to(target_addr, data)?;
                 self.context.flow_stat().incr_tx(data.len() as u64);
                 return Ok(());
             }
@@ -869,12 +851,7 @@ where
         self.client_packet_id = match self.client_packet_id.checked_add(1) {
             Some(i) => i,
             None => {
-                warn!(
-                    "{} -> {} (proxied) sending {} bytes failed, packet id overflowed",
-                    self.peer_addr,
-                    target_addr,
-                    data.len(),
-                );
+                warn!("sending {} bytes failed, packet id overflowed", data.len(),);
                 return Ok(());
             }
         };
@@ -883,19 +860,16 @@ where
         control.client_session_id = self.client_session_id;
         control.packet_id = self.client_packet_id;
 
-        match socket.send_with_ctrl(target_addr, &control, data).await {
+        match socket
+            .send_with_ctrl(&ServerAddr::from(target_addr), &control, data)
+            .await
+        {
             Ok(..) => {
                 self.context.flow_stat().incr_tx(data.len() as u64);
                 return Ok(());
             }
             Err(err) => {
-                debug!(
-                    "{} -> {} (proxied) sending {} bytes failed, error: {}",
-                    self.peer_addr,
-                    target_addr,
-                    data.len(),
-                    err
-                );
+                debug!(error = ?err, "sending {} bytes failed", data.len());
 
                 // Drop the socket and reconnect to another server.
                 self.proxied_socket = None;
@@ -912,36 +886,14 @@ where
         bypassed: bool,
         check_rate_limit_size: &mut usize,
     ) {
-        trace!(
-            "udp relay {} <- {} ({}) received {} bytes",
-            self.peer_addr,
-            addr,
-            if bypassed { "bypassed" } else { "proxied" },
-            data.len(),
-        );
-
         // Keep association alive in map
         self.keepalive_flag = true;
 
         // Send back to client
         if let Err(err) = self.respond_writer.send_to(self.peer_addr, addr, data).await {
-            warn!(
-                "udp failed to send back {} bytes to client {}, from target {} ({}), error: {}",
-                data.len(),
-                self.peer_addr,
-                addr,
-                if bypassed { "bypassed" } else { "proxied" },
-                err
-            );
+            warn!(error = ?err, "<== {} bytes error", data.len());
         } else {
-            trace!(
-                "udp relay {} <- {} ({}) with {} bytes",
-                self.peer_addr,
-                addr,
-                if bypassed { "bypassed" } else { "proxied" },
-                data.len()
-            );
-
+            trace!("<== {} bytes", data.len());
             if !bypassed {
                 *check_rate_limit_size += data.len();
             }

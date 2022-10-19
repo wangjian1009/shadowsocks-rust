@@ -291,7 +291,7 @@ pub fn define_command_line_options(mut app: Command<'_>) -> Command<'_> {
             );
     }
 
-    #[cfg(feature = "logging-apm")]
+    #[cfg(feature = "logging-file")]
     {
         app = app.arg(
             Arg::new("LOG_TEMPLATE")
@@ -719,7 +719,9 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
         #[cfg(feature = "server-mock")]
         {
             if let Some(mock_dns_vec) = matches.values_of("MOCK_DNS") {
-                for addr in mock_dns_vec.map(|t| Address::parse_with_dft_port(t, 53).expect("mock dns address")) {
+                for addr in mock_dns_vec
+                    .map(|t| ServerAddr::from(Address::parse_with_dft_port(t, 53).expect("mock dns address")))
+                {
                     config.mock_dns.push(addr);
                 }
             }

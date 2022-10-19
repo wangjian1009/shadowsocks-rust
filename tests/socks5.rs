@@ -102,7 +102,7 @@ impl Socks5TestServer {
         tokio::spawn(run_server(CancelWaiter::none(), svr_cfg));
 
         let client_cfg = self.cli_config.clone();
-        tokio::spawn(run_local(client_cfg));
+        tokio::spawn(run_local(client_cfg, CancelWaiter::none()));
 
         time::sleep(Duration::from_secs(1)).await;
     }

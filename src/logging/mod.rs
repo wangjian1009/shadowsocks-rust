@@ -1,22 +1,18 @@
 //! Logging facilities
 use cfg_if::cfg_if;
 
-pub struct Guard {}
+pub struct Guard {
+    need_wait: bool,
+}
 
 impl Guard {
     pub async fn close(self) {
         #[cfg(feature = "logging-jaeger")]
         opentelemetry::global::shutdown_tracer_provider();
 
-        #[cfg(feature = "logging-jaeger")]
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    }
-}
-
-impl Drop for Guard {
-    fn drop(&mut self) {
-        #[cfg(feature = "logging-jaeger")]
-        opentelemetry::global::shutdown_tracer_provider();
+        if self.need_wait {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
     }
 }
 
@@ -65,13 +61,17 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
     })
     .with_max_level_hint(level);
 
-    let guard = Guard {};
+    let mut guard = Guard { need_wait: false };
 
     let subscriber = tracing_subscriber::registry();
 
     // 控制台输出
     let subscriber = subscriber.with({
         let append = tracing_subscriber::fmt::layer().with_target(false);
+
+        #[cfg(target_os = "android")]
+        let append = append.with_ansi(false);
+
         if config.format.without_time {
             append.without_time().with_filter(filter_fn.clone()).boxed()
         } else {
@@ -82,7 +82,8 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
     cfg_if! {
         if #[cfg(feature = "logging-apm")] {
             let subscriber = subscriber.with(config.log_apm_url.as_ref().map(|url| {
-                tracing_elastic_apm::new_layer("sfox-miner".to_string(), build_apm_config(url))
+                guard.need_wait = true;
+                tracing_elastic_apm::new_layer(bin_name.to_string(), build_apm_config(url))
                     .expect("apm-server")
                     .with_filter(filter_fn.clone())
             }));
@@ -92,9 +93,10 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
     cfg_if! {
         if #[cfg(feature = "logging-jaeger")] {
             let subscriber = subscriber.with(config.log_jaeger_url.as_ref().map(|url| {
+                guard.need_wait = true;
                 opentelemetry::global::set_text_map_propagator(opentelemetry_jaeger::Propagator::new());
                 // Create a tracing layer with the configured tracer
-                tracing_opentelemetry::layer().with_tracer(build_jaeger_tracer(url)).with_filter(filter_fn.clone())
+                tracing_opentelemetry::layer().with_tracer(build_jaeger_tracer(bin_name, url)).with_filter(filter_fn.clone())
             }));
         }
     }
@@ -150,7 +152,6 @@ fn build_apm_config(url: &url::Url) -> tracing_elastic_apm::config::Config {
     } else {
         let mut base_url = url.clone();
         base_url.set_username("").expect("apm-server");
-        print!("xxxxx: aa = {}", url.username());
         Config::new(base_url.to_string()).with_authorization(Authorization::SecretToken(url.username().to_owned()))
     };
 
@@ -200,14 +201,14 @@ fn build_apm_config(url: &url::Url) -> tracing_elastic_apm::config::Config {
 }
 
 #[cfg(feature = "logging-jaeger")]
-fn build_jaeger_tracer(url: &url::Url) -> opentelemetry::sdk::trace::Tracer {
+fn build_jaeger_tracer(bin_name: &'static str, url: &url::Url) -> opentelemetry::sdk::trace::Tracer {
     let mut base_url = url.clone();
     base_url.set_password(None).expect("jaeger url");
     base_url.set_username("").expect("jaeger url");
 
     // Install a new OpenTelemetry trace pipeline
     let mut tracer = opentelemetry_jaeger::new_collector_pipeline()
-        .with_service_name("sfox-miner")
+        .with_service_name(bin_name.to_string())
         .with_hyper()
         .with_endpoint(base_url.to_string());
 

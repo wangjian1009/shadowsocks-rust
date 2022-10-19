@@ -7,6 +7,7 @@ use thiserror::Error;
 use tracing::{debug, error, info_span, trace, Instrument};
 
 use crate::canceler::CancelWaiter;
+use crate::ServerAddr;
 
 impl Connection {
     pub async fn process_uni_stream(&self, mut stream: RecvStream) -> Result<(), DispatchError> {
@@ -30,6 +31,7 @@ impl Connection {
             match cmd {
                 Command::Authenticate { .. } => unreachable!(),
                 Command::Packet { assoc_id, len, addr } => {
+                    let addr = ServerAddr::from(addr);
                     let mut buf = vec![0; len as usize];
                     if let Err(err) = stream.read_exact(&mut buf).await {
                         debug!(error = ?err, "read packet data");
@@ -87,6 +89,7 @@ impl Connection {
         if self.is_authenticated.clone().await {
             match cmd {
                 Command::Connect { addr } => {
+                    let addr = ServerAddr::from(addr);
                     let span = info_span!("connection", target = addr.to_string());
                     async move {
                         tokio::select! {
@@ -121,6 +124,7 @@ impl Connection {
         if self.is_authenticated.clone().await {
             match cmd {
                 Command::Packet { assoc_id, addr, .. } => {
+                    let addr = ServerAddr::from(addr);
                     let pkt = datagram.slice(cmd_len..);
                     self.flow_state.as_ref().map(|f| f.incr_rx(pkt.len() as u64));
 
@@ -153,7 +157,7 @@ impl Connection {
         &self,
         assoc_id: u32,
         pkt: Bytes,
-        addr: Address,
+        addr: ServerAddr,
     ) -> Result<(), DispatchError> {
         let (source, span) = match self.udp_sessions.find_session(assoc_id) {
             Some(r) => r,
@@ -174,7 +178,7 @@ impl Connection {
                         }
                     };
 
-                    let cmd = Command::new_packet(assoc_id, pkt.len() as u16, addr);
+                    let cmd = Command::new_packet(assoc_id, pkt.len() as u16, Address::from(addr));
                     if let Err(err) = cmd.write_to(&mut stream).await {
                         error!(error = ?err, "write cmd error");
                         return Ok(());
@@ -193,7 +197,7 @@ impl Connection {
                     self.flow_state.as_ref().map(|f| f.incr_tx(pkt.len() as u64));
                 }
                 UdpSessionSource::Datagram => {
-                    let cmd = Command::new_packet(assoc_id, pkt.len() as u16, addr);
+                    let cmd = Command::new_packet(assoc_id, pkt.len() as u16, Address::from(addr));
 
                     let mut buf = BytesMut::with_capacity(cmd.serialized_len());
                     cmd.write_to_buf(&mut buf);

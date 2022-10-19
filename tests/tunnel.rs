@@ -50,7 +50,7 @@ async fn tcp_tunnel() {
     )
     .unwrap();
 
-    tokio::spawn(run_local(local_config));
+    tokio::spawn(run_local(local_config, CancelWaiter::none()));
     tokio::spawn(run_server(CancelWaiter::none(), server_config));
 
     time::sleep(Duration::from_secs(1)).await;
@@ -123,7 +123,7 @@ async fn udp_tunnel() {
     )
     .unwrap();
 
-    tokio::spawn(run_local(local_config));
+    tokio::spawn(run_local(local_config, CancelWaiter::none()));
     tokio::spawn(run_server(CancelWaiter::none(), server_config));
 
     time::sleep(Duration::from_secs(1)).await;

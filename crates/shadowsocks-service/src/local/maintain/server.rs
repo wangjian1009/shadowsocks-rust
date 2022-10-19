@@ -29,7 +29,7 @@ impl Service<Request<Body>> for Svc {
 }
 
 pub struct MakeSvc {
-    pub context: Arc<MaintainServerContext>,
+    pub(super) context: Arc<MaintainServerContext>,
 }
 
 impl<T> Service<T> for MakeSvc {

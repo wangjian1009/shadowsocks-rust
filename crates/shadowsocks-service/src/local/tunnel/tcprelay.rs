@@ -31,13 +31,22 @@ pub async fn run_tcp_tunnel(
 
     info!("shadowsocks TCP tunnel listening on {}", listener.local_addr()?);
 
+    let cancel_waiter = context.cancel_waiter();
     loop {
-        let (stream, peer_addr) = match listener.accept().await {
-            Ok(s) => s,
-            Err(err) => {
-                error!("accept failed with error: {}", err);
-                time::sleep(Duration::from_secs(1)).await;
-                continue;
+        let (stream, peer_addr) = tokio::select! {
+            r = listener.accept() => {
+                match r {
+                    Ok(s) => s,
+                    Err(err) => {
+                        error!("accept failed with error: {}", err);
+                        time::sleep(Duration::from_secs(1)).await;
+                        continue;
+                    }
+                }
+            }
+            _ = cancel_waiter.wait() => {
+                tracing::trace!("canceled");
+                return Ok(())
             }
         };
 

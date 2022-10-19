@@ -35,4 +35,16 @@ impl ServerProtocol {
             Self::Tuic(..) => "tuic",
         }
     }
+
+    pub fn support_native_packet(&self) -> Option<bool> {
+        match self {
+            ServerProtocol::SS(..) => None,
+            #[cfg(feature = "trojan")]
+            ServerProtocol::Trojan(..) => return Some(false),
+            #[cfg(feature = "vless")]
+            ServerProtocol::Vless(..) => return Some(false),
+            #[cfg(feature = "tuic")]
+            ServerProtocol::Tuic(..) => return Some(true),
+        }
+    }
 }

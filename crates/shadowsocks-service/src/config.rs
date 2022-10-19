@@ -61,8 +61,6 @@ use cfg_if::cfg_if;
 #[cfg(feature = "local-tun")]
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
-#[cfg(any(feature = "local-tunnel", feature = "local-dns", feature = "server-mock"))]
-use shadowsocks::relay::socks5::Address;
 use shadowsocks::{
     config::{
         ManagerAddr, Mode, ReplayAttackPolicy, ServerAddr, ServerConfig, ServerProtocol, ServerUser, ServerUserManager,
@@ -828,7 +826,7 @@ pub struct LocalConfig {
 
     /// Destination address for tunnel
     #[cfg(feature = "local-tunnel")]
-    pub forward_addr: Option<Address>,
+    pub forward_addr: Option<ServerAddr>,
 
     /// TCP Transparent Proxy type
     #[cfg(feature = "local-redir")]
@@ -846,7 +844,7 @@ pub struct LocalConfig {
     ///
     /// Sending DNS query through proxy to this address
     #[cfg(feature = "local-dns")]
-    pub remote_dns_addr: Option<Address>,
+    pub remote_dns_addr: Option<ServerAddr>,
 
     /// Tun interface's name
     ///
@@ -1088,7 +1086,7 @@ pub struct Config {
     pub limit_connection_close_delay: Option<Duration>,
 
     #[cfg(feature = "server-mock")]
-    pub mock_dns: Vec<Address>,
+    pub mock_dns: Vec<ServerAddr>,
 
     #[cfg(feature = "sniffer-bittorrent")]
     pub reject_bittorrent: Option<bool>,
@@ -1456,8 +1454,8 @@ impl Config {
                             };
 
                             local_config.forward_addr = Some(match forward_address.parse::<IpAddr>() {
-                                Ok(ip) => Address::from(SocketAddr::new(ip, forward_port)),
-                                Err(..) => Address::from((forward_address, forward_port)),
+                                Ok(ip) => ServerAddr::from(SocketAddr::new(ip, forward_port)),
+                                Err(..) => ServerAddr::from((forward_address, forward_port)),
                             });
                         }
 
@@ -1509,8 +1507,8 @@ impl Config {
                         if let Some(remote_dns_address) = local.remote_dns_address {
                             let remote_dns_port = local.remote_dns_port.unwrap_or(53);
                             local_config.remote_dns_addr = Some(match remote_dns_address.parse::<IpAddr>() {
-                                Ok(ip) => Address::from(SocketAddr::new(ip, remote_dns_port)),
-                                Err(..) => Address::from((remote_dns_address, remote_dns_port)),
+                                Ok(ip) => ServerAddr::from(SocketAddr::new(ip, remote_dns_port)),
+                                Err(..) => ServerAddr::from((remote_dns_address, remote_dns_port)),
                             });
                         }
 
@@ -1787,9 +1785,7 @@ impl Config {
             let timeout = Duration::from_secs(timeout);
             // Set as a default timeout
             for svr in &mut nconfig.server {
-                if svr.timeout().is_none() {
-                    svr.set_timeout(timeout);
-                }
+                svr.set_timeout(timeout);
             }
         }
 
@@ -2322,16 +2318,16 @@ impl fmt::Display for Config {
                         forward_address: match local.forward_addr {
                             None => None,
                             Some(ref forward_addr) => match forward_addr {
-                                Address::SocketAddress(ref sa) => Some(sa.ip().to_string()),
-                                Address::DomainNameAddress(ref dm, ..) => Some(dm.to_string()),
+                                ServerAddr::SocketAddr(ref sa) => Some(sa.ip().to_string()),
+                                ServerAddr::DomainName(ref dm, ..) => Some(dm.to_string()),
                             },
                         },
                         #[cfg(feature = "local-tunnel")]
                         forward_port: match local.forward_addr {
                             None => None,
                             Some(ref forward_addr) => match forward_addr {
-                                Address::SocketAddress(ref sa) => Some(sa.port()),
-                                Address::DomainNameAddress(.., port) => Some(*port),
+                                ServerAddr::SocketAddr(ref sa) => Some(sa.port()),
+                                ServerAddr::DomainName(.., port) => Some(*port),
                             },
                         },
                         #[cfg(feature = "local-dns")]
@@ -2358,16 +2354,16 @@ impl fmt::Display for Config {
                         remote_dns_address: match local.remote_dns_addr {
                             None => None,
                             Some(ref remote_dns_addr) => match remote_dns_addr {
-                                Address::SocketAddress(ref sa) => Some(sa.ip().to_string()),
-                                Address::DomainNameAddress(ref dm, ..) => Some(dm.to_string()),
+                                ServerAddr::SocketAddr(ref sa) => Some(sa.ip().to_string()),
+                                ServerAddr::DomainName(ref dm, ..) => Some(dm.to_string()),
                             },
                         },
                         #[cfg(feature = "local-dns")]
                         remote_dns_port: match local.remote_dns_addr {
                             None => None,
                             Some(ref remote_dns_addr) => match remote_dns_addr {
-                                Address::SocketAddress(ref sa) => Some(sa.port()),
-                                Address::DomainNameAddress(.., port) => Some(*port),
+                                ServerAddr::SocketAddr(ref sa) => Some(sa.port()),
+                                ServerAddr::DomainName(.., port) => Some(*port),
                             },
                         },
                         #[cfg(feature = "local-tun")]
@@ -2433,7 +2429,7 @@ impl fmt::Display for Config {
                         }
                     });
                 });
-                jconf.timeout = svr.timeout().map(|t| t.as_secs());
+                jconf.timeout = Some(svr.timeout().as_secs());
                 jconf.mode = Some(svr.if_ss(|c| c.mode()).unwrap_or(Mode::TcpAndUdp).to_string());
             }
             // For >1 servers, uses extended multiple server format
@@ -2490,7 +2486,7 @@ impl fmt::Display for Config {
                                 })
                             })
                             .unwrap_or(None),
-                        timeout: svr.timeout().map(|t| t.as_secs()),
+                        timeout: Some(svr.timeout().as_secs()),
                         remarks: svr.remarks().map(ToOwned::to_owned),
                         id: svr.if_ss(|c| c.id().map(ToOwned::to_owned)).unwrap_or(None),
                         mode: Some(svr.if_ss(|c| c.mode()).unwrap_or(Mode::TcpAndUdp).to_string()),

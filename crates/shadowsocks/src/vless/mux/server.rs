@@ -2,11 +2,10 @@ use spin::Mutex as SpinMutex;
 use std::{future::Future, io, net::SocketAddr, sync::Arc};
 use tokio::{io::AsyncReadExt, sync::mpsc};
 
-use crate::{transport::StreamConnection, vless::new_error};
+use crate::{transport::StreamConnection, vless::new_error, ServerAddr};
 
 use super::{
     super::packet::{VlessUdpReader, VlessUdpWriter},
-    super::protocol,
     encoding, frame,
     session::{Session, SessionContext, SessionManager, SessionMetadata, SessionReadCmd, SessionWay},
     MuxStream, SharedStream,
@@ -22,13 +21,13 @@ where
     IS: StreamConnection + 'static,
     // 处理Stream
     FutPS: Future<Output = io::Result<()>> + Send,
-    PS: (Fn(Box<dyn StreamConnection + 'static>, protocol::Address) -> FutPS) + Send + Sync + Clone + 'static,
+    PS: (Fn(Box<dyn StreamConnection + 'static>, ServerAddr) -> FutPS) + Send + Sync + Clone + 'static,
     // 处理Packet
     FutPU: Future<Output = io::Result<()>>,
     PU: (Fn(
             VlessUdpReader<Box<dyn StreamConnection + 'static>>,
             VlessUdpWriter<Box<dyn StreamConnection + 'static>>,
-            protocol::Address,
+            ServerAddr,
         ) -> FutPU)
         + Send
         + Clone
@@ -97,13 +96,13 @@ async fn handle_status_new<PS, FutPS, PU, FutPU>(
 where
     // 处理Stream
     FutPS: Future<Output = io::Result<()>> + Send,
-    PS: (Fn(Box<dyn StreamConnection + 'static>, protocol::Address) -> FutPS) + Send + Sync + 'static,
+    PS: (Fn(Box<dyn StreamConnection + 'static>, ServerAddr) -> FutPS) + Send + Sync + 'static,
     // 处理Packet
     FutPU: Future<Output = io::Result<()>>,
     PU: (Fn(
             VlessUdpReader<Box<dyn StreamConnection + 'static>>,
             VlessUdpWriter<Box<dyn StreamConnection + 'static>>,
-            protocol::Address,
+            ServerAddr,
         ) -> FutPU)
         + Send
         + 'static,
@@ -185,9 +184,9 @@ async fn handle_serve_stream<PS, FutPS>(
     serve_stream: PS,
 ) where
     FutPS: Future<Output = io::Result<()>> + Send,
-    PS: (Fn(Box<dyn StreamConnection + 'static>, protocol::Address) -> FutPS) + Send + Sync + 'static,
+    PS: (Fn(Box<dyn StreamConnection + 'static>, ServerAddr) -> FutPS) + Send + Sync + 'static,
 {
-    let target_addr = session.meta().target_addr.address.clone();
+    let target_addr = ServerAddr::from(session.meta().target_addr.address.clone());
     let stream = MuxStream::new(session, read_cmd_receiver);
 
     tokio::spawn(async move {
@@ -205,7 +204,7 @@ async fn handle_serve_udp<PU, FutPU>(
     PU: (Fn(
             VlessUdpReader<Box<dyn StreamConnection + 'static>>,
             VlessUdpWriter<Box<dyn StreamConnection + 'static>>,
-            protocol::Address,
+            ServerAddr,
         ) -> FutPU)
         + Send
         + 'static,

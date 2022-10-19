@@ -9,6 +9,7 @@ use std::{net::IpAddr, time::Duration};
 #[cfg(feature = "local-dns")]
 use lru_time_cache::LruCache;
 use shadowsocks::{
+    canceler::CancelWaiter,
     config::ServerType,
     context::{Context, SharedContext},
     dns_resolver::DnsResolver,
@@ -25,6 +26,8 @@ use shadowsocks::transport::RateLimiter;
 use shadowsocks::config::TransportConnectorConfig;
 
 use crate::{acl::AccessControl, config::SecurityConfig};
+
+use shadowsocks::ServerAddr;
 
 use cfg_if::cfg_if;
 
@@ -60,6 +63,9 @@ pub struct ServiceContext {
     // Flow statistic report
     flow_stat: Arc<FlowStat>,
 
+    // cancel
+    cancel_waiter: CancelWaiter,
+
     // For DNS relay's ACL domain name reverse lookup -- whether the IP shall be forwarded
     #[cfg(feature = "local-dns")]
     reverse_lookup_cache: Mutex<LruCache<IpAddr, bool>>,
@@ -79,13 +85,13 @@ pub struct ServiceContext {
 
 impl Default for ServiceContext {
     fn default() -> Self {
-        ServiceContext::new(Context::new_shared(ServerType::Local))
+        ServiceContext::new(Context::new_shared(ServerType::Local), CancelWaiter::none())
     }
 }
 
 impl ServiceContext {
     /// Create a new `ServiceContext`
-    pub fn new(context: Arc<Context>) -> ServiceContext {
+    pub fn new(context: Arc<Context>, cancel_waiter: CancelWaiter) -> ServiceContext {
         ServiceContext {
             context,
             connect_opts: ConnectOpts::default(),
@@ -93,6 +99,7 @@ impl ServiceContext {
             connection_close_notify: spin::Mutex::new(Arc::new(Notify::new())),
             acl: None,
             flow_stat: Arc::new(FlowStat::new()),
+            cancel_waiter,
             #[cfg(feature = "local-dns")]
             reverse_lookup_cache: Mutex::new(LruCache::with_expiry_duration_and_capacity(
                 Duration::from_secs(3 * 24 * 60 * 60),
@@ -159,6 +166,11 @@ impl ServiceContext {
         self.flow_stat.as_ref()
     }
 
+    /// Get cancel waiter
+    pub fn cancel_waiter(&self) -> CancelWaiter {
+        self.cancel_waiter.clone()
+    }
+
     /// Set customized DNS resolver
     pub fn set_dns_resolver(&mut self, resolver: Arc<DnsResolver>) {
         let context = Arc::get_mut(&mut self.context).expect("cannot set DNS resolver on a shared context");
@@ -187,7 +199,8 @@ impl ServiceContext {
                     }
                 }
 
-                acl.check_target_bypassed(&self.context, addr).await
+                acl.check_target_bypassed(&self.context, &ServerAddr::from(addr.clone()))
+                    .await
             }
         }
     }

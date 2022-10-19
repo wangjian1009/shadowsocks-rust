@@ -87,7 +87,7 @@ impl ServerIdent {
         #[cfg(feature = "tuic")]
         let tuic_dispatcher = if let ServerProtocol::Tuic(tuic_config) = svr_cfg.protocol() {
             let server_addr = match svr_cfg.addr() {
-                shadowsocks::ServerAddr::DomainName(domain, port) => tuic::ServerAddr::DomainAddr {
+                shadowsocks::ServerAddr::DomainName(domain, port) => tuic::ServerAddrWithName::DomainAddr {
                     domain: domain.clone(),
                     port: port.clone(),
                 },
@@ -106,7 +106,7 @@ impl ServerIdent {
                             ))
                         }
                     };
-                    tuic::ServerAddr::SocketAddr {
+                    tuic::ServerAddrWithName::SocketAddr {
                         addr: addr.clone(),
                         name: sni.clone(),
                     }

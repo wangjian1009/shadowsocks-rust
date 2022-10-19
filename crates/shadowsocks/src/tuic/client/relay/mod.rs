@@ -12,12 +12,10 @@ use tokio::sync::{
 };
 
 pub use self::{
-    address::Address,
     connection::Connection,
     request::{AssociateRecvPacketReceiver, AssociateSendPacketSender, Request},
 };
 
-mod address;
 mod connection;
 mod incoming;
 mod request;
@@ -30,7 +28,7 @@ pub static MAX_UDP_RELAY_PACKET_SIZE: AtomicUsize = AtomicUsize::new(1500);
 pub async fn init(
     context: crate::context::SharedContext,
     quinn_config: ClientConfig,
-    server_addr: ServerAddr,
+    server_addr: ServerAddrWithName,
     connect_opts: crate::net::ConnectOpts,
     token_digest: [u8; 32],
     heartbeat_interval: u64,
@@ -87,16 +85,16 @@ pub async fn init(
 }
 
 #[derive(Clone)]
-pub enum ServerAddr {
+pub enum ServerAddrWithName {
     SocketAddr { addr: SocketAddr, name: String },
     DomainAddr { domain: String, port: u16 },
 }
 
-impl Display for ServerAddr {
+impl Display for ServerAddrWithName {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            ServerAddr::SocketAddr { addr, name } => write!(f, "{addr} ({name})"),
-            ServerAddr::DomainAddr { domain, port } => write!(f, "{domain}:{port}"),
+            ServerAddrWithName::SocketAddr { addr, name } => write!(f, "{addr} ({name})"),
+            ServerAddrWithName::DomainAddr { domain, port } => write!(f, "{domain}:{port}"),
         }
     }
 }

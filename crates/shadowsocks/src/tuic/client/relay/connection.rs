@@ -3,7 +3,7 @@ use super::{
     incoming::{self, Sender as IncomingSender},
     request::Wait as WaitRequest,
     stream::{BiStream, IncomingUniStreams, RecvStream, Register as StreamRegister, SendStream},
-    Address, ServerAddr, UdpRelayMode,
+    ServerAddrWithName, UdpRelayMode,
 };
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -27,8 +27,10 @@ use tokio::{
     time,
 };
 
-use crate::net::sys::create_outbound_udp_socket;
-use crate::net::{AddrFamily, ConnectOpts};
+use crate::{
+    net::{sys::create_outbound_udp_socket, AddrFamily, ConnectOpts},
+    ServerAddr,
+};
 
 pub async fn manage_connection(
     context: crate::context::SharedContext,
@@ -113,8 +115,8 @@ impl Connection {
         connect_opts: &ConnectOpts,
     ) -> Result<(Self, Datagrams, IncomingUniStreams)> {
         let (addr, name) = match &config.server_addr {
-            ServerAddr::SocketAddr { addr, name } => (addr.clone(), name),
-            ServerAddr::DomainAddr { domain, port } => {
+            ServerAddrWithName::SocketAddr { addr, name } => (addr.clone(), name),
+            ServerAddrWithName::DomainAddr { domain, port } => {
                 let remote_addr = lookup_then!(context, domain.as_str(), *port, |remote_addr| {
                     Result::Ok(remote_addr)
                 })?
@@ -298,7 +300,7 @@ impl Connection {
 
 pub struct ConnectionConfig {
     quinn_config: ClientConfig,
-    server_addr: ServerAddr,
+    server_addr: ServerAddrWithName,
     token_digest: [u8; 32],
     udp_relay_mode: UdpRelayMode<(), ()>,
     heartbeat_interval: u64,
@@ -309,7 +311,7 @@ pub struct ConnectionConfig {
 impl ConnectionConfig {
     pub fn new(
         quinn_config: ClientConfig,
-        server_addr: ServerAddr,
+        server_addr: ServerAddrWithName,
         token_digest: [u8; 32],
         udp_relay_mode: UdpRelayMode<(), ()>,
         heartbeat_interval: u64,
@@ -328,22 +330,22 @@ impl ConnectionConfig {
     }
 }
 
-pub struct UdpSessionMap(Mutex<HashMap<u32, MpscSender<(Bytes, Address)>>>);
+pub struct UdpSessionMap(Mutex<HashMap<u32, MpscSender<(Bytes, ServerAddr)>>>);
 
 impl UdpSessionMap {
     fn new() -> Self {
         Self(Mutex::new(HashMap::new()))
     }
 
-    pub fn insert(&self, id: u32, tx: MpscSender<(Bytes, Address)>) -> Option<MpscSender<(Bytes, Address)>> {
+    pub fn insert(&self, id: u32, tx: MpscSender<(Bytes, ServerAddr)>) -> Option<MpscSender<(Bytes, ServerAddr)>> {
         self.0.lock().insert(id, tx)
     }
 
-    pub fn get(&self, id: &u32) -> Option<MpscSender<(Bytes, Address)>> {
+    pub fn get(&self, id: &u32) -> Option<MpscSender<(Bytes, ServerAddr)>> {
         self.0.lock().get(id).cloned()
     }
 
-    pub fn remove(&self, id: &u32) -> Option<MpscSender<(Bytes, Address)>> {
+    pub fn remove(&self, id: &u32) -> Option<MpscSender<(Bytes, ServerAddr)>> {
         self.0.lock().remove(id)
     }
 

@@ -29,12 +29,21 @@ impl MaintainServer {
 
         tracing::info!("shadowsocks maintain server listening on {}", addr);
 
-        // Run this server for... forever!
-        if let Err(e) = server.await {
-            tracing::error!("maintain server error: {}", e);
-            Err(io::Error::new(io::ErrorKind::Other, e))
-        } else {
-            Ok(())
+        let cancel_waiter = self.context.service_context.cancel_waiter();
+        tokio::select! {
+            r = server => {
+                // Run this server for... forever!
+                if let Err(e) = r {
+                    tracing::error!("maintain server error: {}", e);
+                    Err(io::Error::new(io::ErrorKind::Other, e))
+                } else {
+                    Ok(())
+                }
+            }
+            _ = cancel_waiter.wait() => {
+                tracing::trace!("canceld");
+                Ok(())
+            }
         }
     }
 }

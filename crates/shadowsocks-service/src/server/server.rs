@@ -19,7 +19,7 @@ use shadowsocks::{
     ServerAddr,
 };
 use tokio::{io::AsyncReadExt, time};
-use tracing::{debug, debug_span, error, info, info_span, Instrument};
+use tracing::{debug, debug_span, error, info, info_span, trace, Instrument};
 
 use crate::{acl::AccessControl, config::SecurityConfig};
 
@@ -33,7 +33,6 @@ use shadowsocks::transport::BoundWidth;
 
 cfg_if! {
     if #[cfg(any(feature = "server-mock"))] {
-        use shadowsocks::relay::socks5::Address;
         use super::context::ServerMockProtocol;
     }
 }
@@ -121,7 +120,7 @@ impl Server {
     }
 
     #[cfg(feature = "server-mock")]
-    pub fn set_mock_server_protocol(&mut self, addr: Address, protocol: ServerMockProtocol) {
+    pub fn set_mock_server_protocol(&mut self, addr: ServerAddr, protocol: ServerMockProtocol) {
         let context = Arc::get_mut(&mut self.context).expect("cannot set ServerMockProtocol on a shared context");
         context.set_mock_server_protocol(addr, protocol);
     }
@@ -382,7 +381,7 @@ impl Server {
             let (s, peer_addr) = tokio::select! {
                 r = listener.accept() => r?,
                 _ = cancel_waiter.wait() => {
-                    debug!("canceled");
+                    trace!("canceled");
                     return Ok(());
                 }
             };

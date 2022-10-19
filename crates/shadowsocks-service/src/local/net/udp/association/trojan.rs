@@ -2,8 +2,8 @@ use super::*;
 
 use shadowsocks::config::TrojanConfig;
 use shadowsocks::create_connector_then;
-use shadowsocks::transport::{Connector, PacketMutWrite, PacketRead};
-use shadowsocks::trojan::{new_trojan_packet_connection, ClientStream};
+use shadowsocks::transport::{PacketMutWrite, PacketRead};
+use shadowsocks::trojan::client::connect_packet;
 use shadowsocks::ServerAddr;
 
 pub type TrojanUdpReader = shadowsocks::trojan::TrojanUdpReader<Box<dyn StreamConnection>>;
@@ -18,17 +18,18 @@ where
         svr_cfg: &ServerConfig,
         svr_trojan_cfg: &TrojanConfig,
     ) -> io::Result<MultiProtocolProxySocket> {
-        let stream = create_connector_then!(
+        let (r, w) = create_connector_then!(
             Some(self.context.context()),
             svr_cfg.connector_transport(),
             |connector| {
-                let stream = connector
-                    .connect_stream(svr_cfg.external_addr(), self.context.connect_opts_ref())
-                    .await?;
-
-                let stream = ClientStream::new_packet(stream, svr_trojan_cfg);
-
-                io::Result::Ok(Box::new(stream) as Box<dyn StreamConnection>)
+                connect_packet(
+                    &connector,
+                    svr_cfg,
+                    svr_trojan_cfg,
+                    self.context.connect_opts_ref(),
+                    |s| Box::new(s) as Box<dyn StreamConnection>,
+                )
+                .await
             }
         )?;
 
@@ -38,9 +39,6 @@ where
             svr_cfg.addr(),
             self.context.connect_opts_ref()
         );
-
-        // CLIENT <- REMOTE
-        let (r, w) = new_trojan_packet_connection(stream);
 
         Ok(MultiProtocolProxySocket::Trojan { r, w })
     }

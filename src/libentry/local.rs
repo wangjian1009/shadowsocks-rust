@@ -4,16 +4,18 @@ use std::{
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     os::raw::{c_char, c_ushort},
+    sync::Arc,
 };
 use tokio::net::UdpSocket;
 use tokio::runtime::Builder;
+use tokio::time::{sleep, Duration};
+use tracing::{error, info, info_span, Instrument};
 
 use cfg_if::cfg_if;
 
 cfg_if! {
     if #[cfg(feature = "host-dns")] {
         use super::HostDns;
-        use std::sync::Arc;
         use shadowsocks_service::config::DnsConfig;
     }
 }
@@ -22,6 +24,7 @@ use shadowsocks_service::{
     acl::AccessControl,
     config::{Config, ConfigType},
     run_local,
+    shadowsocks::canceler::Canceler,
 };
 
 #[cfg(feature = "local-flow-stat")]
@@ -50,7 +53,7 @@ pub extern "C" fn lib_local_run(
         }
     }
 
-    tracing::info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
+    info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
 
     let str_config = unsafe { CStr::from_ptr(c_config).to_string_lossy().to_owned() };
 
@@ -103,26 +106,26 @@ fn load_config(
     let mut config = match Config::load_from_str(str_config, ConfigType::Local) {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("load_config fail: {}", e);
+            error!("load_config fail: {}", e);
             panic!()
         }
     };
 
     if config.local.is_empty() {
-        tracing::error!(
+        error!(
             "missing `local_address`, consider specifying it by \"local_address\" and \"local_port\" in configuration file");
         panic!();
     }
 
     if config.server.is_empty() {
-        tracing::error!(
+        error!(
             "missing proxy servers, consider specifying it by configuration file, check more details in https://shadowsocks.org/en/config/quick-guide.html"
         );
         panic!();
     }
 
     if let Err(err) = config.check_integrity() {
-        tracing::error!("config integrity check failed, {}", err);
+        error!("config integrity check failed, {}", err);
         panic!();
     }
 
@@ -149,13 +152,13 @@ fn load_config(
         let acl = match AccessControl::load_from_file(acl_path) {
             Ok(acl) => acl,
             Err(err) => {
-                tracing::error!("loading ACL \"{}\", {}", acl_path, err);
+                error!("loading ACL \"{}\", {}", acl_path, err);
                 panic!();
             }
         };
         config.acl = Some(acl);
 
-        tracing::info!("loading ACL \"{}\" success", acl_path);
+        info!("loading ACL \"{}\" success", acl_path);
     }
 
     config
@@ -167,19 +170,20 @@ fn run(config: Config, control_port: u16) {
 
     runtime.block_on(async move {
         let vfut = FuturesUnordered::new();
+        let canceler = Arc::new(Canceler::new());
 
-        let server = run_local(config.clone());
+        let server = run_local(config.clone(), canceler.waiter());
         vfut.push(
             async move {
                 match server.await {
                     // Server future resolved without an error. This should never happen.
                     Ok(..) => {
-                        tracing::info!("server exited unexpectly");
+                        info!("server exited unexpectly");
                         // process::exit(common::EXIT_CODE_SERVER_EXIT_UNEXPECTLY);
                     }
                     // Server future resolved with error, which are listener errors in most cases
                     Err(err) => {
-                        tracing::error!("server aborted with {}", err);
+                        error!("server aborted with {}", err);
                         // process::exit(common::EXIT_CODE_SERVER_ABORTED);
                     }
                 };
@@ -199,21 +203,23 @@ fn run(config: Config, control_port: u16) {
             vfut.push(
                 async move {
                     match host_dns.as_ref().unwrap().run().await {
-                        Ok(()) => tracing::info!("host dns stop success"),
-                        Err(err) => tracing::error!("host dns stop with error {}", err),
+                        Ok(()) => info!("host dns stop success"),
+                        Err(err) => error!("host dns stop with error {}", err),
                     }
                 }
+                .instrument(info_span!("host-dns"))
                 .boxed(),
             );
         }
 
         let ctrl = run_ctrl(
             control_port,
+            canceler,
             #[cfg(feature = "host-dns")]
             host_dns,
         );
 
-        vfut.push(ctrl.boxed());
+        vfut.push(ctrl.instrument(info_span!("local-ctrl")).boxed());
 
         // vfut.push(
         //     async {
@@ -225,23 +231,34 @@ fn run(config: Config, control_port: u16) {
 
         let (_res, _) = vfut.into_future().await;
 
-        tracing::info!("server stoped");
+        info!("server stoped");
     });
 }
 
-async fn run_ctrl(control_port: u16, #[cfg(feature = "host-dns")] host_dns: Option<Arc<HostDns>>) {
+async fn run_ctrl(
+    control_port: u16,
+    canceler: Arc<Canceler>,
+    #[cfg(feature = "host-dns")] host_dns: Option<Arc<HostDns>>,
+) {
     match async move {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), control_port);
         let listener = UdpSocket::bind(addr).await?;
-        tracing::info!("shadowsocks control listen on {}", addr);
+        info!("shadowsocks control listen on {}", addr);
 
+        let cancel_waiter = canceler.waiter();
         let mut buf = vec![0u8; 2048];
         loop {
-            let n = listener.recv(&mut buf).await?;
+            let n = tokio::select! {
+                r = listener.recv(&mut buf) => { r? }
+                _ = cancel_waiter.wait() => {
+                    info!("canceled");
+                    break;
+                }
+            };
             let cmd: JsonMap<String, Value> = match serde_json::from_slice(&buf[..n]) {
                 Ok(v) => v,
                 Err(err) => {
-                    tracing::error!("control: cmd: {}, cmd parse error {}", "", err);
+                    error!("control: cmd: {}, cmd parse error {}", "", err);
                     continue;
                 }
             };
@@ -251,32 +268,37 @@ async fn run_ctrl(control_port: u16, #[cfg(feature = "host-dns")] host_dns: Opti
 
             let cmd = match cmd.get("cmd") {
                 None => {
-                    tracing::error!("control: cmd: {:?}, no entry cmd", cmd);
+                    error!("control: cmd: {:?}, no entry cmd", cmd);
                     continue;
                 }
                 Some(v) => match v {
                     Value::String(v) => v.as_str(),
                     _ => {
-                        tracing::error!("control: cmd: {:?}, entry cmd not string", cmd);
+                        error!("control: cmd: {:?}, entry cmd not string", cmd);
                         continue;
                     }
                 },
             };
 
             match cmd {
-                "stop" => break,
+                "stop" => {
+                    info!("received cmd stop, soft exiting");
+                    sleep(Duration::from_secs(1)).await;
+                    info!("received cmd stop, force exiting");
+                    break;
+                }
                 #[cfg(feature = "host-dns")]
                 "update-host-dns" => {
                     if let Some(host_dns) = host_dns.as_ref() {
                         let mut servers = vec![];
                         if let Some(args) = args {
                             if !args.is_array() {
-                                tracing::error!("control: {}: args not array", cmd);
+                                error!("control: {}: args not array", cmd);
                                 continue;
                             }
                             for e in args.as_array().unwrap().iter() {
                                 if !e.is_string() {
-                                    tracing::error!("control: {}: ignore arg for not string", cmd);
+                                    error!("control: {}: ignore arg for not string", cmd);
                                     continue;
                                 }
                                 servers.push(e.as_str().unwrap());
@@ -289,20 +311,20 @@ async fn run_ctrl(control_port: u16, #[cfg(feature = "host-dns")] host_dns: Opti
                 "update-rate-limit" => match on_update_speed_limit(control_port, args).await {
                     Ok(()) => {}
                     Err(e) => {
-                        tracing::error!("control: {}: error {}", cmd, e);
+                        error!("control: {}: error {}", cmd, e);
                     }
                 },
-                _ => tracing::error!("control: not support cmd {}", cmd),
+                _ => error!("control: not support cmd {}", cmd),
             }
         }
 
-        tracing::info!("server aborted ctrl stop");
+        info!("server aborted ctrl stop");
         io::Result::Ok(())
     }
     .await
     {
-        Ok(()) => tracing::info!("server control stop success"),
-        Err(err) => tracing::error!("server control stop with error {}", err),
+        Ok(()) => info!("server control stop success"),
+        Err(err) => error!("server control stop with error {}", err),
     }
 }
 
@@ -336,6 +358,6 @@ async fn on_update_speed_limit(maintain_port: u16, args: Option<&Value>) -> io::
         .await
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
-    tracing::info!("control: update speed limit: rsp={:?}", rsp);
+    info!("control: update speed limit: rsp={:?}", rsp);
     Ok(())
 }

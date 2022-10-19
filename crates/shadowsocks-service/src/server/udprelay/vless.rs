@@ -1,7 +1,8 @@
 use super::*;
 
 use shadowsocks::transport::StreamConnection;
-use shadowsocks::vless::{self, protocol};
+use shadowsocks::vless;
+use shadowsocks::ServerAddr;
 
 pub type VlessUdpWriter = vless::VlessUdpWriter<Box<dyn StreamConnection + 'static>>;
 pub type VlessUdpReader = vless::VlessUdpReader<Box<dyn StreamConnection + 'static>>;
@@ -9,7 +10,7 @@ pub type VlessUdpReader = vless::VlessUdpReader<Box<dyn StreamConnection + 'stat
 pub async fn serve_vless_udp(
     context: Arc<ServiceContext>,
     peer_addr: &SocketAddr,
-    target_address: protocol::Address,
+    target_address: ServerAddr,
     mut reader: VlessUdpReader,
     writer: VlessUdpWriter,
 ) -> io::Result<()> {

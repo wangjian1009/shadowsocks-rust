@@ -27,7 +27,7 @@ async fn stream_basic() {
     let run_count = 10;
     let mut vfut = Vec::with_capacity(run_count);
     for i in 0..run_count {
-        let target_addr = Address::DomainNameAddress("www.baidu.com".to_string(), i as u16);
+        let target_addr = ServerAddr::DomainName("www.baidu.com".to_string(), i as u16);
         vfut.push(test_one_connection(&cfg, port, target_addr).boxed());
     }
 
@@ -38,7 +38,7 @@ async fn stream_basic() {
     }
 }
 
-async fn test_one_connection(cfg: &Config, port: u16, target_addr: Address) -> io::Result<()> {
+async fn test_one_connection(cfg: &Config, port: u16, target_addr: ServerAddr) -> io::Result<()> {
     let stream = connect_stream(cfg, port, target_addr).await?;
     let (mut r, mut w) = tokio::io::split(stream);
 

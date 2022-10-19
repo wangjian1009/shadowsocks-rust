@@ -5,7 +5,7 @@ use std::{io, net::SocketAddr, ops::Deref, sync::Arc};
 use async_trait::async_trait;
 use shadowsocks::{
     net::FlowStat,
-    relay::{socks5::Address, udprelay::options::UdpSocketControlData},
+    relay::udprelay::options::UdpSocketControlData,
     transport::{PacketMutWrite, PacketRead, PacketWrite},
     ProxySocket, ServerAddr,
 };
@@ -25,7 +25,7 @@ impl MonProxySocket {
 
     /// Send a UDP packet to addr through proxy
     #[inline]
-    pub async fn send(&self, addr: &Address, payload: &[u8]) -> io::Result<()> {
+    pub async fn send(&self, addr: &ServerAddr, payload: &[u8]) -> io::Result<()> {
         let n = self.socket.send(addr, payload).await?;
         self.flow_stat.incr_tx(n as u64);
 
@@ -36,7 +36,7 @@ impl MonProxySocket {
     #[inline]
     pub async fn send_with_ctrl(
         &self,
-        addr: &Address,
+        addr: &ServerAddr,
         control: &UdpSocketControlData,
         payload: &[u8],
     ) -> io::Result<()> {
@@ -48,7 +48,7 @@ impl MonProxySocket {
 
     /// Send a UDP packet to target from proxy
     #[inline]
-    pub async fn send_to<A: ToSocketAddrs>(&self, target: A, addr: &Address, payload: &[u8]) -> io::Result<()> {
+    pub async fn send_to<A: ToSocketAddrs>(&self, target: A, addr: &ServerAddr, payload: &[u8]) -> io::Result<()> {
         let n = self.socket.send_to(target, addr, payload).await?;
         self.flow_stat.incr_tx(n as u64);
 
@@ -60,7 +60,7 @@ impl MonProxySocket {
     pub async fn send_to_with_ctrl<A: ToSocketAddrs>(
         &self,
         target: A,
-        addr: &Address,
+        addr: &ServerAddr,
         control: &UdpSocketControlData,
         payload: &[u8],
     ) -> io::Result<()> {
@@ -76,7 +76,7 @@ impl MonProxySocket {
     ///
     /// It is recommended to allocate a buffer to have at least 65536 bytes.
     #[inline]
-    pub async fn recv(&self, recv_buf: &mut [u8]) -> io::Result<(usize, Address)> {
+    pub async fn recv(&self, recv_buf: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
         let (n, addr, recv_n) = self.socket.recv(recv_buf).await?;
         self.flow_stat.incr_rx(recv_n as u64);
 
@@ -92,7 +92,7 @@ impl MonProxySocket {
     pub async fn recv_with_ctrl(
         &self,
         recv_buf: &mut [u8],
-    ) -> io::Result<(usize, Address, Option<UdpSocketControlData>)> {
+    ) -> io::Result<(usize, ServerAddr, Option<UdpSocketControlData>)> {
         let (n, addr, recv_n, control) = self.socket.recv_with_ctrl(recv_buf).await?;
         self.flow_stat.incr_rx(recv_n as u64);
 
@@ -105,7 +105,7 @@ impl MonProxySocket {
     ///
     /// It is recommended to allocate a buffer to have at least 65536 bytes.
     #[inline]
-    pub async fn recv_from(&self, recv_buf: &mut [u8]) -> io::Result<(usize, SocketAddr, Address)> {
+    pub async fn recv_from(&self, recv_buf: &mut [u8]) -> io::Result<(usize, SocketAddr, ServerAddr)> {
         let (n, peer_addr, addr, recv_n) = self.socket.recv_from(recv_buf).await?;
         self.flow_stat.incr_rx(recv_n as u64);
 
@@ -121,7 +121,7 @@ impl MonProxySocket {
     pub async fn recv_from_with_ctrl(
         &self,
         recv_buf: &mut [u8],
-    ) -> io::Result<(usize, SocketAddr, Address, Option<UdpSocketControlData>)> {
+    ) -> io::Result<(usize, SocketAddr, ServerAddr, Option<UdpSocketControlData>)> {
         let (n, peer_addr, addr, recv_n, control) = self.socket.recv_from_with_ctrl(recv_buf).await?;
         self.flow_stat.incr_rx(recv_n as u64);
 
@@ -169,8 +169,12 @@ impl Deref for MonProxyWriter {
 impl PacketMutWrite for MonProxyWriter {
     async fn write_to_mut(&mut self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         match self.bind_addr.as_ref() {
-            Some(bind_addr) => self.inner.send_to(bind_addr, &Address::from(addr.clone()), buf).await,
-            None => self.inner.send(&Address::from(addr.clone()), buf).await,
+            Some(bind_addr) => {
+                self.inner
+                    .send_to(bind_addr, &ServerAddr::from(addr.clone()), buf)
+                    .await
+            }
+            None => self.inner.send(&ServerAddr::from(addr.clone()), buf).await,
         }
     }
 }
@@ -179,8 +183,12 @@ impl PacketMutWrite for MonProxyWriter {
 impl PacketWrite for MonProxyWriter {
     async fn write_to(&self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         match self.bind_addr.as_ref() {
-            Some(bind_addr) => self.inner.send_to(bind_addr, &Address::from(addr.clone()), buf).await,
-            None => self.inner.send(&Address::from(addr.clone()), buf).await,
+            Some(bind_addr) => {
+                self.inner
+                    .send_to(bind_addr, &ServerAddr::from(addr.clone()), buf)
+                    .await
+            }
+            None => self.inner.send(&ServerAddr::from(addr.clone()), buf).await,
         }
     }
 }

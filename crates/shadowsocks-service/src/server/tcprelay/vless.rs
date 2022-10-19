@@ -1,6 +1,6 @@
 use shadowsocks::{
     relay::tcprelay::utils_copy::copy_bidirectional,
-    vless::{protocol, InboundHandler, VlessUdpReader, VlessUdpWriter},
+    vless::{InboundHandler, VlessUdpReader, VlessUdpWriter},
 };
 
 use super::*;
@@ -12,10 +12,10 @@ impl TcpServerClient {
     {
         let arc_self = Arc::new(self);
 
-        let mut request_timeout = None;
-        if let Some(base_timeout) = arc_self.request_recv_timeout {
-            request_timeout = Some(base_timeout + Duration::from_secs(rand::random::<u64>() % base_timeout.as_secs()));
-        }
+        let request_timeout = Some(
+            arc_self.request_recv_timeout
+                + Duration::from_secs(rand::random::<u64>() % arc_self.request_recv_timeout.as_secs()),
+        );
 
         inbound
             .serve(
@@ -41,7 +41,7 @@ impl TcpServerClient {
     async fn serve_vless_tcp(
         self: Arc<Self>,
         mut stream: Box<dyn StreamConnection>,
-        target_addr: Address,
+        target_addr: ServerAddr,
     ) -> io::Result<()> {
         let connection_stat = self.context.connection_stat();
 
@@ -135,7 +135,7 @@ impl TcpServerClient {
             self.context.connect_opts_ref()
         );
 
-        let (rn, wn, r) = copy_bidirectional(&mut stream, &mut remote_stream, self.idle_timeout.clone()).await;
+        let (rn, wn, r) = copy_bidirectional(&mut stream, &mut remote_stream, Some(self.idle_timeout.clone())).await;
         match r {
             Ok(()) => {
                 trace!(
@@ -165,7 +165,7 @@ impl TcpServerClient {
         self: Arc<Self>,
         reader: VlessUdpReader<Box<dyn StreamConnection + 'static>>,
         writer: VlessUdpWriter<Box<dyn StreamConnection + 'static>>,
-        address: protocol::Address,
+        address: ServerAddr,
     ) -> io::Result<()> {
         super::super::udprelay::vless::serve_vless_udp(self.context.clone(), &self.peer_addr, address, reader, writer)
             .await

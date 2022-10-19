@@ -23,7 +23,7 @@ use shadowsocks::{
         socks5::Address,
         udprelay::{options::UdpSocketControlData, proxy_socket::ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
     },
-    ServerConfig,
+    ServerAddr, ServerConfig,
 };
 use spin::Mutex as SpinMutex;
 use tokio::{
@@ -892,7 +892,7 @@ impl PingChecker {
         static DNS_QUERY: &[u8] =
             b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07firefox\x03com\x00\x00\x01\x00\x01";
 
-        let addr = Address::SocketAddress(SocketAddr::new(Ipv4Addr::new(8, 8, 8, 8).into(), 53));
+        let addr = ServerAddr::SocketAddr(SocketAddr::new(Ipv4Addr::new(8, 8, 8, 8).into(), 53));
 
         let svr_cfg = self.server.server_config();
 

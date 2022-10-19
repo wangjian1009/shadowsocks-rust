@@ -13,6 +13,7 @@ use shadowsocks::{
     net::{ConnectOpts, FlowStat, TcpStream as ShadowTcpStream, UdpSocket as ShadowUdpSocket},
     relay::{udprelay::ProxySocket, Address},
     transport::StreamConnection,
+    ServerAddr,
 };
 use tracing::trace;
 
@@ -167,7 +168,7 @@ impl DnsClient {
             DnsClient::TcpRemote { ref mut stream } => stream_query(stream, msg).await,
             DnsClient::UdpRemote { ref mut socket, ref ns } => {
                 let bytes = msg.to_vec()?;
-                socket.send(ns, &bytes).await?;
+                socket.send(&ServerAddr::from(ns), &bytes).await?;
 
                 let mut recv_buf = [0u8; 256];
                 let (n, _) = socket.recv(&mut recv_buf).await?;

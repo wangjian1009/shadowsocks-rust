@@ -4,6 +4,7 @@ use std::{io, sync::Arc, time::Duration};
 
 use futures::{future, FutureExt};
 use shadowsocks::{config::Mode, ServerAddr};
+use tracing::Instrument;
 
 use crate::{
     config::RedirType,
@@ -71,11 +72,15 @@ impl Redir {
         let mut vfut = Vec::new();
 
         if self.mode.enable_tcp() {
-            vfut.push(self.run_tcp_tunnel(tcp_addr, balancer.clone()).boxed());
+            vfut.push(
+                self.run_tcp_tunnel(tcp_addr, balancer.clone())
+                    .in_current_span()
+                    .boxed(),
+            );
         }
 
         if self.mode.enable_udp() {
-            vfut.push(self.run_udp_tunnel(udp_addr, balancer).boxed());
+            vfut.push(self.run_udp_tunnel(udp_addr, balancer).in_current_span().boxed());
         }
 
         let (res, ..) = future::select_all(vfut).await;
