@@ -1,10 +1,5 @@
 //! UDP socket wrappers
 
-use std::{
-    io,
-    net::SocketAddr,
-    ops::{Deref, DerefMut},
-};
 #[cfg(any(
     target_os = "linux",
     target_os = "android",
@@ -12,9 +7,11 @@ use std::{
     target_os = "ios",
     target_os = "freebsd"
 ))]
+use std::io::{IoSlice, IoSliceMut};
 use std::{
-    io::{ErrorKind, IoSlice, IoSliceMut},
-    task::{Context as TaskContext, Poll},
+    io,
+    net::SocketAddr,
+    ops::{Deref, DerefMut},
 };
 
 #[cfg(any(
@@ -191,9 +188,9 @@ impl UdpSocket {
     ))]
     pub fn poll_batch_send(
         &self,
-        cx: &mut TaskContext<'_>,
+        cx: &mut std::task::Context<'_>,
         msgs: &mut [BatchSendMessage<'_>],
-    ) -> Poll<io::Result<usize>> {
+    ) -> std::task::Poll<io::Result<usize>> {
         use super::sys::batch_sendmsg;
 
         loop {
@@ -201,7 +198,7 @@ impl UdpSocket {
 
             match self.0.try_io(Interest::WRITABLE, || batch_sendmsg(&self.0, msgs)) {
                 Ok(n) => return Ok(n).into(),
-                Err(ref err) if err.kind() == ErrorKind::WouldBlock => {}
+                Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(err) => return Err(err).into(),
             }
         }
@@ -227,9 +224,9 @@ impl UdpSocket {
     ))]
     pub fn poll_batch_recv(
         &self,
-        cx: &mut TaskContext<'_>,
+        cx: &mut std::task::Context<'_>,
         msgs: &mut [BatchRecvMessage<'_>],
-    ) -> Poll<io::Result<usize>> {
+    ) -> std::task::Poll<io::Result<usize>> {
         use super::sys::batch_recvmsg;
 
         loop {
@@ -237,7 +234,7 @@ impl UdpSocket {
 
             match self.0.try_io(Interest::READABLE, || batch_recvmsg(&self.0, msgs)) {
                 Ok(n) => return Ok(n).into(),
-                Err(ref err) if err.kind() == ErrorKind::WouldBlock => {}
+                Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(err) => return Err(err).into(),
             }
         }

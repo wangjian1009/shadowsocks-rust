@@ -849,8 +849,6 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             crate::sys::run_as_user(uname);
         }
 
-        info!("shadowsocks server {} build {}", crate::VERSION, crate::BUILD_TIME);
-
         let mut worker_count = 1;
         let mut builder = match service_config.runtime.mode {
             RuntimeMode::SingleThread => Builder::new_current_thread(),
@@ -878,6 +876,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
         #[cfg(feature = "logging")]
         let log_guard = logging::init_with_config("ssserver", &service_config.log);
 
+        info!("shadowsocks server {} build {}", crate::VERSION, crate::BUILD_TIME);
         info!("{:?}", service_config);
 
         let app_cancel = Arc::new(Canceler::new());

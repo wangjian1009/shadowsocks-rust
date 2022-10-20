@@ -44,6 +44,7 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
         }
         false
     };
+    #[warn(unused_variables)]
     let filter_fn = filter_fn(move |metadata| {
         if metadata.target().starts_with("quinn") {
             return metadata.level() <= &LevelFilter::INFO;
@@ -67,18 +68,31 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
     let subscriber = tracing_subscriber::registry();
 
     // 控制台输出
-    let subscriber = subscriber.with({
-        let append = tracing_subscriber::fmt::layer().with_target(false);
+    cfg_if! {
+        if #[cfg(feature = "logging-console")] {
+            let subscriber = subscriber.with({
+                let append = tracing_subscriber::fmt::layer().with_target(false);
 
-        #[cfg(target_os = "android")]
-        let append = append.with_ansi(false);
+                #[cfg(target_os = "android")]
+                let append = append.with_ansi(false);
 
-        if config.format.without_time {
-            append.without_time().with_filter(filter_fn.clone()).boxed()
-        } else {
-            append.with_filter(filter_fn.clone()).boxed()
+                if config.format.without_time {
+                    append.without_time().with_filter(filter_fn.clone()).boxed()
+                } else {
+                    append.with_filter(filter_fn.clone()).boxed()
+                }
+            });
         }
-    });
+    }
+
+    // oslog
+    cfg_if! {
+        if #[cfg(feature = "logging-oslog")] {
+            let subscriber = subscriber.with({
+                tracing_oslog::OsLogger::new("cc.sfox", bin_name).with_filter(filter_fn.clone())
+            });
+        }
+    }
 
     cfg_if! {
         if #[cfg(feature = "logging-apm")] {
@@ -135,8 +149,8 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
 }
 
 /// Init a default logger
-pub fn init_with_default(bin_name: &'static str) {
-    init_with_config(bin_name, &LogConfig::default());
+pub fn init_with_default(bin_name: &'static str) -> Guard {
+    init_with_config(bin_name, &LogConfig::default())
 }
 
 #[cfg(feature = "logging-apm")]

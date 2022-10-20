@@ -82,7 +82,7 @@ mod tests {
         let encryped_passwd = encrypt_password("*!hvk9^4baX#Y%Ja");
         let decrypt_passwd = decrypt(&encryped_passwd).unwrap();
         // println!("xxxx: hexkey: {}", hex::encode(getkey().to_vec()));
-        println!("xxxx: encryped_passwd: {}", encryped_passwd);
+        // println!("xxxx: encryped_passwd: {}", encryped_passwd);
         assert_eq!(decrypt_passwd, "*!hvk9^4baX#Y%Ja");
     }
 

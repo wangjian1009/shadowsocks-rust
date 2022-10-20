@@ -43,18 +43,6 @@ pub extern "C" fn lib_local_run(
     control_port: c_ushort,
     #[cfg(target_os = "android")] c_vpn_protect_path: *const c_char,
 ) {
-    cfg_if! {
-        if #[cfg(all(feature = "logging", any(target_os = "macos", target_os = "ios")))] {
-            use tracing_subscriber::layer::SubscriberExt;
-
-            let collector = tracing_subscriber::registry()
-                .with(tracing_oslog::OsLogger::new("moe.absolucy.test", "default"));
-            tracing::subscriber::set_global_default(collector).expect("failed to set global subscriber");
-        }
-    }
-
-    info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
-
     let str_config = unsafe { CStr::from_ptr(c_config).to_string_lossy().to_owned() };
 
     let acl_path = if !c_acl_path.is_null() {
@@ -84,16 +72,32 @@ pub extern "C" fn lib_local_run(
         None
     };
 
-    let config = load_config(
-        &str_config,
-        acl_path.as_deref(),
-        control_port,
-        #[cfg(feature = "local-flow-stat")]
-        stat_path.as_deref(),
-        #[cfg(target_os = "android")]
-        vpn_protect_path.as_deref(),
-    );
-    run(config, control_port);
+    let mut builder = Builder::new_current_thread();
+    let runtime = builder.enable_all().build().expect("create tokio Runtime");
+
+    runtime.block_on(async move {
+        let config = load_config(
+            &str_config,
+            acl_path.as_deref(),
+            control_port,
+            #[cfg(feature = "local-flow-stat")]
+            stat_path.as_deref(),
+            #[cfg(target_os = "android")]
+            vpn_protect_path.as_deref(),
+        );
+
+        #[cfg(feature = "logging")]
+        let log_guard = {
+            let mut log_config = crate::config::LogConfig::default();
+            log_config.level = 2;
+            crate::logging::init_with_config("sslocal", &log_config)
+        };
+
+        run(config, control_port).await;
+
+        #[cfg(feature = "logging")]
+        log_guard.close().await;
+    });
 }
 
 fn load_config(
@@ -106,27 +110,23 @@ fn load_config(
     let mut config = match Config::load_from_str(str_config, ConfigType::Local) {
         Ok(c) => c,
         Err(e) => {
-            error!("load_config fail: {}", e);
-            panic!()
+            panic!("load_config fail: {}", e);
         }
     };
 
     if config.local.is_empty() {
-        error!(
+        panic!(
             "missing `local_address`, consider specifying it by \"local_address\" and \"local_port\" in configuration file");
-        panic!();
     }
 
     if config.server.is_empty() {
-        error!(
+        panic!(
             "missing proxy servers, consider specifying it by configuration file, check more details in https://shadowsocks.org/en/config/quick-guide.html"
         );
-        panic!();
     }
 
     if let Err(err) = config.check_integrity() {
-        error!("config integrity check failed, {}", err);
-        panic!();
+        panic!("config integrity check failed, {}", err);
     }
 
     #[cfg(target_os = "android")]
@@ -146,93 +146,83 @@ fn load_config(
         config.local_stat_addr = Some(LocalFlowStatAddress::UnixStreamPath(From::from(stat_path)));
     }
 
-    tracing::trace!("config {}", config);
-
     if let Some(acl_path) = acl_path {
         let acl = match AccessControl::load_from_file(acl_path) {
             Ok(acl) => acl,
             Err(err) => {
-                error!("loading ACL \"{}\", {}", acl_path, err);
-                panic!();
+                panic!("loading ACL \"{}\", {}", acl_path, err);
             }
         };
         config.acl = Some(acl);
-
-        info!("loading ACL \"{}\" success", acl_path);
     }
 
     config
 }
 
-fn run(config: Config, control_port: u16) {
-    let mut builder = Builder::new_current_thread();
-    let runtime = builder.enable_all().build().expect("create tokio Runtime");
+async fn run(config: Config, control_port: u16) {
+    let vfut = FuturesUnordered::new();
+    let canceler = Arc::new(Canceler::new());
 
-    runtime.block_on(async move {
-        let vfut = FuturesUnordered::new();
-        let canceler = Arc::new(Canceler::new());
+    info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
+    info!("{:?}", config);
 
-        let server = run_local(config.clone(), canceler.waiter());
+    let server = run_local(config.clone(), canceler.waiter());
+    vfut.push(
+        async move {
+            match server.await {
+                // Server future resolved without an error. This should never happen.
+                Ok(..) => {
+                    info!("server exited unexpectly");
+                    // process::exit(common::EXIT_CODE_SERVER_EXIT_UNEXPECTLY);
+                }
+                // Server future resolved with error, which are listener errors in most cases
+                Err(err) => {
+                    error!("server aborted with {}", err);
+                    // process::exit(common::EXIT_CODE_SERVER_ABORTED);
+                }
+            };
+            ()
+        }
+        .boxed(),
+    );
+
+    #[cfg(feature = "host-dns")]
+    let mut host_dns = None;
+
+    #[cfg(feature = "host-dns")]
+    if let DnsConfig::LocalDns(addr) = &config.dns {
+        host_dns = Some(Arc::new(HostDns::new(addr.clone())));
+        let waiter = canceler.waiter();
+
+        let host_dns = host_dns.clone();
         vfut.push(
             async move {
-                match server.await {
-                    // Server future resolved without an error. This should never happen.
-                    Ok(..) => {
-                        info!("server exited unexpectly");
-                        // process::exit(common::EXIT_CODE_SERVER_EXIT_UNEXPECTLY);
+                tokio::select! {
+                    r = host_dns.as_ref().unwrap().run() => {
+                        match r {
+                            Ok(()) => info!("stop success"),
+                            Err(err) => error!(error = ?err, "stop with error"),
+                        }
                     }
-                    // Server future resolved with error, which are listener errors in most cases
-                    Err(err) => {
-                        error!("server aborted with {}", err);
-                        // process::exit(common::EXIT_CODE_SERVER_ABORTED);
-                    }
-                };
-                ()
-            }
-            .boxed(),
-        );
-
-        #[cfg(feature = "host-dns")]
-        let mut host_dns = None;
-
-        #[cfg(feature = "host-dns")]
-        if let DnsConfig::LocalDns(addr) = &config.dns {
-            host_dns = Some(Arc::new(HostDns::new(addr.clone())));
-
-            let host_dns = host_dns.clone();
-            vfut.push(
-                async move {
-                    match host_dns.as_ref().unwrap().run().await {
-                        Ok(()) => info!("host dns stop success"),
-                        Err(err) => error!("host dns stop with error {}", err),
+                    _ = waiter.wait() => {
+                        info!("canceled");
                     }
                 }
-                .instrument(info_span!("host-dns"))
-                .boxed(),
-            );
-        }
-
-        let ctrl = run_ctrl(
-            control_port,
-            canceler,
-            #[cfg(feature = "host-dns")]
-            host_dns,
+            }
+            .instrument(info_span!("host-dns"))
+            .boxed(),
         );
+    }
 
-        vfut.push(ctrl.instrument(info_span!("local-ctrl")).boxed());
-
-        // vfut.push(
-        //     async {
-        //         tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-        //         panic!();
-        //     }
-        //     .boxed(),
-        // );
-
-        let (_res, _) = vfut.into_future().await;
-
-        info!("server stoped");
-    });
+    tokio::select! {
+        _r = vfut.into_future() => {
+            info!("all server stop success");
+        }
+        _ = run_ctrl(control_port, canceler, #[cfg(feature = "host-dns")] host_dns)
+            .instrument(info_span!("local-ctrl")) => {
+            info!("break runing for ctrl exited");
+        }
+    }
 }
 
 async fn run_ctrl(
@@ -245,16 +235,9 @@ async fn run_ctrl(
         let listener = UdpSocket::bind(addr).await?;
         info!("shadowsocks control listen on {}", addr);
 
-        let cancel_waiter = canceler.waiter();
         let mut buf = vec![0u8; 2048];
         loop {
-            let n = tokio::select! {
-                r = listener.recv(&mut buf) => { r? }
-                _ = cancel_waiter.wait() => {
-                    info!("canceled");
-                    break;
-                }
-            };
+            let n = listener.recv(&mut buf).await?;
             let cmd: JsonMap<String, Value> = match serde_json::from_slice(&buf[..n]) {
                 Ok(v) => v,
                 Err(err) => {
@@ -283,6 +266,7 @@ async fn run_ctrl(
             match cmd {
                 "stop" => {
                     info!("received cmd stop, soft exiting");
+                    canceler.cancel();
                     sleep(Duration::from_secs(1)).await;
                     info!("received cmd stop, force exiting");
                     break;

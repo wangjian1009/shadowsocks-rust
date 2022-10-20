@@ -1,3 +1,6 @@
 [submodule "depends/quinn"]
 	path = depends/quinn
 	url = git@github.com:wangjian1009/quinn.git
+[submodule "depends/tracing-oslog"]
+	path = depends/tracing-oslog
+	url = git@github.com:wangjian1009/tracing-oslog.git

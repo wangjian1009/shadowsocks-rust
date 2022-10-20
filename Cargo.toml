@@ -48,6 +48,7 @@ members = [
     "crates/shadowsocks",
     "crates/shadowsocks-service",
     "crates/shadowsocks-tools",
+    "depends/tracing-oslog",
 ]
 
 [profile.release]
@@ -60,6 +61,8 @@ strip = true
 [features]
 default = [
     "logging",
+    "logging-console",
+    "logging-oslog",
     "logging-file",
     "logging-apm",
     "logging-jaeger",
@@ -142,6 +145,8 @@ dns-over-https = ["shadowsocks-service/dns-over-https"]
 
 # Enable logging output
 logging = ["tracing-futures", "tracing-subscriber"]
+logging-console = ["logging"]
+logging-oslog = ["logging", "tracing-oslog"]
 logging-file = ["logging", "tracing-appender"]
 logging-apm = ["logging", "url", "tracing-elastic-apm", "sysinfo"]
 logging-jaeger = ["logging", "url", "tracing-opentelemetry", "opentelemetry", "opentelemetry-jaeger"]
@@ -219,6 +224,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time",
 # logging-file
 tracing-appender = { version = "0.2", optional = true }
 
+# logging-os
+tracing-oslog = { version = "0.1.2", optional = true }
+
 # logging-jaeger
 tracing-opentelemetry = { version = "*", optional = true }
 opentelemetry = { version = "*", features = ["rt-tokio"], optional = true }
@@ -269,9 +277,6 @@ shadowsocks-service = { version = "1.15.0", path = "./crates/shadowsocks-service
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.4"
 
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-tracing-oslog = "0.1.2"
-
 [dev-dependencies]
 byteorder = "1.3"
 tracing-test = "*"
@@ -281,3 +286,4 @@ tokio-test = "*"
 
 [patch.crates-io]
 quinn = { path = "depends/quinn/quinn" }
+tracing-oslog = { path = "depends/tracing-oslog" }

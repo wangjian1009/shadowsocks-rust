@@ -1053,8 +1053,6 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             crate::sys::run_as_user(uname);
         }
 
-        println!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
-
         let mut builder = match service_config.runtime.mode {
             RuntimeMode::SingleThread => Builder::new_current_thread(),
             #[cfg(feature = "multi-threaded")]
@@ -1077,7 +1075,8 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
         #[cfg(feature = "logging")]
         let log_guard = logging::init_with_config("sslocal", &service_config.log);
 
-        tracing::trace!("{:?}", service_config);
+        tracing::info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
+        tracing::info!("{:?}", service_config);
 
         let config_path = config.config_path.clone();
         let canceler = Arc::new(Canceler::new());

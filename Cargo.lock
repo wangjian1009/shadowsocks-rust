@@ -3411,6 +3411,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "string-builder"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bd10a070fb1f2796a288abec42695db4682a82b6f12ffacd60fb8d5ad3a4a12"
+
+[[package]]
 name = "strsim"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3889,8 +3895,6 @@ dependencies = [
 [[package]]
 name = "tracing-oslog"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bc58223383423483e4bc056c7e7b3f77bdee924a9d33834112c69ead06dc847"
 dependencies = [
  "bindgen",
  "cc",
@@ -3898,6 +3902,7 @@ dependencies = [
  "fnv",
  "once_cell",
  "parking_lot 0.11.2",
+ "string-builder",
  "tracing-core",
  "tracing-subscriber",
 ]
