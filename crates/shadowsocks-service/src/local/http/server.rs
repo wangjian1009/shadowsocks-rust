@@ -12,7 +12,7 @@ use hyper::{
     Body, Client, Request, Server,
 };
 use shadowsocks::{config::ServerAddr, lookup_then, net::TcpListener};
-use tracing::{error, info, trace, Instrument, Span};
+use tracing::{error, info, info_span, trace, Instrument, Span};
 
 use crate::local::{
     context::ServiceContext, http::connector::Connector, loadbalancing::PingBalancer, LOCAL_DEFAULT_KEEPALIVE_TIMEOUT,
@@ -58,7 +58,7 @@ impl Http {
             let bypass_client = bypass_client.clone();
             let context = context.clone();
             let proxy_client_cache = proxy_client_cache.clone();
-            let span = span.clone();
+            let span = info_span!(parent: span.clone(), "http.client", peer.addr = client_addr.to_string());
 
             async move {
                 Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {

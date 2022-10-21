@@ -7,7 +7,7 @@ use hyper::{
     http::uri::{Authority, Scheme},
     upgrade, Body, HeaderMap, Method, Request, Response, StatusCode, Uri, Version,
 };
-use tracing::{debug, error, trace};
+use tracing::{debug, error, info_span, trace, Instrument};
 
 use shadowsocks::relay::socks5::Address;
 
@@ -53,7 +53,7 @@ impl HttpDispatcher {
     }
 
     pub async fn dispatch(mut self) -> io::Result<Response<Body>> {
-        trace!("request {} {:?}", self.client_addr, self.req);
+        trace!(request = ?self.req);
 
         // Parse URI
         //
@@ -87,30 +87,34 @@ impl HttpDispatcher {
         if Method::CONNECT == self.req.method() {
             // Establish a TCP tunnel
             // https://tools.ietf.org/html/draft-luotonen-web-proxy-tunneling-01
-
-            debug!("HTTP CONNECT {}", host);
+            let span = info_span!("connection", target = host.to_string(), way = "CONNECT");
 
             // Connect to Shadowsocks' remote
             //
             // FIXME: What STATUS should I return for connection error?
             let mut server_opt = None;
             let mut stream = if self.balancer.is_empty() {
-                AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &host).await?
+                AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &host)
+                    .instrument(span.clone())
+                    .await?
             } else {
                 let server = self.balancer.best_tcp_server();
 
-                let stream = AutoProxyClientStream::connect(&self.context, server.as_ref(), &host).await?;
+                let stream = AutoProxyClientStream::connect(&self.context, server.as_ref(), &host)
+                    .instrument(span.clone())
+                    .await?;
                 server_opt = Some(server);
 
                 stream
             };
 
-            debug!(
-                "CONNECT relay connected {} <-> {} ({})",
-                self.client_addr,
-                host,
-                if stream.is_bypassed() { "bypassed" } else { "proxied" }
-            );
+            {
+                let _enter = span.enter();
+                trace!(
+                    "connected {}",
+                    if stream.is_bypassed() { "bypassed" } else { "proxied" }
+                );
+            }
 
             // Upgrade to a TCP tunnel
             //
@@ -119,37 +123,37 @@ impl HttpDispatcher {
             // `on_upgrade` future.
             let req = self.req;
             let client_addr = self.client_addr;
-            tokio::spawn(async move {
-                match upgrade::on(req).await {
-                    Ok(mut upgraded) => {
-                        trace!("CONNECT tunnel upgrade success, {} <-> {}", client_addr, host);
+            tokio::spawn(
+                async move {
+                    match upgrade::on(req).await {
+                        Ok(mut upgraded) => {
+                            trace!("CONNECT tunnel upgrade success");
 
-                        let _ = match server_opt {
-                            Some(server) => {
-                                establish_tcp_tunnel(
-                                    self.context.as_ref(),
-                                    server.server_config(),
-                                    &mut upgraded,
-                                    &mut stream,
-                                    client_addr,
-                                    &host,
-                                )
-                                .await
-                            }
-                            None => {
-                                establish_tcp_tunnel_bypassed(&mut upgraded, &mut stream, client_addr, &host, None)
+                            let _ = match server_opt {
+                                Some(server) => {
+                                    establish_tcp_tunnel(
+                                        self.context.as_ref(),
+                                        server.server_config(),
+                                        &mut upgraded,
+                                        &mut stream,
+                                        client_addr,
+                                        &host,
+                                    )
                                     .await
-                            }
-                        };
-                    }
-                    Err(e) => {
-                        error!(
-                            "failed to upgrade TCP tunnel {} <-> {}, error: {}",
-                            client_addr, host, e
-                        );
+                                }
+                                None => {
+                                    establish_tcp_tunnel_bypassed(&mut upgraded, &mut stream, client_addr, &host, None)
+                                        .await
+                                }
+                            };
+                        }
+                        Err(e) => {
+                            error!(error = ?e,"failed to upgrade TCP tunnel");
+                        }
                     }
                 }
-            });
+                .instrument(span),
+            );
 
             // Connection established
             let resp = Response::builder().body(Body::empty()).unwrap();
@@ -158,7 +162,7 @@ impl HttpDispatcher {
         } else {
             let method = self.req.method().clone();
             let version = self.req.version();
-            debug!("HTTP {} {} {:?}", method, host, version);
+            let span = info_span!("connection", target = host.to_string(), method = method.to_string());
 
             // Check if client wants us to keep long connection
             let conn_keep_alive = check_keep_alive(version, self.req.headers(), true);
@@ -168,33 +172,36 @@ impl HttpDispatcher {
 
             // Set keep-alive for connection with remote
             set_conn_keep_alive(version, self.req.headers_mut(), conn_keep_alive);
-            let client = if self.balancer.is_empty() || self.context.check_target_bypassed(&host).await {
-                trace!("bypassed {} -> {} {:?}", self.client_addr, host, self.req);
+            let client = if self.balancer.is_empty()
+                || self.context.check_target_bypassed(&host).instrument(span.clone()).await
+            {
                 HttpClientEnum::Bypass(self.bypass_client)
             } else {
-                trace!("proxied {} -> {} {:?}", self.client_addr, host, self.req);
-
                 // Keep connections for clients in ServerScore::client
                 // client instance is kept for Keep-Alive connections
                 let server = self.balancer.best_tcp_server();
-                HttpClientEnum::Proxy(self.proxy_client_cache.get_connected(&server).await)
+                HttpClientEnum::Proxy(
+                    self.proxy_client_cache
+                        .get_connected(&server)
+                        .instrument(span.clone())
+                        .await,
+                )
             };
 
-            let mut res = match client.send(self.req).await {
+            let mut res = match client.send(self.req).instrument(span.clone()).await {
                 Ok(res) => res,
-                Err(err) => {
-                    error!(
-                        "HTTP {} {} <-> {} relay failed, error: {}",
-                        method, self.client_addr, host, err
-                    );
-
+                Err(_err) => {
                     let mut resp = Response::new(Body::from(format!("relay failed to {}", host)));
                     *resp.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                    trace!(response = ?resp);
                     return Ok(resp);
                 }
             };
 
-            trace!("received {} <- {} {:?}", self.client_addr, host, res);
+            {
+                let _enter = span.enter();
+                trace!(response = ?res);
+            }
 
             let res_keep_alive = conn_keep_alive && check_keep_alive(res.version(), res.headers(), false);
 
@@ -210,10 +217,7 @@ impl HttpDispatcher {
             // Set Connection header
             set_conn_keep_alive(res.version(), res.headers_mut(), res_keep_alive);
 
-            trace!("response {} <- {} {:?}", self.client_addr, host, res);
-
-            debug!("HTTP {} relay {} <-> {} finished", method, self.client_addr, host);
-
+            trace!(response = ?res);
             Ok(res)
         }
     }

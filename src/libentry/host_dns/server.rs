@@ -3,13 +3,12 @@ use bytes::{BufMut, BytesMut};
 use futures::future::{self, Either};
 use shadowsocks_service::local::dns::NameServerAddr;
 use std::{
-    fmt::Debug,
     fs,
     io::{self, ErrorKind},
     net::{IpAddr, SocketAddr},
     path::PathBuf,
 };
-use tracing::{error, info};
+use tracing::{error, info, info_span, Instrument};
 
 use trust_dns_resolver::proto::{error::ProtoError, op::Message};
 
@@ -93,7 +92,7 @@ impl HostDns {
             Ok(_) => {}
             Err(ref err) if err.kind() == ErrorKind::NotFound => {}
             Err(err) => {
-                error!("host dns unixstream listening: remote {:?} error, {}", path, err);
+                error!(path = path.to_str(), error = ?err, "host dns unixstream listening: remove file error");
                 return Err(err);
             }
         }
@@ -106,27 +105,25 @@ impl HostDns {
             let (stream, peer_addr) = match listener.accept().await {
                 Ok(s) => s,
                 Err(err) => {
-                    error!("accept failed with error: {}", err);
+                    error!(error = ?err, "accept failed");
                     time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
             };
 
-            info!("host dns unixstream accept one from {:?}", peer_addr);
+            let span = info_span!("host-dns.client", peer.addr = format!("{:?}", peer_addr));
 
-            let servers = self.get_servers().await;
+            let servers = self.get_servers().instrument(span.clone()).await;
 
             if servers.is_empty() {
-                error!("host dns TCP accept success, no upstream");
+                let _enter = span.enter();
+                error!("no upstream");
                 continue;
             } else {
-                tokio::spawn(HostDns::handle_stream(
-                    stream,
-                    peer_addr,
-                    servers,
-                    self.base_query_timeout,
-                    self.base_query_try,
-                ));
+                tokio::spawn(
+                    HostDns::handle_stream(stream, servers, self.base_query_timeout, self.base_query_try)
+                        .instrument(span),
+                );
             }
         }
     }
@@ -140,25 +137,25 @@ impl HostDns {
             let (stream, peer_addr) = match listener.accept().await {
                 Ok(s) => s,
                 Err(err) => {
-                    error!("accept failed with error: {}", err);
+                    error!(error = ?err, "accept failed");
                     time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
             };
 
-            let servers = self.get_servers().await;
+            let span = info_span!("host-dns.client", peer.addr = peer_addr.to_string());
+
+            let servers = self.get_servers().instrument(span.clone()).await;
 
             if servers.is_empty() {
-                error!("host dns TCP accept success, no upstream");
+                let _enter = span.enter();
+                error!("no upstream");
                 continue;
             } else {
-                tokio::spawn(HostDns::handle_stream(
-                    stream,
-                    peer_addr,
-                    servers,
-                    self.base_query_timeout,
-                    self.base_query_try,
-                ));
+                tokio::spawn(
+                    HostDns::handle_stream(stream, servers, self.base_query_timeout, self.base_query_try)
+                        .instrument(span),
+                );
             }
         }
     }
@@ -167,16 +164,14 @@ impl HostDns {
         Ok(())
     }
 
-    async fn handle_stream<T, AddrT>(
+    async fn handle_stream<T>(
         mut stream: T,
-        peer_addr: AddrT,
         servers: Vec<SocketAddr>,
         base_query_timeout: Duration,
         base_query_try: usize,
     ) -> io::Result<()>
     where
         T: AsyncRead + AsyncWrite + Unpin,
-        AddrT: Debug,
     {
         let mut length_buf = [0u8; 2];
         let mut message_buf = BytesMut::new();
@@ -187,7 +182,7 @@ impl HostDns {
                     break;
                 }
                 Err(err) => {
-                    error!("host dns stream {:?} read length failed, error: {}", peer_addr, err);
+                    error!(error = ?err, "read length failed");
                     return Err(err);
                 }
             }
@@ -203,7 +198,7 @@ impl HostDns {
             match stream.read_exact(&mut message_buf).await {
                 Ok(..) => {}
                 Err(err) => {
-                    error!("host dns stream {:?} read message failed, error: {}", peer_addr, err);
+                    error!(error = ?err, "read message failed");
                     return Err(err);
                 }
             }
@@ -211,7 +206,7 @@ impl HostDns {
             let message = match Message::from_vec(&message_buf) {
                 Ok(m) => m,
                 Err(err) => {
-                    error!("host dns stream {:?} parse message failed, error: {}", peer_addr, err);
+                    error!(error = ?err, "parse message failed");
                     return Err(err.into());
                 }
             };
