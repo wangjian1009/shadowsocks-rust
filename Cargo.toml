@@ -245,7 +245,7 @@ exitcode = "1"
 bytes = "1.0"
 byteorder = "1.3"
 
-trust-dns-resolver = { version = "0.20.3", optional = true, features = ["serde-config"] }
+trust-dns-resolver = { version = "0.22", optional = true, features = ["serde-config"] }
 build-time = "0.1"
 directories = "4.0"
 xdg = "2.4"

@@ -38,6 +38,7 @@ use futures::{
 #[no_mangle]
 pub extern "C" fn lib_local_run(
     c_config: *const c_char,
+    c_log_level: c_char,
     c_acl_path: *const c_char,
     #[cfg(feature = "local-flow-stat")] c_stat_path: *const c_char,
     control_port: c_ushort,
@@ -89,7 +90,7 @@ pub extern "C" fn lib_local_run(
         #[cfg(feature = "logging")]
         let log_guard = {
             let mut log_config = crate::config::LogConfig::default();
-            log_config.level = 2;
+            log_config.level = c_log_level as u32;
             crate::logging::init_with_config("sslocal", &log_config)
         };
 

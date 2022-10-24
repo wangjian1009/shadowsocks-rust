@@ -162,6 +162,7 @@ armv8 = ["shadowsocks/armv8"]
 neon = ["shadowsocks/neon"]
 
 [dependencies]
+metrics = "0.20"
 tracing = "0.1.10"
 
 cfg-if = "1"
