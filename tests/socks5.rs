@@ -4,9 +4,11 @@ use std::net::{SocketAddr, ToSocketAddrs};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::TcpStream,
     time::{self, Duration},
 };
 
+// use tracing_subscriber::util::SubscriberInitExt;
 use tracing_test::traced_test;
 
 use shadowsocks_service::{
@@ -97,14 +99,32 @@ impl Socks5TestServer {
         &self.local_addr
     }
 
-    pub async fn run(&self) {
+    pub async fn start(&self) -> std::io::Result<()> {
         let svr_cfg = self.svr_config.clone();
         tokio::spawn(run_server(CancelWaiter::none(), svr_cfg));
 
         let client_cfg = self.cli_config.clone();
         tokio::spawn(run_local(client_cfg, CancelWaiter::none()));
 
-        time::sleep(Duration::from_secs(1)).await;
+        let mut last_err = None;
+
+        for _ in 0..5 {
+            match TcpStream::connect(self.client_addr()).await {
+                Ok(_s) => {
+                    last_err = None;
+                    break;
+                }
+                Err(err) => last_err = Some(err),
+            }
+        }
+
+        if let Some(err) = last_err {
+            tracing::error!(error = ?err, addr = self.client_addr().to_string(), "check local start fail");
+            return Err(err);
+        } else {
+            tracing::info!(addr = self.client_addr().to_string(), "check local start success");
+            return Ok(());
+        }
     }
 }
 
@@ -127,14 +147,14 @@ async fn socks5_tcp_relay_test(
         local_transport,
         Mode::TcpOnly,
     );
-    svr.run().await;
+    svr.start().await.expect("start server error");
 
     let mut c = Socks5TcpClient::connect(
         Address::DomainNameAddress("www.example.com".to_owned(), 80),
         svr.client_addr(),
     )
     .await
-    .unwrap();
+    .expect("socks5 client connect error");
 
     let req = b"GET / HTTP/1.0\r\nHost: www.example.com\r\nAccept: */*\r\n\r\n";
     c.write_all(req).await.unwrap();
@@ -196,7 +216,7 @@ async fn socks5_udp_relay_test(
         local_transport,
         Mode::TcpAndUdp,
     );
-    svr.run().await;
+    svr.start().await.expect("start server error");
 
     let mut l = Socks5UdpClient::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap())
         .await
@@ -218,6 +238,7 @@ async fn socks5_udp_relay_test(
 }
 
 #[tokio::test]
+#[traced_test]
 async fn socks5_udp_relay_ss() {
     socks5_udp_relay_test(
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_128_GCM)),
@@ -299,6 +320,7 @@ async fn socks5_tcp_relay_ss_ws() {
 
 #[cfg(feature = "transport-tls")]
 #[tokio::test]
+#[traced_test]
 async fn socks5_tcp_relay_ss_tls() {
     socks5_tcp_relay_test(
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
@@ -309,7 +331,7 @@ async fn socks5_tcp_relay_ss_tls() {
         })),
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportConnectorConfig::Tls(tls::TlsConnectorConfig {
-            sni: "proxy0101.com".to_owned(),
+            sni: "coolvpn.cc".to_owned(),
             cert: None,
             cipher: None,
         })),
@@ -319,6 +341,7 @@ async fn socks5_tcp_relay_ss_tls() {
 
 #[cfg(all(feature = "transport-tls", feature = "transport-ws"))]
 #[tokio::test]
+#[traced_test]
 async fn socks5_tcp_relay_ss_wss() {
     socks5_tcp_relay_test(
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
@@ -337,7 +360,7 @@ async fn socks5_tcp_relay_ss_wss() {
                 host: "www.google.com".to_owned(),
             },
             tls::TlsConnectorConfig {
-                sni: "proxy0101.com".to_owned(),
+                sni: "coolvpn.cc".to_owned(),
                 cert: None,
                 cipher: None,
             },
@@ -348,6 +371,7 @@ async fn socks5_tcp_relay_ss_wss() {
 
 #[cfg(feature = "transport-skcp")]
 #[tokio::test]
+#[traced_test]
 async fn socks5_tcp_relay_ss_skcp() {
     socks5_tcp_relay_test(
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
@@ -360,6 +384,7 @@ async fn socks5_tcp_relay_ss_skcp() {
 
 #[cfg(feature = "trojan")]
 #[tokio::test]
+#[traced_test]
 async fn socks5_tcp_relay_trojan() {
     socks5_tcp_relay_test(
         ServerProtocol::Trojan(TrojanConfig::new("test-password")),
@@ -374,6 +399,7 @@ async fn socks5_tcp_relay_trojan() {
 
 #[cfg(feature = "trojan")]
 #[tokio::test]
+#[traced_test]
 async fn socks5_udp_relay_trojan() {
     socks5_udp_relay_test(
         ServerProtocol::Trojan(TrojanConfig::new("test-password")),
@@ -388,6 +414,7 @@ async fn socks5_udp_relay_trojan() {
 
 #[cfg(feature = "vless")]
 #[tokio::test]
+#[traced_test]
 async fn socks5_tcp_relay_vless() {
     let mut config = VlessConfig::new();
     config
@@ -408,6 +435,7 @@ async fn socks5_tcp_relay_vless() {
 
 #[cfg(feature = "vless")]
 #[tokio::test]
+#[traced_test]
 async fn socks5_udp_relay_vless() {
     let mut config = VlessConfig::new();
     config
@@ -428,6 +456,7 @@ async fn socks5_udp_relay_vless() {
 
 #[cfg(all(feature = "vless", feature = "transport-skcp"))]
 #[tokio::test]
+#[traced_test]
 async fn socks5_tcp_relay_vless_skcp() {
     let mut config = VlessConfig::new();
     config
@@ -446,6 +475,7 @@ async fn socks5_tcp_relay_vless_skcp() {
 
 #[cfg(all(feature = "vless", feature = "transport-skcp"))]
 #[tokio::test]
+#[traced_test]
 async fn socks5_udp_relay_vless_skcp() {
     let mut config = VlessConfig::new();
     config
@@ -464,9 +494,12 @@ async fn socks5_udp_relay_vless_skcp() {
 
 #[cfg(feature = "tuic")]
 #[tokio::test]
+#[traced_test]
 async fn socks5_tcp_relay_tuic() {
+    // tracing_subscriber::fmt().with_writer(std::io::stdout).finish().init();
+
     let mut client_config = tuic::client::RawConfig::new("token1".to_owned());
-    client_config.sni = Some("proxy0101.com".to_owned());
+    client_config.sni = Some("coolvpn.cc".to_owned());
     client_config.disable_sni = true;
 
     let mut server_config =
@@ -481,14 +514,15 @@ async fn socks5_tcp_relay_tuic() {
         #[cfg(feature = "transport")]
         None,
     )
-    .await
+    .await;
 }
 
 #[cfg(feature = "tuic")]
 #[tokio::test]
+#[traced_test]
 async fn socks5_udp_relay_tuic() {
     let mut client_config = tuic::client::RawConfig::new("token1".to_owned());
-    client_config.sni = Some("proxy0101.com".to_owned());
+    client_config.sni = Some("coolvpn.cc".to_owned());
     client_config.disable_sni = true;
 
     let mut server_config =
