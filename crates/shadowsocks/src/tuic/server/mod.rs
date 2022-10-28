@@ -1,4 +1,3 @@
-mod certificate;
 mod config;
 mod connection;
 mod server;

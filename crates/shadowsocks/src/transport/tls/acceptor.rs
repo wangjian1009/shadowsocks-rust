@@ -1,23 +1,10 @@
 use async_trait::async_trait;
-use rustls_pemfile::Item;
-use std::{
-    fs::{self, File},
-    io::{self, BufReader},
-    net::SocketAddr,
-    sync::Arc,
-};
-use tokio_rustls::{
-    rustls::{Certificate, PrivateKey, ServerConfig},
-    server::TlsStream as TokioTlsStream,
-    TlsAcceptor as TokioTlsAcceptor,
-};
+use std::{io, net::SocketAddr, sync::Arc};
+use tokio_rustls::{server::TlsStream as TokioTlsStream, TlsAcceptor as TokioTlsAcceptor};
 
-use crate::ServerAddr;
+use crate::{ssl, ServerAddr};
 
-use super::{
-    super::{Acceptor, Connection, DeviceOrGuard, DummyPacket, StreamConnection},
-    get_cipher_suite, new_error,
-};
+use super::super::{Acceptor, Connection, DeviceOrGuard, DummyPacket, StreamConnection};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TlsAcceptorConfig {
@@ -57,13 +44,21 @@ where
     type TS = TokioTlsStream<S>;
 
     async fn accept(&mut self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
-        let (stream, addr) = self.inner.accept().await?;
-        match stream {
-            Connection::Stream(stream) => {
-                let stream = self.tls_acceptor.accept(stream).await?;
-                Ok((Connection::Stream(stream), addr))
+        loop {
+            let (stream, addr) = self.inner.accept().await?;
+            match stream {
+                Connection::Stream(stream) => {
+                    let stream = match self.tls_acceptor.accept(stream).await {
+                        Ok(stream) => stream,
+                        Err(err) => {
+                            tracing::debug!(error = ?err, "tls accept connection fail");
+                            continue;
+                        }
+                    };
+                    return Ok((Connection::Stream(stream), addr));
+                }
+                Connection::Packet { .. } => unimplemented!(),
             }
-            Connection::Packet { .. } => unimplemented!(),
         }
     }
 
@@ -74,51 +69,15 @@ where
 
 impl<T: Acceptor> TlsAcceptor<T> {
     pub async fn new(config: &TlsAcceptorConfig, inner: T) -> io::Result<Self> {
-        let certs = load_certificates(&config.cert)?;
-        let priv_key = load_private_key(&config.key)?;
+        let certs = ssl::server::load_certificates(&config.cert)?;
+        let priv_key = ssl::server::load_private_key(&config.key)?;
 
-        let cipher_suites = get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
+        let cipher_suites =
+            ssl::get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
 
-        let tls_config = ServerConfig::builder()
-            .with_cipher_suites(&cipher_suites)
-            .with_safe_default_kx_groups()
-            .with_safe_default_protocol_versions()
-            .unwrap()
-            .with_no_client_auth()
-            .with_single_cert(certs, priv_key)
-            .map_err(|e| new_error(format!("build tls server config fail: {}", e)))?;
+        let tls_config = ssl::server::build_config(certs, priv_key, Some(cipher_suites.as_slice()), None)?;
 
         let tls_acceptor = TokioTlsAcceptor::from(Arc::new(tls_config));
         Ok(Self { inner, tls_acceptor })
     }
-}
-
-fn load_certificates(path: &str) -> io::Result<Vec<Certificate>> {
-    let mut file = BufReader::new(File::open(path)?);
-    let mut certs = Vec::new();
-
-    while let Ok(Some(item)) = rustls_pemfile::read_one(&mut file) {
-        if let Item::X509Certificate(cert) = item {
-            certs.push(Certificate(cert));
-        }
-    }
-
-    if certs.is_empty() {
-        certs = vec![Certificate(fs::read(path)?)];
-    }
-
-    Ok(certs)
-}
-
-fn load_private_key(path: &str) -> io::Result<PrivateKey> {
-    let mut file = BufReader::new(File::open(path)?);
-    let mut priv_key = None;
-
-    while let Ok(Some(item)) = rustls_pemfile::read_one(&mut file) {
-        if let Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key) = item {
-            priv_key = Some(key);
-        }
-    }
-
-    priv_key.map(Ok).unwrap_or_else(|| fs::read(path)).map(PrivateKey)
 }

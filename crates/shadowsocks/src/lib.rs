@@ -46,6 +46,9 @@ mod security;
 pub mod timeout;
 pub mod transport;
 
+#[cfg(any(feature = "tuic", feature = "transport-tls"))]
+mod ssl;
+
 #[cfg(feature = "trojan")]
 pub mod trojan;
 

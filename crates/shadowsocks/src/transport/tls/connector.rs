@@ -1,22 +1,17 @@
 use async_trait::async_trait;
-use rustls_pemfile::Item;
-use std::{
-    fs::{self, File},
-    io::{self, BufReader},
-    sync::Arc,
-};
+use std::{io, sync::Arc};
 use tokio_rustls::{
     client::TlsStream as TokioTlsStream,
-    rustls::{Certificate, ClientConfig, RootCertStore, ServerName},
+    rustls::{ClientConfig, ServerName},
     TlsConnector as TokioTlsConnector,
 };
 
-use crate::net::{ConnectOpts, Destination};
-
-use super::{
-    super::{Connection, Connector, DeviceOrGuard, DummyPacket, StreamConnection},
-    get_cipher_suite,
+use crate::{
+    net::{ConnectOpts, Destination},
+    ssl,
 };
+
+use super::super::{Connection, Connector, DeviceOrGuard, DummyPacket, StreamConnection};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TlsConnectorConfig {
@@ -46,55 +41,17 @@ impl<S: StreamConnection> StreamConnection for TokioTlsStream<S> {
     }
 }
 
-fn load_certificates(files: Vec<String>) -> io::Result<RootCertStore> {
-    let mut certs = RootCertStore::empty();
-
-    for file in &files {
-        let mut file = BufReader::new(File::open(file)?);
-
-        while let Ok(Some(item)) = rustls_pemfile::read_one(&mut file) {
-            if let Item::X509Certificate(cert) = item {
-                certs
-                    .add(&Certificate(cert))
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-            }
-        }
-    }
-
-    if certs.is_empty() {
-        for file in &files {
-            certs
-                .add(&Certificate(fs::read(file)?))
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        }
-    }
-
-    for cert in rustls_native_certs::load_native_certs().map_err(|e| io::Error::new(io::ErrorKind::Other, e))? {
-        certs
-            .add(&Certificate(cert.0))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    }
-
-    Ok(certs)
-}
-
 impl<C: Connector> TlsConnector<C> {
     pub fn new(config: &TlsConnectorConfig, inner: C) -> io::Result<Self> {
-        let cipher_suites = get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
+        let cipher_suites =
+            ssl::get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
 
-        let mut cert_files = Vec::new();
+        let mut certs = None;
         if let Some(cert_file) = config.cert.as_ref() {
-            cert_files.push(cert_file.clone());
-        }
-        let certs = load_certificates(cert_files)?;
+            certs = Some(ssl::client::load_certificates(&vec![cert_file.clone()])?);
+        };
 
-        let tls_config = ClientConfig::builder()
-            .with_cipher_suites(&cipher_suites)
-            .with_safe_default_kx_groups()
-            .with_safe_default_protocol_versions()
-            .unwrap()
-            .with_root_certificates(certs)
-            .with_no_client_auth();
+        let tls_config = ssl::client::build_config(certs, Some(cipher_suites.as_slice()), None)?;
 
         Ok(Self {
             sni: config.sni.clone(),

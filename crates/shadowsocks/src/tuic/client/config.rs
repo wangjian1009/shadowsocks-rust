@@ -2,11 +2,12 @@ use quinn::{
     congestion::{BbrConfig, CubicConfig, NewRenoConfig},
     ClientConfig, TransportConfig,
 };
-use rustls::version::TLS13;
 use std::{io, str::FromStr, sync::Arc};
 
+use crate::ssl;
+
 use super::super::CongestionController;
-use super::{certificate, relay::UdpRelayMode};
+use super::relay::UdpRelayMode;
 
 pub struct Config {
     pub client_config: ClientConfig,
@@ -21,28 +22,15 @@ pub struct Config {
 impl Config {
     pub fn new(raw: &RawConfig) -> io::Result<Self> {
         let client_config = {
-            let certs = certificate::load_certificates(&raw.certificates)?;
+            let certs = ssl::client::load_certificates(&raw.certificates)?;
 
-            let mut crypto = rustls::ClientConfig::builder()
-                .with_safe_default_cipher_suites()
-                .with_safe_default_kx_groups()
-                .with_protocol_versions(&[&TLS13])
-                .map(|b| {
-                    if certs.is_empty() {
-                        b.with_custom_certificate_verifier(
-                            Arc::new(NoVerifier {}) as Arc<dyn rustls::client::ServerCertVerifier>
-                        )
-                        .with_no_client_auth()
-                    } else {
-                        b.with_root_certificates(certs).with_no_client_auth()
-                    }
-                })
-                .unwrap();
+            let crypto = ssl::client::build_config(
+                Some(certs),
+                None,
+                Some(raw.alpn.iter().map(|alpn| alpn.clone().into_bytes()).collect()),
+            )?;
 
-            crypto.alpn_protocols = raw.alpn.iter().map(|alpn| alpn.clone().into_bytes()).collect();
-
-            crypto.enable_early_data = true;
-            crypto.enable_sni = !raw.disable_sni;
+            // crypto.enable_sni = !raw.disable_sni;
 
             let mut config = ClientConfig::new(Arc::new(crypto));
 
@@ -132,21 +120,5 @@ impl FromStr for UdpRelayMode<(), ()> {
                 format!("not support UdpRelayMode {}", s),
             ))
         }
-    }
-}
-
-pub(crate) struct NoVerifier;
-
-impl rustls::client::ServerCertVerifier for NoVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::Certificate,
-        _intermediates: &[rustls::Certificate],
-        _server_name: &rustls::ServerName,
-        _scts: &mut dyn Iterator<Item = &[u8]>,
-        _ocsp_response: &[u8],
-        _now: std::time::SystemTime,
-    ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::ServerCertVerified::assertion())
     }
 }
