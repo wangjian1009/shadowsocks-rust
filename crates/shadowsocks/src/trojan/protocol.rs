@@ -143,10 +143,15 @@ impl UdpHeader {
         R: AsyncRead + Unpin,
     {
         let addr = Address::read_from(stream).await?;
+        let len = stream.read_u16().await?;
+
         let mut buf = [0u8; 2];
         stream.read_exact(&mut buf).await?;
-        let len = ((buf[0] as u16) << 8) | (buf[1] as u16);
-        stream.read_exact(&mut buf).await?;
+
+        if buf[0] != 0x0D || buf[1] != 0x0A {
+            return Err(io::Error::new(io::ErrorKind::Other, "protocol sep mismatch"));
+        }
+
         Ok(Self {
             address: addr,
             payload_len: len,

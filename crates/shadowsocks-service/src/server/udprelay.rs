@@ -25,7 +25,7 @@ use tokio::{sync::mpsc, task::JoinHandle, time};
 use tracing::{debug, error, info, trace, warn, Instrument};
 
 use crate::net::{
-    packet_window::PacketWindowFilter, utils::to_ipv4_mapped, MonProxySocket, UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE,
+    packet_window::PacketWindowFilter, utils::to_ipv4_mapped, MonProxySocket, UDP_ASSOCIATION_CLOSE_CHANNEL_SIZE,
     UDP_ASSOCIATION_SEND_CHANNEL_SIZE,
 };
 
@@ -116,7 +116,7 @@ impl UdpServer {
             CipherCategory::Aead2022 => NatMap::Session(create_assoc_map(time_to_live, capacity)),
         };
 
-        let (keepalive_tx, keepalive_rx) = mpsc::channel(UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE);
+        let (keepalive_tx, keepalive_rx) = mpsc::channel(UDP_ASSOCIATION_CLOSE_CHANNEL_SIZE);
 
         UdpServer {
             context,

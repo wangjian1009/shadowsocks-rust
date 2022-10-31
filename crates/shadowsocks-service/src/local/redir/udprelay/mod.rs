@@ -15,7 +15,7 @@ use shadowsocks::{
     relay::{socks5::Address, udprelay::MAXIMUM_UDP_PAYLOAD_SIZE},
     ServerAddr,
 };
-use tokio::{sync::Mutex, task::JoinHandle, time};
+use tokio::{sync::Mutex, task::JoinHandle};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -201,7 +201,7 @@ impl UdpRedir {
         );
 
         #[allow(clippy::needless_update)]
-        let (mut manager, cleanup_interval, mut keepalive_rx) = UdpAssociationManager::new(
+        let (mut manager, mut close_rx) = UdpAssociationManager::new(
             self.context.clone(),
             UdpRedirInboundWriter::new(self.redir_ty, self.context.connect_opts_ref()),
             self.time_to_live,
@@ -210,18 +210,12 @@ impl UdpRedir {
         );
 
         let mut pkt_buf = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
-        let mut cleanup_timer = time::interval(cleanup_interval);
 
         loop {
             tokio::select! {
-                _ = cleanup_timer.tick() => {
-                    // cleanup expired associations. iter() will remove expired elements
-                    manager.cleanup_expired().await;
-                }
-
-                peer_addr_opt = keepalive_rx.recv() => {
-                    let peer_addr = peer_addr_opt.expect("keep-alive channel closed unexpectly");
-                    manager.keep_alive(&peer_addr).await;
+                close_opt = close_rx.recv() => {
+                    let (peer_addr, reason) = close_opt.expect("keep-alive channel closed unexpectly");
+                    manager.close_association(&peer_addr, reason);
                 }
 
                 recv_result = listener.recv_dest_from(&mut pkt_buf) => {

@@ -17,12 +17,12 @@ impl TuicUdpContext {
     pub async fn tuic_receive_from(
         &mut self,
         buf: &mut Vec<u8>,
-    ) -> io::Result<(usize, Address, Option<UdpSocketControlData>)> {
+    ) -> Result<(usize, Address, Option<UdpSocketControlData>), UdpAssociationCloseReason> {
         let (bytes, addr) = match self.packet_receiver.recv().await {
             Some(v) => v,
             None => {
                 debug!("tuic packet receive chanel break");
-                return Err(io::ErrorKind::UnexpectedEof.into());
+                return Err(UdpAssociationCloseReason::InternalError);
             }
         };
 
@@ -41,18 +41,27 @@ impl TuicUdpContext {
         Ok((recv_len, Address::from(addr), None))
     }
 
-    pub fn tuic_try_send_to(self: &mut TuicUdpContext, target_addr: &Address, data: &[u8]) -> io::Result<()> {
+    pub fn tuic_try_send_to(
+        self: &mut TuicUdpContext,
+        target_addr: &Address,
+        data: &[u8],
+    ) -> Result<bool, UdpAssociationCloseReason> {
         match self
             .packet_sender
             .try_send((Bytes::copy_from_slice(data), ServerAddr::from(target_addr.clone())))
         {
-            Ok(()) => {}
+            Ok(()) => Ok(true),
             Err(err) => match err {
-                TrySendError::Closed(..) => return Err(io::Error::new(io::ErrorKind::Other, "tuic channel closed")),
-                TrySendError::Full(..) => return Err(io::Error::new(io::ErrorKind::Other, "tuic send channel full")),
+                TrySendError::Closed(..) => {
+                    error!(error = ?err, "tuic channel closed");
+                    Err(UdpAssociationCloseReason::InternalError)
+                }
+                TrySendError::Full(..) => {
+                    debug!(error = ?err, "tuic send channel full");
+                    Ok(false)
+                }
             },
         }
-        Ok(())
     }
 }
 

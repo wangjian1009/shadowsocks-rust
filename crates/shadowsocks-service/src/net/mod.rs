@@ -14,4 +14,4 @@ pub mod utils;
 pub const UDP_ASSOCIATION_SEND_CHANNEL_SIZE: usize = 1024;
 
 /// Keep-alive channel size for UDP associations' manager
-pub const UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE: usize = 64;
+pub const UDP_ASSOCIATION_CLOSE_CHANNEL_SIZE: usize = 64;

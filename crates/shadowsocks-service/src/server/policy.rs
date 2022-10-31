@@ -359,14 +359,26 @@ impl OutgoingUdpSocket {
             }
         }
 
-        let n = socket.send_to(data, target_addr).await?;
-        if n != data.len() {
-            error!("OUTGOING: --> {n} bytes mismatch, expected {} bytes", data.len());
-        } else {
-            trace!("OUTGOING: --> {n} bytes");
+        match socket.send_to(data, target_addr).await {
+            Err(err) => {
+                error!(error = ?err, target = target_addr.to_string(), pkt.len = data.len(), "OUTGOING: --> send error");
+                Err(err)
+            }
+            Ok(n) => {
+                if n != data.len() {
+                    error!(
+                        target = target_addr.to_string(),
+                        pkt.len = data.len(),
+                        send.len = n,
+                        "OUTGOING: --> send bytes mismatch"
+                    );
+                    Err(io::Error::new(io::ErrorKind::Other, "send size mismatched"))
+                } else {
+                    trace!(target = target_addr.to_string(), pkt.len = data.len(), "OUTGOING: --> ");
+                    Ok(())
+                }
+            }
         }
-
-        Ok(())
     }
 }
 
@@ -382,12 +394,22 @@ impl policy::UdpSocket for OutgoingUdpSocket {
                 None => unreachable!(),
                 Some(ref s) => {
                     let mut buf = vec![0; max_udp_packet_size];
-                    let (len, addr) = s.recv_from(&mut buf).await?;
-                    buf.truncate(len);
+                    match s.recv_from(&mut buf).await {
+                        Ok((len, addr)) => {
+                            buf.truncate(len);
 
-                    trace!("OUTGOING: <-- {len} bytes");
+                            trace!(target = addr.to_string(), pkt.len = len, "OUTGOING: <-- ");
 
-                    Ok((Bytes::from(buf), addr))
+                            Ok((Bytes::from(buf), addr))
+                        }
+                        Err(err) => {
+                            error!(
+                                error = ?err,
+                                "OUTGOING: <-- send error"
+                            );
+                            Err(err)
+                        }
+                    }
                 }
             }
         }

@@ -2,7 +2,8 @@
 
 use std::{
     cell::RefCell,
-    io,
+    collections::HashMap,
+    fmt, io,
     marker::PhantomData,
     net::{SocketAddr, SocketAddrV6},
     sync::Arc,
@@ -25,15 +26,14 @@ use shadowsocks::{
         udprelay::{options::UdpSocketControlData, ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
         Address,
     },
+    timeout::TimeoutWaiter,
     transport::StreamConnection,
     ServerAddr, ServerConfig,
 };
 
 use crate::{
     local::{context::ServiceContext, loadbalancing::PingBalancer},
-    net::{
-        packet_window::PacketWindowFilter, UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE, UDP_ASSOCIATION_SEND_CHANNEL_SIZE,
-    },
+    net::{packet_window::PacketWindowFilter, UDP_ASSOCIATION_CLOSE_CHANNEL_SIZE, UDP_ASSOCIATION_SEND_CHANNEL_SIZE},
 };
 
 use cfg_if::cfg_if;
@@ -67,7 +67,31 @@ pub trait UdpInboundWrite {
     async fn send_to(&self, peer_addr: SocketAddr, remote_addr: &Address, data: &[u8]) -> io::Result<()>;
 }
 
-type AssociationMap<W> = LruCache<SocketAddr, UdpAssociation<W>>;
+#[derive(Debug)]
+pub enum UdpAssociationCloseReason {
+    RemoteSocketError,
+    LocalSocketError,
+    FakeClose,
+    IdleTimeout,
+    InternalError,
+}
+
+impl fmt::Display for UdpAssociationCloseReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RemoteSocketError => write!(f, "remote-sock-error"),
+            Self::LocalSocketError => write!(f, "local-sock-error"),
+            Self::FakeClose => write!(f, "fake-close"),
+            Self::IdleTimeout => write!(f, "idle-timeout"),
+            Self::InternalError => write!(f, "internal-error"),
+        }
+    }
+}
+
+pub type UdpAssociationCloseReceiver = mpsc::Receiver<(SocketAddr, UdpAssociationCloseReason)>;
+type UdpAssociationCloseSender = mpsc::Sender<(SocketAddr, UdpAssociationCloseReason)>;
+
+type AssociationMap<W> = HashMap<SocketAddr, UdpAssociation<W>>;
 
 /// UDP association manager
 pub struct UdpAssociationManager<W>
@@ -77,7 +101,7 @@ where
     respond_writer: W,
     context: Arc<ServiceContext>,
     assoc_map: AssociationMap<W>,
-    keepalive_tx: mpsc::Sender<SocketAddr>,
+    close_tx: UdpAssociationCloseSender,
     balancer: PingBalancer,
     server_session_expire_duration: Duration,
 }
@@ -93,28 +117,24 @@ where
         context: Arc<ServiceContext>,
         respond_writer: W,
         time_to_live: Option<Duration>,
-        capacity: Option<usize>,
+        _capacity: Option<usize>,
         balancer: PingBalancer,
-    ) -> (UdpAssociationManager<W>, Duration, mpsc::Receiver<SocketAddr>) {
+    ) -> (UdpAssociationManager<W>, UdpAssociationCloseReceiver) {
         let time_to_live = time_to_live.unwrap_or(crate::DEFAULT_UDP_EXPIRY_DURATION);
-        let assoc_map = match capacity {
-            Some(capacity) => LruCache::with_expiry_duration_and_capacity(time_to_live, capacity),
-            None => LruCache::with_expiry_duration(time_to_live),
-        };
+        let assoc_map = AssociationMap::new();
 
-        let (keepalive_tx, keepalive_rx) = mpsc::channel(UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE);
+        let (close_tx, close_rx) = mpsc::channel(UDP_ASSOCIATION_CLOSE_CHANNEL_SIZE);
 
         (
             UdpAssociationManager {
                 respond_writer,
                 context,
                 assoc_map,
-                keepalive_tx,
+                close_tx,
                 balancer,
                 server_session_expire_duration: time_to_live,
             },
-            time_to_live,
-            keepalive_rx,
+            close_rx,
         )
     }
 
@@ -129,7 +149,7 @@ where
             let new_assoc = UdpAssociation::new(
                 self.context.clone(),
                 peer_addr.clone(),
-                self.keepalive_tx.clone(),
+                self.close_tx.clone(),
                 self.balancer.clone(),
                 self.respond_writer.clone(),
                 self.server_session_expire_duration,
@@ -192,14 +212,12 @@ where
         Ok(())
     }
 
-    /// Cleanup expired associations
-    pub async fn cleanup_expired(&mut self) {
-        self.assoc_map.iter();
-    }
-
-    /// Keep-alive association
-    pub async fn keep_alive(&mut self, peer_addr: &SocketAddr) {
-        self.assoc_map.get(peer_addr);
+    /// close association
+    pub fn close_association(&mut self, peer_addr: &SocketAddr, reason: UdpAssociationCloseReason) {
+        if let Some(association) = self.assoc_map.remove(peer_addr) {
+            let _enter = association.span.enter();
+            debug!(reason = reason.to_string(), "closed");
+        }
     }
 }
 
@@ -229,7 +247,7 @@ where
     fn new(
         context: Arc<ServiceContext>,
         peer_addr: SocketAddr,
-        keepalive_tx: mpsc::Sender<SocketAddr>,
+        close_tx: UdpAssociationCloseSender,
         balancer: PingBalancer,
         respond_writer: W,
         server_session_expire_duration: Duration,
@@ -238,7 +256,7 @@ where
         let (assoc_handle, sender) = UdpAssociationContext::create(
             context,
             peer_addr,
-            keepalive_tx,
+            close_tx,
             balancer,
             respond_writer,
             server_session_expire_duration,
@@ -274,10 +292,7 @@ impl ServerSessionContext {
 enum MultiProtocolProxySocket {
     SS(ProxySocket),
     #[cfg(feature = "trojan")]
-    Trojan {
-        r: trojan::TrojanUdpReader,
-        w: trojan::TrojanUdpWriter,
-    },
+    Trojan(trojan::TrojanUdpContext),
     #[cfg(feature = "vless")]
     Vless(vless::VlessUdpContext),
     #[cfg(feature = "tuic")]
@@ -293,8 +308,7 @@ where
     bypassed_ipv4_socket: Option<ShadowUdpSocket>,
     bypassed_ipv6_socket: Option<ShadowUdpSocket>,
     proxied_socket: Option<MultiProtocolProxySocket>,
-    keepalive_tx: mpsc::Sender<SocketAddr>,
-    keepalive_flag: bool,
+    close_tx: UdpAssociationCloseSender,
     balancer: PingBalancer,
     respond_writer: W,
     client_session_id: u64,
@@ -310,7 +324,7 @@ where
 {
     fn drop(&mut self) {
         let _enter = self.span.enter();
-        debug!("udp association destoried");
+        trace!("udp association destoried");
     }
 }
 
@@ -330,7 +344,7 @@ where
     fn create(
         context: Arc<ServiceContext>,
         peer_addr: SocketAddr,
-        keepalive_tx: mpsc::Sender<SocketAddr>,
+        close_tx: UdpAssociationCloseSender,
         balancer: PingBalancer,
         respond_writer: W,
         server_session_expire_duration: Duration,
@@ -341,14 +355,13 @@ where
         // being OOM.
         let (sender, receiver) = mpsc::channel(UDP_ASSOCIATION_SEND_CHANNEL_SIZE);
 
-        let mut assoc = UdpAssociationContext {
+        let assoc = UdpAssociationContext {
             context,
             peer_addr,
             bypassed_ipv4_socket: None,
             bypassed_ipv6_socket: None,
             proxied_socket: None,
-            keepalive_tx,
-            keepalive_flag: false,
+            close_tx,
             balancer,
             respond_writer,
             // client_session_id must be random generated,
@@ -359,7 +372,7 @@ where
             server_session_expire_duration,
             span: span.clone(),
         };
-        let handle = tokio::spawn(async move { assoc.dispatch_packet(receiver).await }.instrument(span));
+        let handle = tokio::spawn(assoc.dispatch_packet(receiver).instrument(span));
 
         (handle, sender)
     }
@@ -438,17 +451,19 @@ where
         }
     }
 
-    async fn dispatch_packet(&mut self, mut receiver: mpsc::Receiver<(Address, Bytes, Span)>) {
+    async fn dispatch_packet(mut self, mut receiver: mpsc::Receiver<(Address, Bytes, Span)>) {
         let mut bypassed_ipv4_buffer = Vec::new();
         let mut bypassed_ipv6_buffer = Vec::new();
         let mut proxied_buffer = Vec::new();
-        let mut keepalive_interval = time::interval(Duration::from_secs(1));
         let close_notify = self.context.connection_close_notify();
         let flow_state = self.context.flow_stat();
 
         let mut check_rate_limit_size: usize = 0;
+        let idle_timeout = TimeoutWaiter::new(self.server_session_expire_duration);
 
-        loop {
+        tokio::pin!(idle_timeout);
+
+        let close_reason = loop {
             let rate_limit_duration = self.check_rate_limit(&mut check_rate_limit_size);
             assert!(
                 (rate_limit_duration.is_some() && check_rate_limit_size > 0)
@@ -463,15 +478,17 @@ where
                     let (target_addr, data, span) = match packet_received_opt {
                         Some(d) => d,
                         None => {
-                            trace!("channel closed");
-                            break;
+                            debug!("receive channel closed");
+                            break UdpAssociationCloseReason::InternalError;
                         }
                     };
 
-                    self.dispatch_received_packet(&target_addr, &data, &mut check_rate_limit_size).instrument(span).await
+                    if let Err(close_reason) = self.dispatch_received_packet(&target_addr, &data, &mut check_rate_limit_size).instrument(span).await {
+                        break close_reason;
+                    }
                 }
 
-                received_opt = receive_from_bypassed_opt(&self.bypassed_ipv4_socket, &mut bypassed_ipv4_buffer), if self.bypassed_ipv4_socket.is_some() => {
+                received_opt = Self::receive_from_bypassed_opt(&self.bypassed_ipv4_socket, &mut bypassed_ipv4_buffer), if self.bypassed_ipv4_socket.is_some() => {
                     let (n, addr) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -484,10 +501,12 @@ where
 
                     let span = info_span!("udp.remote", target = addr.to_string(), source = "bypass");
                     let addr = Address::from(addr);
-                    self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true, &mut check_rate_limit_size).instrument(span).await;
+                    if let Err(close_reason) = self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true, &mut check_rate_limit_size).instrument(span).await {
+                        break close_reason;
+                    }
                 }
 
-                received_opt = receive_from_bypassed_opt(&self.bypassed_ipv6_socket, &mut bypassed_ipv6_buffer), if self.bypassed_ipv6_socket.is_some() => {
+                received_opt = Self::receive_from_bypassed_opt(&self.bypassed_ipv6_socket, &mut bypassed_ipv6_buffer), if self.bypassed_ipv6_socket.is_some() => {
                     let (n, addr) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -500,10 +519,12 @@ where
 
                     let span = info_span!("udp.remote", target = addr.to_string(), source = "bypass");
                     let addr = Address::from(addr);
-                    self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut check_rate_limit_size).instrument(span).await;
+                    if let Err(close_reason) = self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut check_rate_limit_size).instrument(span).await {
+                        break close_reason;
+                    }
                 }
 
-                received_opt = receive_from_proxied_opt(&mut self.proxied_socket, &mut proxied_buffer), if check_rate_limit_size == 0 && self.proxied_socket.is_some() => {
+                received_opt = Self::receive_from_proxied_opt(&mut self.proxied_socket, &mut proxied_buffer), if check_rate_limit_size == 0 && self.proxied_socket.is_some() => {
                     let (n, addr, control_opt) = match received_opt {
                         Ok(r) => r,
                         Err(err) => {
@@ -547,66 +568,77 @@ where
                         }
                     }
 
-                    self.send_received_respond_packet(&addr, &proxied_buffer[..n], false, &mut check_rate_limit_size).instrument(span.clone()).await;
-                }
-
-                _ = keepalive_interval.tick() => {
-                    if self.keepalive_flag {
-                        if let Err(..) = self.keepalive_tx.try_send(self.peer_addr) {
-                            debug!("keep-alive failed, channel full or closed");
-                        } else {
-                            self.keepalive_flag = false;
-                        }
+                    idle_timeout.tick();
+                    if let Err(close_reason) = self.send_received_respond_packet(&addr, &proxied_buffer[..n], false, &mut check_rate_limit_size).instrument(span.clone()).await {
+                        break close_reason;
                     }
                 }
 
                 _ = close_notify.notified() => {
-                    debug!("fake closed");
-                    break;
+                    trace!("fake closed");
+                    break UdpAssociationCloseReason::FakeClose;
+                }
+
+                _ = &mut idle_timeout => {
+                    trace!("idle timeout");
+                    break UdpAssociationCloseReason::IdleTimeout;
                 }
             }
-        }
+        };
 
-        #[inline]
-        async fn receive_from_bypassed_opt(
-            socket: &Option<ShadowUdpSocket>,
-            buf: &mut Vec<u8>,
-        ) -> io::Result<(usize, SocketAddr)> {
-            match *socket {
-                None => future::pending().await,
-                Some(ref s) => {
-                    if buf.is_empty() {
-                        buf.resize(MAXIMUM_UDP_PAYLOAD_SIZE, 0);
-                    }
-                    s.recv_from(buf).await
-                }
+        match self.close_tx.send((self.peer_addr, close_reason)).await {
+            Ok(()) => {
+                // 发送关闭消息以后，等待被删除，但是为了防止泄漏，此处用 sleep(1) 等待
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Err(err) => {
+                error!(error = ?err, "send close reason fail");
             }
         }
+    }
 
-        #[inline]
-        async fn receive_from_proxied_opt(
-            socket: &mut Option<MultiProtocolProxySocket>,
-            buf: &mut Vec<u8>,
-        ) -> io::Result<(usize, Address, Option<UdpSocketControlData>)> {
-            match socket {
-                None => future::pending().await,
-                Some(ref mut socket) => {
-                    if buf.is_empty() {
-                        buf.resize(MAXIMUM_UDP_PAYLOAD_SIZE, 0);
-                    }
+    #[inline]
+    async fn receive_from_bypassed_opt(
+        socket: &Option<ShadowUdpSocket>,
+        buf: &mut Vec<u8>,
+    ) -> io::Result<(usize, SocketAddr)> {
+        match *socket {
+            None => future::pending().await,
+            Some(ref s) => {
+                if buf.is_empty() {
+                    buf.resize(MAXIMUM_UDP_PAYLOAD_SIZE, 0);
+                }
+                s.recv_from(buf).await
+            }
+        }
+    }
 
-                    match socket {
-                        MultiProtocolProxySocket::SS(ref s) => {
-                            let (size, addr, _recv_size, control_data) = s.recv_with_ctrl(buf).await?;
-                            Ok((size, Address::from(addr), control_data))
+    #[inline]
+    async fn receive_from_proxied_opt(
+        socket: &mut Option<MultiProtocolProxySocket>,
+        buf: &mut Vec<u8>,
+    ) -> Result<(usize, Address, Option<UdpSocketControlData>), UdpAssociationCloseReason> {
+        match socket {
+            None => future::pending().await,
+            Some(ref mut socket) => {
+                if buf.is_empty() {
+                    buf.resize(MAXIMUM_UDP_PAYLOAD_SIZE, 0);
+                }
+
+                match socket {
+                    MultiProtocolProxySocket::SS(ref s) => match s.recv_with_ctrl(buf).await {
+                        Ok((size, addr, _recv_size, control_data)) => Ok((size, Address::from(addr), control_data)),
+                        Err(err) => {
+                            error!(error = ?err, "ss socket recv error");
+                            Err(UdpAssociationCloseReason::RemoteSocketError)
                         }
-                        #[cfg(feature = "trojan")]
-                        MultiProtocolProxySocket::Trojan { ref mut r, .. } => trojan::trojan_receive_from(r, buf).await,
-                        #[cfg(feature = "vless")]
-                        MultiProtocolProxySocket::Vless(ref mut context) => context.vless_receive_from(buf).await,
-                        #[cfg(feature = "tuic")]
-                        MultiProtocolProxySocket::Tuic(ref mut context) => context.tuic_receive_from(buf).await,
-                    }
+                    },
+                    #[cfg(feature = "trojan")]
+                    MultiProtocolProxySocket::Trojan(ref mut context) => context.trojan_receive_from(buf).await,
+                    #[cfg(feature = "vless")]
+                    MultiProtocolProxySocket::Vless(ref mut context) => context.vless_receive_from(buf).await,
+                    #[cfg(feature = "tuic")]
+                    MultiProtocolProxySocket::Tuic(ref mut context) => context.tuic_receive_from(buf).await,
                 }
             }
         }
@@ -617,7 +649,7 @@ where
         target_addr: &Address,
         data: &[u8],
         check_rate_limit_size: &mut usize,
-    ) {
+    ) -> Result<(), UdpAssociationCloseReason> {
         // Check if target should be bypassed. If so, send packets directly.
         #[allow(unused_mut)]
         let mut bypassed = self.balancer.is_empty() || self.context.check_target_bypassed(target_addr).await;
@@ -628,36 +660,56 @@ where
         }
 
         if bypassed {
-            if let Err(err) = self.dispatch_received_bypassed_packet(target_addr, data).await {
-                error!(error = ?err, "==> {} bytes error", data.len());
-            }
+            let _sended = self.dispatch_received_bypassed_packet(target_addr, data).await;
         } else {
             if *check_rate_limit_size > 0 {
-                trace!("==> {} bytes, discard for rate-limited", data.len());
-                return;
-            }
-
-            if let Err(err) = self.dispatch_received_proxied_packet(target_addr, data).await {
-                error!(error = ?err, "==> {} bytes error", data.len());
+                debug!(
+                    target = target_addr.to_string(),
+                    pkt.len = data.len(),
+                    "==> discard for rate-limited"
+                );
             } else {
-                *check_rate_limit_size += data.len();
+                let sended = self.dispatch_received_proxied_packet(target_addr, data).await?;
+                if sended {
+                    *check_rate_limit_size += data.len();
+                }
             }
         }
+        Ok(())
     }
 
-    async fn dispatch_received_bypassed_packet(&mut self, target_addr: &Address, data: &[u8]) -> io::Result<()> {
+    async fn dispatch_received_bypassed_packet(&mut self, target_addr: &Address, data: &[u8]) -> bool {
         match *target_addr {
             Address::SocketAddress(sa) => self.send_received_bypassed_packet(sa, data).await,
             Address::DomainNameAddress(ref dname, port) => {
-                lookup_then!(self.context.context_ref(), dname, port, |sa| {
-                    self.send_received_bypassed_packet(sa, data).await
-                })
-                .map(|_| ())
+                match self
+                    .dispatch_received_bypassed_packet_domain_name(dname, port, data)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(err) => {
+                        error!(error = ?err, target = target_addr.to_string(), pkt.len = data.len(), "==> dns resolve error");
+                        false
+                    }
+                }
             }
         }
     }
 
-    async fn send_received_bypassed_packet(&mut self, mut target_addr: SocketAddr, data: &[u8]) -> io::Result<()> {
+    #[inline]
+    async fn dispatch_received_bypassed_packet_domain_name(
+        &mut self,
+        target_dname: &String,
+        target_port: u16,
+        data: &[u8],
+    ) -> io::Result<bool> {
+        lookup_then!(self.context.context_ref(), target_dname, target_port, |sa| {
+            io::Result::Ok(self.send_received_bypassed_packet(sa, data).await)
+        })
+        .map(|(_, r)| r)
+    }
+
+    async fn send_received_bypassed_packet(&mut self, mut target_addr: SocketAddr, data: &[u8]) -> bool {
         const UDP_SOCKET_SUPPORT_DUAL_STACK: bool = cfg!(any(
             target_os = "linux",
             target_os = "android",
@@ -675,9 +727,18 @@ where
             match self.bypassed_ipv6_socket {
                 Some(ref mut socket) => socket,
                 None => {
-                    let socket =
-                        ShadowUdpSocket::connect_any_with_opts(AddrFamily::Ipv6, self.context.connect_opts_ref())
-                            .await?;
+                    let socket = match ShadowUdpSocket::connect_any_with_opts(
+                        AddrFamily::Ipv6,
+                        self.context.connect_opts_ref(),
+                    )
+                    .await
+                    {
+                        Ok(socket) => socket,
+                        Err(err) => {
+                            error!(error = ?err, opts = ?self.context.connect_opts_ref(), "create bypass ipv6 socket error(dual stack)");
+                            return false;
+                        }
+                    };
                     self.bypassed_ipv6_socket.insert(socket)
                 }
             }
@@ -686,18 +747,36 @@ where
                 SocketAddr::V4(..) => match self.bypassed_ipv4_socket {
                     Some(ref mut socket) => socket,
                     None => {
-                        let socket =
-                            ShadowUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref())
-                                .await?;
+                        let socket = match ShadowUdpSocket::connect_any_with_opts(
+                            &target_addr,
+                            self.context.connect_opts_ref(),
+                        )
+                        .await
+                        {
+                            Ok(socket) => socket,
+                            Err(err) => {
+                                error!(error = ?err, opts = ?self.context.connect_opts_ref(), "create bypass ipv4 socket error");
+                                return false;
+                            }
+                        };
                         self.bypassed_ipv4_socket.insert(socket)
                     }
                 },
                 SocketAddr::V6(..) => match self.bypassed_ipv6_socket {
                     Some(ref mut socket) => socket,
                     None => {
-                        let socket =
-                            ShadowUdpSocket::connect_any_with_opts(&target_addr, self.context.connect_opts_ref())
-                                .await?;
+                        let socket = match ShadowUdpSocket::connect_any_with_opts(
+                            &target_addr,
+                            self.context.connect_opts_ref(),
+                        )
+                        .await
+                        {
+                            Ok(socket) => socket,
+                            Err(err) => {
+                                error!(error = ?err, opts = ?self.context.connect_opts_ref(), "create bypass ipv6 socket error");
+                                return false;
+                            }
+                        };
                         self.bypassed_ipv6_socket.insert(socket)
                     }
                 },
@@ -711,17 +790,27 @@ where
             }
         }
 
-        let n = socket.send_to(data, target_addr).await?;
-        if n != data.len() {
-            warn!("==> {} bytes send mismatched, expected={}", n, data.len());
-        } else {
-            trace!("==> {} bytes", n);
+        match socket.send_to(data, target_addr).await {
+            Ok(n) => {
+                if n != data.len() {
+                    warn!("==> {} bytes send mismatched, expected={}", n, data.len());
+                } else {
+                    trace!(pkt.len = data.len(), "==> send success");
+                }
+                true
+            }
+            Err(err) => {
+                error!(error = ?err, pkt.len = data.len(), "send bypass data error");
+                false
+            }
         }
-
-        Ok(())
     }
 
-    async fn dispatch_received_proxied_packet(&mut self, target_addr: &Address, data: &[u8]) -> io::Result<()> {
+    async fn dispatch_received_proxied_packet(
+        &mut self,
+        target_addr: &Address,
+        data: &[u8],
+    ) -> Result<bool, UdpAssociationCloseReason> {
         // Increase Packet ID before send
         self.client_packet_id = match self.client_packet_id.checked_add(1) {
             Some(i) => i,
@@ -772,13 +861,20 @@ where
                             }
                         }
 
-                        let socket = ProxySocket::connect_with_opts(
+                        let socket = match ProxySocket::connect_with_opts(
                             self.context.context(),
                             svr_cfg,
                             effect_ss_cfg,
                             self.context.connect_opts_ref(),
                         )
-                        .await?;
+                        .await
+                        {
+                            Ok(socket) => socket,
+                            Err(err) => {
+                                error!(error = ?err, "create ss socket error");
+                                return Ok(false);
+                            }
+                        };
 
                         self.proxied_socket.insert(MultiProtocolProxySocket::SS(socket))
                     }
@@ -799,27 +895,57 @@ where
                             }
                         }
 
-                        self.proxied_socket
-                            .insert(self.trojan_connect(svr_cfg, effect_trojan_cfg).await?)
+                        let context = match self
+                            .trojan_create_context(
+                                svr_cfg,
+                                effect_trojan_cfg,
+                                self.peer_addr.clone(),
+                                self.close_tx.clone(),
+                            )
+                            .await
+                        {
+                            Ok(context) => context,
+                            Err(_err) => {
+                                return Ok(false);
+                            }
+                        };
+
+                        self.proxied_socket.insert(context)
                     }
                     #[cfg(feature = "vless")]
-                    ServerProtocol::Vless(..) => self.proxied_socket.insert(
-                        self.vless_create_context(
-                            self.context.clone(),
-                            server.clone(),
-                            self.server_session_expire_duration.clone(),
-                        )
-                        .await?,
-                    ),
+                    ServerProtocol::Vless(..) => {
+                        let context = match self
+                            .vless_create_context(
+                                self.context.clone(),
+                                server.clone(),
+                                self.server_session_expire_duration.clone(),
+                            )
+                            .await
+                        {
+                            Ok(context) => context,
+                            Err(_err) => {
+                                return Ok(false);
+                            }
+                        };
+                        self.proxied_socket.insert(context)
+                    }
                     #[cfg(feature = "tuic")]
-                    ServerProtocol::Tuic(tuic_config) => self.proxied_socket.insert(
-                        self.tuic_create_context(
-                            server.as_ref(),
-                            Some(self.context.connection_close_notify()),
-                            tuic_config,
-                        )
-                        .await?,
-                    ),
+                    ServerProtocol::Tuic(tuic_config) => {
+                        let context = match self
+                            .tuic_create_context(
+                                server.as_ref(),
+                                Some(self.context.connection_close_notify()),
+                                tuic_config,
+                            )
+                            .await
+                        {
+                            Ok(context) => context,
+                            Err(_err) => {
+                                return Ok(false);
+                            }
+                        };
+                        self.proxied_socket.insert(context)
+                    }
                 }
             }
         };
@@ -828,22 +954,32 @@ where
         let socket = match socket {
             MultiProtocolProxySocket::SS(socket) => socket,
             #[cfg(feature = "trojan")]
-            MultiProtocolProxySocket::Trojan { ref mut w, .. } => {
-                trojan::trojan_send_to(w, target_addr, data).await?;
-                self.context.flow_stat().incr_tx(data.len() as u64);
-                return Ok(());
+            MultiProtocolProxySocket::Trojan(ref mut context) => {
+                let sended = context.trojan_try_send_to(target_addr, data)?;
+                if sended {
+                    self.context.flow_stat().incr_tx(data.len() as u64);
+                }
+                return Ok(sended);
             }
             #[cfg(feature = "vless")]
             MultiProtocolProxySocket::Vless(ref mut context) => {
-                context.vless_send_to(&self.peer_addr, target_addr, data).await?;
-                self.context.flow_stat().incr_tx(data.len() as u64);
-                return Ok(());
+                match context.vless_send_to(&self.peer_addr, target_addr, data).await {
+                    Ok(()) => {
+                        self.context.flow_stat().incr_tx(data.len() as u64);
+                        return Ok(true);
+                    }
+                    Err(_err) => {
+                        return Ok(false);
+                    }
+                }
             }
             #[cfg(feature = "tuic")]
             MultiProtocolProxySocket::Tuic(ref mut context) => {
-                context.tuic_try_send_to(target_addr, data)?;
-                self.context.flow_stat().incr_tx(data.len() as u64);
-                return Ok(());
+                let sended = context.tuic_try_send_to(target_addr, data)?;
+                if sended {
+                    self.context.flow_stat().incr_tx(data.len() as u64);
+                }
+                return Ok(sended);
             }
         };
 
@@ -851,8 +987,13 @@ where
         self.client_packet_id = match self.client_packet_id.checked_add(1) {
             Some(i) => i,
             None => {
-                warn!("sending {} bytes failed, packet id overflowed", data.len(),);
-                return Ok(());
+                warn!(
+                    error = "packet id overflowed",
+                    target = target_addr.to_string(),
+                    pkt.len = data.len(),
+                    "==> sending failed"
+                );
+                return Ok(false);
             }
         };
 
@@ -866,17 +1007,15 @@ where
         {
             Ok(..) => {
                 self.context.flow_stat().incr_tx(data.len() as u64);
-                return Ok(());
+                Ok(true)
             }
             Err(err) => {
-                debug!(error = ?err, "sending {} bytes failed", data.len());
-
+                debug!(error = ?err, target = target_addr.to_string(), pkt.len = data.len(), "==> sending fail");
                 // Drop the socket and reconnect to another server.
                 self.proxied_socket = None;
+                Ok(false)
             }
         }
-
-        Ok(())
     }
 
     async fn send_received_respond_packet(
@@ -885,18 +1024,17 @@ where
         data: &[u8],
         bypassed: bool,
         check_rate_limit_size: &mut usize,
-    ) {
-        // Keep association alive in map
-        self.keepalive_flag = true;
-
+    ) -> Result<(), UdpAssociationCloseReason> {
         // Send back to client
         if let Err(err) = self.respond_writer.send_to(self.peer_addr, addr, data).await {
-            warn!(error = ?err, "<== {} bytes error", data.len());
+            warn!(error = ?err, target = addr.to_string(), pkt.len = data.len(), "<== send error");
+            Err(UdpAssociationCloseReason::LocalSocketError)
         } else {
-            trace!("<== {} bytes", data.len());
+            trace!(target = addr.to_string(), pkt.len = data.len(), "<== send success");
             if !bypassed {
                 *check_rate_limit_size += data.len();
             }
+            Ok(())
         }
     }
 }

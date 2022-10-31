@@ -171,12 +171,12 @@ impl VlessUdpContext {
     pub async fn vless_receive_from(
         &mut self,
         buf: &mut Vec<u8>,
-    ) -> io::Result<(usize, Address, Option<UdpSocketControlData>)> {
+    ) -> Result<(usize, Address, Option<UdpSocketControlData>), UdpAssociationCloseReason> {
         let (addr, mut bytes) = match self.packet_receiver.recv().await {
             Some(v) => v,
             None => {
                 tracing::error!("<- ... (vless) failed, error: receiver chanel break",);
-                return Err(io::ErrorKind::UnexpectedEof.into());
+                return Err(UdpAssociationCloseReason::InternalError);
             }
         };
 

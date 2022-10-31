@@ -318,7 +318,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                 .num_args(1)
                 .action(ArgAction::Set)
                 .requires("LOCAL_ADDR")
-                .value_parser(vparser::parse_address)
+                .value_parser(vparser::parse_server_addr)
                 .required_if_eq("PROTOCOL", "tunnel")
                 .help("Forwarding data directly to this address (for tunnel)"),
         );

@@ -14,7 +14,7 @@ pub async fn serve_vless_udp(
     mut reader: VlessUdpReader,
     writer: VlessUdpWriter,
 ) -> io::Result<()> {
-    let (keepalive_tx, mut keepalive_rx) = mpsc::channel(UDP_ASSOCIATION_KEEP_ALIVE_CHANNEL_SIZE);
+    let (keepalive_tx, mut keepalive_rx) = mpsc::channel(UDP_ASSOCIATION_CLOSE_CHANNEL_SIZE);
 
     let sender = UdpAssociation::new_association(
         context,
