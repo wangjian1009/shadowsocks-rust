@@ -7,7 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::future;
-use tracing::{debug, debug_span, trace, Instrument};
+use tracing::{debug_span, trace, Instrument};
 use trust_dns_resolver::proto::{
     op::{Message, Query},
     rr::{DNSClass, Name, RData, RecordType},
@@ -60,7 +60,7 @@ impl DnsResolver {
             }
         }
 
-        debug!(error = ?last_err, "failed to resolve AAAA records");
+        trace!(error = ?last_err, querys = ?msg.queries(), "resolve failed");
         Err(last_err)
     }
 

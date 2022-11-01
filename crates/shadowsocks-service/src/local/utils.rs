@@ -13,7 +13,7 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     time,
 };
-use tracing::{debug, trace};
+use tracing::{debug, error, trace};
 
 use cfg_if::cfg_if;
 
@@ -39,14 +39,6 @@ where
     S: AsyncRead + AsyncWrite + AutoProxyIo + Unpin,
 {
     if shadow.is_proxied() {
-        debug!(
-            "established tcp tunnel {} <-> {} through sever {}{} (outbound: {})",
-            peer_addr,
-            target_addr,
-            svr_cfg.external_addr(),
-            svr_cfg.connector_transport_tag(),
-            svr_cfg.addr(),
-        );
     } else {
         return establish_tcp_tunnel_bypassed(&mut plain, shadow, peer_addr, target_addr, None).await;
     }
@@ -80,10 +72,8 @@ where
                     if #[cfg(feature = "sniffer")] {
                         match context.protocol_action(plain.protocol()) {
                             Some(ProtocolAction::Reject) => {
-                                tracing::error!(
-                                    "tcp tunnel {} -> {} reject for protocol {:?} len={}",
-                                    peer_addr,
-                                    target_addr,
+                                error!(
+                                    "reject for protocol {:?} len={}",
                                     plain.protocol().as_ref().unwrap(),
                                     n,
                                 );
@@ -110,11 +100,7 @@ where
                 // Timeout. Send handshake to server.
                 let _ = shadow.write(&[]).await?;
 
-                trace!(
-                    "tcp tunnel {} -> {} (proxied) sent handshake without data",
-                    peer_addr,
-                    target_addr
-                );
+                trace!("sent handshake without data");
             }
         }
     }

@@ -275,6 +275,21 @@ impl TransportConnectorConfig {
         }
     }
 
+    pub fn name(&self) -> &str {
+        match self {
+            #[cfg(feature = "transport-ws")]
+            Self::Ws(..) => "ws",
+            #[cfg(feature = "transport-tls")]
+            Self::Tls(..) => "tls",
+            #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+            Self::Wss(..) => "wss",
+            #[cfg(feature = "transport-mkcp")]
+            Self::Mkcp(..) => "mkcp",
+            #[cfg(feature = "transport-skcp")]
+            Self::Skcp(..) => "skcp",
+        }
+    }
+    
     #[cfg(feature = "transport-ws")]
     #[inline]
     fn build_ws_config(host: &Option<&str>, path: &str) -> WebSocketConnectorConfig {

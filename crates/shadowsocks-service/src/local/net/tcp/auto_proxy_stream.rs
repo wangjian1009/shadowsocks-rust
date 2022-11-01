@@ -47,6 +47,8 @@ cfg_if! {
     }
 }
 
+use tracing::{info_span, Instrument};
+
 use super::auto_proxy_io::AutoProxyIo;
 
 use futures::Future;
@@ -84,13 +86,36 @@ impl AutoProxyClientStream {
     ) -> io::Result<AutoProxyClientStream> {
         #[cfg(feature = "local-fake-mode")]
         if context.fake_mode().is_bypass() {
-            return AutoProxyClientStream::connect_bypassed(context, addr).await;
+            return AutoProxyClientStream::connect_bypassed(context, addr)
+                .instrument(info_span!("bypass", reason = "fake"))
+                .await;
         }
 
-        if context.check_target_bypassed(&addr).await {
-            AutoProxyClientStream::connect_bypassed(context, addr).await
+        if context.check_target_bypassed(&addr).instrument(info_span!("acl")).await {
+            AutoProxyClientStream::connect_bypassed(context, addr)
+                .instrument(info_span!("bypass", reason = "acl"))
+                .await
         } else {
-            AutoProxyClientStream::connect_proxied(context, server, addr).await
+            let span = {
+                let svr_cfg = server.server_config();
+                if let Some(transport) = svr_cfg.connector_transport() {
+                    info_span!(
+                        "proxied",
+                        router = svr_cfg.addr().to_string(),
+                        proto = svr_cfg.protocol().name(),
+                        trans = transport.name()
+                    )
+                } else {
+                    info_span!(
+                        "proxied",
+                        router = svr_cfg.addr().to_string(),
+                        proto = svr_cfg.protocol().name()
+                    )
+                }
+            };
+            AutoProxyClientStream::connect_proxied(context, server, addr)
+                .instrument(span)
+                .await
         }
     }
 

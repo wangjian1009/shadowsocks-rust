@@ -14,7 +14,7 @@ use shadowsocks::relay::socks5::Address;
 use crate::local::{
     context::ServiceContext,
     loadbalancing::PingBalancer,
-    net::{AutoProxyClientStream, AutoProxyIo},
+    net::AutoProxyClientStream,
     utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed},
 };
 
@@ -87,7 +87,7 @@ impl HttpDispatcher {
         if Method::CONNECT == self.req.method() {
             // Establish a TCP tunnel
             // https://tools.ietf.org/html/draft-luotonen-web-proxy-tunneling-01
-            let span = info_span!("connection", target = host.to_string(), way = "CONNECT");
+            let span = info_span!("tcp", target = host.to_string(), way = "CONNECT");
 
             // Connect to Shadowsocks' remote
             //
@@ -95,11 +95,10 @@ impl HttpDispatcher {
             let mut server_opt = None;
             let mut stream = if self.balancer.is_empty() {
                 AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &host)
-                    .instrument(span.clone())
+                    .instrument(info_span!(parent: span.clone(), "bypass"))
                     .await?
             } else {
                 let server = self.balancer.best_tcp_server();
-
                 let stream = AutoProxyClientStream::connect(&self.context, server.as_ref(), &host)
                     .instrument(span.clone())
                     .await?;
@@ -110,10 +109,7 @@ impl HttpDispatcher {
 
             {
                 let _enter = span.enter();
-                trace!(
-                    "connected {}",
-                    if stream.is_bypassed() { "bypassed" } else { "proxied" }
-                );
+                debug!("established");
             }
 
             // Upgrade to a TCP tunnel
@@ -162,7 +158,7 @@ impl HttpDispatcher {
         } else {
             let method = self.req.method().clone();
             let version = self.req.version();
-            let span = info_span!("connection", target = host.to_string(), method = method.to_string());
+            let span = info_span!("tcp", target = host.to_string(), method = method.to_string());
 
             // Check if client wants us to keep long connection
             let conn_keep_alive = check_keep_alive(version, self.req.headers(), true);
@@ -172,19 +168,29 @@ impl HttpDispatcher {
 
             // Set keep-alive for connection with remote
             set_conn_keep_alive(version, self.req.headers_mut(), conn_keep_alive);
-            let client = if self.balancer.is_empty()
-                || self.context.check_target_bypassed(&host).instrument(span.clone()).await
+            let (client, span) = if self.balancer.is_empty()
+                || self
+                    .context
+                    .check_target_bypassed(&host)
+                    .instrument(info_span!(parent: span.clone(), "acl"))
+                    .await
             {
-                HttpClientEnum::Bypass(self.bypass_client)
+                (
+                    HttpClientEnum::Bypass(self.bypass_client),
+                    info_span!(parent: span.clone(), "bypass", reason = "acl"),
+                )
             } else {
                 // Keep connections for clients in ServerScore::client
                 // client instance is kept for Keep-Alive connections
                 let server = self.balancer.best_tcp_server();
-                HttpClientEnum::Proxy(
-                    self.proxy_client_cache
-                        .get_connected(&server)
-                        .instrument(span.clone())
-                        .await,
+                (
+                    HttpClientEnum::Proxy(
+                        self.proxy_client_cache
+                            .get_connected(&server)
+                            .instrument(span.clone())
+                            .await,
+                    ),
+                    info_span!(parent: span.clone(), "proxied"),
                 )
             };
 
