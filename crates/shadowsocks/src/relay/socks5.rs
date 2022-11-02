@@ -16,10 +16,7 @@ use bytes::{BufMut, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub use self::consts::{
-    SOCKS5_AUTH_METHOD_GSSAPI,
-    SOCKS5_AUTH_METHOD_NONE,
-    SOCKS5_AUTH_METHOD_NOT_ACCEPTABLE,
-    SOCKS5_AUTH_METHOD_PASSWORD,
+    SOCKS5_AUTH_METHOD_GSSAPI, SOCKS5_AUTH_METHOD_NONE, SOCKS5_AUTH_METHOD_NOT_ACCEPTABLE, SOCKS5_AUTH_METHOD_PASSWORD,
 };
 
 #[rustfmt::skip]
@@ -338,18 +335,18 @@ impl Address {
         let mut sp = s.split(':');
         match (sp.next(), sp.next()) {
             (Some(dn), Some(port)) => match port.parse::<u16>() {
-                Ok(port) => Self::parse_str_host(dn, port),
+                Ok(port) => Ok(Self::parse_str_host(dn, port)),
                 Err(..) => Err(AddressError),
             },
-            (Some(dn), None) => Self::parse_str_host(dn, dft_port),
+            (Some(dn), None) => Ok(Self::parse_str_host(dn, dft_port)),
             _ => Err(AddressError),
         }
     }
 
-    fn parse_str_host(s: &str, port: u16) -> Result<Address, AddressError> {
+    pub fn parse_str_host(s: &str, port: u16) -> Address {
         match s.parse::<IpAddr>() {
-            Ok(ip) => Ok(Address::SocketAddress(SocketAddr::new(ip, port))),
-            Err(..) => Ok(Address::DomainNameAddress(s.to_owned(), port)),
+            Ok(ip) => Address::SocketAddress(SocketAddr::new(ip, port)),
+            Err(..) => Address::DomainNameAddress(s.to_owned(), port),
         }
     }
 }

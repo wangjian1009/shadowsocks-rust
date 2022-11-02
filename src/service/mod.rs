@@ -7,3 +7,6 @@ pub mod local;
 pub mod manager;
 #[cfg(feature = "server")]
 pub mod server;
+
+#[cfg(feature = "local-url")]
+pub mod url;

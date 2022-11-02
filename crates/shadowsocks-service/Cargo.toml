@@ -22,7 +22,7 @@ default = [
     "local-flow-stat",
     "trust-dns",
     "local-dns",
-    "local-http",
+    "local-http-rustls",
     "local-redir",
     "local-tunnel",
     "local-socks4",

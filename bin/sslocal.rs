@@ -10,6 +10,23 @@ use clap::Command;
 use shadowsocks_rust::service::local;
 
 fn main() -> ExitCode {
+    #[cfg(feature = "local-url")]
+    {
+        let mut args: Vec<String> = std::env::args().collect();
+        if args.len() >= 2 && args[1] == "url" {
+            use shadowsocks_rust::service::url;
+            args.remove(0);
+
+            let mut app = Command::new("shadowsocks url")
+                .version(shadowsocks_rust::VERSION)
+                .about("A fast tunnel proxy that helps you bypass firewalls. (https://shadowsocks.org)");
+            app = url::define_command_line_options(app);
+
+            let matches = app.get_matches_from(args);
+            return url::main(&matches);
+        }
+    }
+
     let mut app = Command::new("shadowsocks")
         .version(shadowsocks_rust::VERSION)
         .about("A fast tunnel proxy that helps you bypass firewalls. (https://shadowsocks.org)");

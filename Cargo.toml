@@ -70,6 +70,7 @@ default = [
     "stream-cipher",
     "local",
     "local-maintain",
+    "local-url",
     "server",
     "server-maintain",
     "server-limit",
@@ -102,6 +103,7 @@ default = [
 
 # Enable local server
 local = ["shadowsocks-service/local"]
+local-url = ["local", "hyper", "url"]
 local-maintain = ["shadowsocks-service/local-maintain"]
 local-signed-info = ["shadowsocks-service/local-signed-info"]
 local-fake-mode = ["shadowsocks-service/local-fake-mode"]
@@ -200,7 +202,7 @@ aead-cipher-2022 = ["shadowsocks-service/aead-cipher-2022"]
 aead-cipher-2022-extra = ["shadowsocks-service/aead-cipher-2022-extra"]
 
 # Enable rate limit
-rate-limit = ["shadowsocks-service/rate-limit", "governor", "hyper"]
+rate-limit = ["shadowsocks-service/rate-limit", "governor", "hyper", "tower"]
 
 # Enable detection against replay attack (Stream / AEAD)
 security-replay-attack-detect = ["shadowsocks-service/security-replay-attack-detect"]
@@ -255,7 +257,7 @@ libc = { version = "0.2", features = ["extra_traits"] }
 rand = "0.8"
 
 futures = "0.3"
-tokio = { version = "1", features = ["rt", "signal"] }
+tokio = { version = "*", features = ["rt", "signal", "io-std", "fs"] }
 num_cpus = "1.13"
 
 governor = { version = "0.3.2", optional = true }
@@ -271,6 +273,7 @@ rpmalloc = { version = "0.2", optional = true }
 serde_json = { version = "1.0", optional = true }
 
 hyper = { version = "*", optional = true}
+tower = { version = "*", optional = true }
 
 shadowsocks-service = { version = "1.15.0", path = "./crates/shadowsocks-service", default-features = false }
 
