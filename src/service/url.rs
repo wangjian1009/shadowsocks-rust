@@ -92,13 +92,15 @@ pub fn define_command_line_options(mut app: Command) -> Command {
     app
 }
 
-pub fn main(matches: &ArgMatches) -> ExitCode {
+pub fn main(matches: &ArgMatches, init_log: bool) -> ExitCode {
     #[cfg(feature = "logging")]
-    let _log_guard = {
+    let _log_guard = if init_log {
         let mut log_config = LogConfig::default();
         log_config.level = matches.get_count("VERBOSE") as u32;
         log_config.format.without_time = matches.get_flag("LOG_WITHOUT_TIME");
         Some(logging::init_with_config("sslocal", &log_config))
+    } else {
+        None
     };
 
     trace!("shadowsocks url {} build {}", crate::VERSION, crate::BUILD_TIME);

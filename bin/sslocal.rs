@@ -23,7 +23,7 @@ fn main() -> ExitCode {
             app = url::define_command_line_options(app);
 
             let matches = app.get_matches_from(args);
-            return url::main(&matches);
+            return url::main(&matches, true);
         }
     }
 

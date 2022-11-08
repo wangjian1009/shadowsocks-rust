@@ -9,3 +9,8 @@ cfg_if! {
 
 #[cfg(feature = "local")]
 mod local;
+
+#[cfg(feature = "local-url")]
+mod url;
+
+mod log;
