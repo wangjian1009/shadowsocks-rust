@@ -1,25 +1,31 @@
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
-use std::{future::Future, io, pin::Pin, process::ExitCode, sync::Arc, task};
+use std::{io, process::ExitCode, sync::Arc};
 
-use tokio::{fs::File, runtime::Builder, time::Duration};
+use tokio::{fs::File, io::AsyncWriteExt, runtime::Builder, time::Duration};
 use tracing::{error, trace};
 
 use shadowsocks_service::{
-    local::{context::ServiceContext, http::ProxyHttpStream, loadbalancing::ServerIdent, net::AutoProxyClientStream},
-    shadowsocks::{canceler::Canceler, config::ServerType, context::Context, relay::socks5::Address, ServerConfig},
+    local::{api, context::ServiceContext, loadbalancing::ServerIdent},
+    shadowsocks::{canceler::Canceler, config::ServerType, context::Context, ServerConfig},
 };
 
 use hyper::{
-    client::Client,
     http::{
         self,
         uri::{PathAndQuery, Scheme, Uri},
     },
     Body,
 };
-use tower::Service;
 
 use crate::{config::LogConfig, logging};
+
+#[derive(Debug)]
+enum UrlTestError {
+    ArgumentError(String),
+    Api(api::ApiError),
+    ContentLengthMismatch(usize, usize),
+    ResponseBodyTransferError(hyper::Error),
+}
 
 pub fn define_command_line_options(mut app: Command) -> Command {
     #[cfg(feature = "logging")]
@@ -81,6 +87,14 @@ pub fn define_command_line_options(mut app: Command) -> Command {
         )
         .arg(Arg::new("TARGET_URL").help("url").action(ArgAction::Set).num_args(1))
         .arg(
+            Arg::new("DATA")
+                .long("data")
+                .short('d')
+                .num_args(1)
+                .action(ArgAction::Set)
+                .help("request body file"),
+        )
+        .arg(
             Arg::new("OUTPUT")
                 .long("output")
                 .short('o')
@@ -105,11 +119,55 @@ pub fn main(matches: &ArgMatches, init_log: bool) -> ExitCode {
 
     trace!("shadowsocks url {} build {}", crate::VERSION, crate::BUILD_TIME);
 
-    let output_path = matches.get_one::<String>("OUTPUT");
+    // 构造tokio环境并执行任务
+    let mut builder = Builder::new_current_thread();
+    let runtime = builder.enable_all().build().expect("create tokio Runtime");
 
+    runtime.block_on(async move {
+        let output_path = matches.get_one::<String>("OUTPUT");
+
+        let request = match build_request(matches).await {
+            Ok(request) => request,
+            Err(err) => {
+                return write_output(output_path, Err(err)).await;
+            }
+        };
+        trace!(request = ?request);
+
+        let svr_cfg = match build_svr_cfg(matches) {
+            Ok(svr_cfg) => svr_cfg,
+            Err(err) => {
+                return write_output(output_path, Err(err)).await;
+            }
+        };
+
+        let canceler = Canceler::new();
+
+        let context = Context::new_shared(ServerType::Local);
+        let service_context = Arc::new(ServiceContext::new(context, canceler.waiter()));
+        let server = match ServerIdent::new(service_context.clone(), svr_cfg, Duration::MAX, Duration::MAX) {
+            Ok(server) => Arc::new(server),
+            Err(err) => {
+                return write_output(output_path, Err(UrlTestError::ArgumentError(format!("{:?}", err)))).await;
+            }
+        };
+
+        let response = api::request(request, service_context, server)
+            .await
+            .map_err(|e| UrlTestError::Api(e));
+        trace!(response = ?response);
+
+        write_output(output_path, response).await
+    })
+}
+
+fn build_svr_cfg(matches: &ArgMatches) -> Result<ServerConfig, UrlTestError> {
     // 读取连接参数
     #[allow(unused_mut)]
-    let mut server_url = matches.get_one::<String>("URL").expect("server url").clone();
+    let mut server_url = match matches.get_one::<String>("URL") {
+        Some(v) => v.clone(),
+        None => return Err(UrlTestError::ArgumentError("URL not configure".to_string())),
+    };
 
     #[cfg(feature = "env-crypt")]
     if server_url.find("://").is_none() {
@@ -122,18 +180,28 @@ pub fn main(matches: &ArgMatches, init_log: bool) -> ExitCode {
         };
     }
 
+    // let connect_timeout = matches.get_one::<u64>("TIMEOUT").copied().map(Duration::from_secs);
+
     let svr_cfg = match ServerConfig::from_url(&server_url) {
         Ok(t) => t,
         Err(err) => {
-            error!(error = ?err, "server url parse error");
-            return ExitCode::FAILURE;
+            error!(error = ?err, url = server_url, "server url parse error");
+            return Err(UrlTestError::ArgumentError(format!(
+                "server url parse error, url = {}, error = {}",
+                server_url, err,
+            )));
         }
     };
 
-    // let connect_timeout = matches.get_one::<u64>("TIMEOUT").copied().map(Duration::from_secs);
+    Ok(svr_cfg)
+}
 
+async fn build_request(matches: &ArgMatches) -> Result<http::Request<Body>, UrlTestError> {
     // 构造目标URL
-    let target_url = matches.get_one::<String>("TARGET_URL").expect("target url").clone();
+    let target_url = match matches.get_one::<String>("TARGET_URL") {
+        Some(v) => v.clone(),
+        None => return Err(UrlTestError::ArgumentError("TARGET_URL not configure".to_string())),
+    };
     let target_url = match target_url.parse::<Uri>() {
         Ok(u) => {
             let mut parts = u.into_parts();
@@ -145,14 +213,24 @@ pub fn main(matches: &ArgMatches, init_log: bool) -> ExitCode {
                 parts.path_and_query = Some(PathAndQuery::from_static("/"));
             }
 
-            Uri::from_parts(parts).expect("target url rebuid")
+            match Uri::from_parts(parts) {
+                Ok(uri) => uri,
+                Err(err) => {
+                    return Err(UrlTestError::ArgumentError(format!(
+                        "rebuild TARGET_URL error, error = {:?}",
+                        err
+                    )))
+                }
+            }
         }
         Err(err) => {
             error!(error = ?err, url = target_url, "target url parse error");
-            return ExitCode::FAILURE;
+            return Err(UrlTestError::ArgumentError(format!(
+                "TARGET_URL format error, url={}, error={:?}",
+                target_url, err
+            )));
         }
     };
-
     trace!(target_url = ?target_url);
 
     // 构造http请求
@@ -164,7 +242,10 @@ pub fn main(matches: &ArgMatches, init_log: bool) -> ExitCode {
             Ok(m) => m,
             Err(err) => {
                 error!(error = ?err, method = request, "unknown request");
-                return ExitCode::FAILURE;
+                return Err(UrlTestError::ArgumentError(format!(
+                    "method {} not support, error={:?}",
+                    request, err
+                )));
             }
         };
 
@@ -183,7 +264,10 @@ pub fn main(matches: &ArgMatches, init_log: bool) -> ExitCode {
                 Some(p) => p,
                 None => {
                     error!(header = header, "header format error");
-                    return ExitCode::FAILURE;
+                    return Err(UrlTestError::ArgumentError(format!(
+                        "header format error, header = {}",
+                        header
+                    )));
                 }
             };
 
@@ -193,139 +277,196 @@ pub fn main(matches: &ArgMatches, init_log: bool) -> ExitCode {
         }
     }
 
-    let request = req_builder.body(Body::empty()).expect("generate body error");
-    trace!(request = ?request);
-
-    // 构造tokio环境并执行任务
-    let mut builder = Builder::new_current_thread();
-    let runtime = builder.enable_all().build().expect("create tokio Runtime");
-
-    runtime.block_on(async move {
-        let canceler = Canceler::new();
-
-        let context = Context::new_shared(ServerType::Local);
-        let service_context = Arc::new(ServiceContext::new(context, canceler.waiter()));
-        let server = Arc::new(
-            ServerIdent::new(service_context.clone(), svr_cfg, Duration::MAX, Duration::MAX)
-                .expect("create server ident"),
-        );
-
-        let connector = Connector {
-            service_context,
-            server,
+    // body
+    let request = if let Some(data_file) = matches.get_one::<String>("DATA") {
+        let body = match tokio::fs::read(data_file).await {
+            Ok(body) => body,
+            Err(err) => {
+                return Err(UrlTestError::ArgumentError(format!(
+                    "read body from {} error, error = {:?}",
+                    data_file, err
+                )));
+            }
         };
+        req_builder.body(Body::from(body))
+    } else {
+        req_builder.body(Body::empty())
+    }
+    .expect("generate body error");
 
-        let client = Client::builder().build(connector);
+    Ok(request)
+}
 
-        let response = client.request(request).await;
+async fn write_output(output_path: Option<&String>, result: Result<http::Response<Body>, UrlTestError>) -> ExitCode {
+    if let Some(output_path) = output_path {
+        let mut writing_result = Some(result);
+        let mut write_count = 0;
+        while writing_result.is_some() {
+            write_count = write_count + 1;
 
-        let r = if let Some(path) = output_path {
-            let mut fs = match File::create(path).await {
+            let mut fs = match File::create(output_path).await {
                 Ok(fs) => fs,
                 Err(err) => {
-                    error!(error = ?err, path = path, "open output file error");
+                    error!(error = ?err, path = output_path, "open output file error");
                     return ExitCode::FAILURE;
                 }
             };
 
-            write_result(&mut fs, response).await
-        } else {
-            write_result(&mut tokio::io::stdout(), response).await
-        };
+            let result = writing_result.unwrap();
 
-        if let Err(err) = r {
-            error!(error = ?err, "write response error");
-            ExitCode::FAILURE
-        } else {
-            ExitCode::SUCCESS
+            match write_result(&mut fs, result).await {
+                Ok(()) => match fs.sync_all().await {
+                    Ok(()) => {
+                        trace!(output = output_path, "response write success");
+                        break;
+                    }
+                    Err(err) => {
+                        error!(error = ?err, output = output_path, "response write flush error");
+                        return ExitCode::FAILURE;
+                    }
+                },
+                Err(err) => match err {
+                    WriteResultError::TransferError(e) => {
+                        assert!(write_count == 0);
+                        writing_result = Some(Err(UrlTestError::ResponseBodyTransferError(e)))
+                    }
+                    WriteResultError::ContentLengthMismatch(expect, readed) => {
+                        assert!(write_count == 0);
+                        writing_result = Some(Err(UrlTestError::ContentLengthMismatch(expect, readed)))
+                    }
+                    WriteResultError::LocalIoError(e) => {
+                        error!(error = ?e, output = output_path, "response write local io error");
+                        return ExitCode::FAILURE;
+                    }
+                },
+            }
         }
-    })
+    } else {
+        match write_result(&mut tokio::io::stdout(), result).await {
+            Ok(()) => {}
+            Err(err) => {
+                error!(error = ?err, "response write error");
+            }
+        }
+    }
+
+    ExitCode::SUCCESS
 }
 
-async fn write_result<S>(w: &mut S, response: hyper::Result<http::Response<Body>>) -> io::Result<()>
+#[derive(Debug)]
+enum WriteResultError {
+    TransferError(hyper::Error),
+    ContentLengthMismatch(usize, usize),
+    LocalIoError(io::Error),
+}
+
+async fn write_result<S>(
+    w: &mut S,
+    response: Result<http::Response<Body>, UrlTestError>,
+) -> Result<(), WriteResultError>
 where
-    S: tokio::io::AsyncWriteExt + Unpin,
+    S: AsyncWriteExt + Unpin,
 {
     match response {
-        Ok(response) => write_response(w, response).await,
-        Err(e) => {
-            w.write(format!("{}", e).as_bytes()).await?;
+        Ok(response) => {
+            let content_length = if let Some(content_length) = response.headers().get(http::header::CONTENT_LENGTH) {
+                if let Ok(content_length) = content_length.to_str() {
+                    match content_length.parse::<usize>() {
+                        Ok(v) => Some(v),
+                        Err(..) => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let body_size = write_response(w, response).await?;
+
+            if let Some(content_length) = content_length {
+                if content_length != body_size {
+                    return Err(WriteResultError::ContentLengthMismatch(content_length, body_size));
+                }
+            }
+
             Ok(())
         }
+        Err(UrlTestError::ArgumentError(msg)) => write_lines(w, &["ArgumentError", msg.as_str()]).await,
+        Err(UrlTestError::ContentLengthMismatch(expect, received)) => {
+            write_lines(
+                w,
+                &[
+                    "ContentLengthMismatch",
+                    &format!("expect={}, received={}", expect, received),
+                ],
+            )
+            .await
+        }
+        Err(UrlTestError::ResponseBodyTransferError(err)) => {
+            write_lines(w, &["ResponseBodyTransferError", &format!("{:?}", err)]).await
+        }
+        Err(UrlTestError::Api(e)) => match e {
+            api::ApiError::Other(msg) => write_error_lines(w, "Other", msg.as_ref()).await,
+        },
     }
 }
 
-async fn write_response<S>(w: &mut S, response: http::Response<Body>) -> io::Result<()>
+async fn write_error_lines<S>(w: &mut S, err: &str, msg: Option<&String>) -> Result<(), WriteResultError>
 where
-    S: tokio::io::AsyncWriteExt + Unpin,
+    S: AsyncWriteExt + Unpin,
 {
-    w.write_all(format!("{:?} {}\n", response.version(), response.status()).as_bytes())
-        .await?;
-
-    for header in response.headers().iter() {
-        if let Ok(value) = header.1.to_str() {
-            w.write_all(format!("{}: {}\n", header.0, value).as_bytes()).await?;
-        } else {
-            w.write_all(format!("{}: invalid\n", header.0).as_bytes()).await?;
-        }
+    if let Some(msg) = msg {
+        write_lines(w, &[err, msg]).await
+    } else {
+        write_lines(w, &[err]).await
     }
+}
 
-    w.write_all(b"\n").await?;
-
-    let body_data = hyper::body::to_bytes(response.into_body())
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-    w.write_all(&body_data).await?;
-
+async fn write_lines<S>(w: &mut S, lines: &[&str]) -> Result<(), WriteResultError>
+where
+    S: AsyncWriteExt + Unpin,
+{
+    for l in lines {
+        write_line(w, l).await?;
+    }
     Ok(())
 }
 
-#[derive(Clone)]
-struct Connector {
-    service_context: Arc<ServiceContext>,
-    server: Arc<ServerIdent>,
+async fn write_line<S>(w: &mut S, line: &str) -> Result<(), WriteResultError>
+where
+    S: AsyncWriteExt + Unpin,
+{
+    w.write(line.as_bytes())
+        .await
+        .map_err(|e| WriteResultError::LocalIoError(e))?;
+    w.write(b"\n").await.map_err(|e| WriteResultError::LocalIoError(e))?;
+    Ok(())
 }
 
-impl Service<Uri> for Connector {
-    type Response = ProxyHttpStream;
-    type Error = std::io::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+async fn write_response<S>(w: &mut S, response: http::Response<Body>) -> Result<usize, WriteResultError>
+where
+    S: AsyncWriteExt + Unpin,
+{
+    write_line(w, &format!("{:?} {}", response.version(), response.status())).await?;
 
-    fn poll_ready(&mut self, _: &mut task::Context<'_>) -> task::Poll<Result<(), Self::Error>> {
-        task::Poll::Ready(Ok(()))
+    for header in response.headers().iter() {
+        if let Ok(value) = header.1.to_str() {
+            write_line(w, &format!("{}: {}", header.0, value)).await?;
+        } else {
+            write_line(w, &format!("{}: invalid", header.0)).await?;
+        }
     }
 
-    fn call(&mut self, uri: Uri) -> Self::Future {
-        let service_context = self.service_context.clone();
-        let server = self.server.clone();
+    write_line(w, "").await?;
 
-        Box::pin(async move {
-            // 从URL获取目标地址
-            let port = match uri.port() {
-                Some(port) => port.as_u16(),
-                None => match uri.scheme().map(|s| s.as_str()) {
-                    None => 80,
-                    Some("http") => 80,
-                    Some("https") => 443,
-                    Some(..) => {
-                        error!(uri = ?uri, "target url no port");
-                        return Err(io::Error::new(io::ErrorKind::Other, "target url no host"));
-                    }
-                },
-            };
+    let body_data = hyper::body::to_bytes(response.into_body())
+        .await
+        .map_err(|e| WriteResultError::TransferError(e))?;
 
-            let target_addr = match uri.host() {
-                Some(host) => Address::parse_str_host(host, port),
-                None => {
-                    return Err(io::Error::new(io::ErrorKind::Other, "target url no host"));
-                }
-            };
-            trace!(target_addr = ?target_addr);
+    w.write_all(&body_data)
+        .await
+        .map_err(|e| WriteResultError::LocalIoError(e))?;
 
-            let stream = AutoProxyClientStream::connect_proxied(&service_context, &server, &target_addr).await?;
-
-            Ok(ProxyHttpStream::connect_http(stream))
-        })
-    }
+    Ok(body_data.len())
 }
