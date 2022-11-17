@@ -1,5 +1,5 @@
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
-use std::{io, process::ExitCode, sync::Arc};
+use std::{future, io, process::ExitCode, sync::Arc};
 
 use tokio::{fs::File, io::AsyncWriteExt, runtime::Builder, time::Duration};
 use tracing::{error, trace};
@@ -25,6 +25,7 @@ enum UrlTestError {
     Api(api::ApiError),
     ContentLengthMismatch(usize, usize),
     ResponseBodyTransferError(hyper::Error),
+    Timeout(String),
 }
 
 pub fn define_command_line_options(mut app: Command) -> Command {
@@ -125,6 +126,7 @@ pub fn main(matches: &ArgMatches, init_log: bool) -> ExitCode {
 
     runtime.block_on(async move {
         let output_path = matches.get_one::<String>("OUTPUT");
+        let timeout = matches.get_one::<u64>("TIMEOUT").copied().map(Duration::from_millis);
 
         let request = match build_request(matches).await {
             Ok(request) => request,
@@ -152,13 +154,26 @@ pub fn main(matches: &ArgMatches, init_log: bool) -> ExitCode {
             }
         };
 
-        let response = api::request(request, service_context, server)
-            .await
-            .map_err(|e| UrlTestError::Api(e));
-        trace!(response = ?response);
+        tokio::select! {
+            _r = wait_timeout(timeout) => {
+                write_output(output_path, Err(UrlTestError::Timeout("GlobalTimeout".to_string()))).await
+            }
+            r = api::request(request, service_context, server) => {
+                let response = r.map_err(|e| UrlTestError::Api(e));
+                trace!(response = ?response);
 
-        write_output(output_path, response).await
+                write_output(output_path, response).await
+            }
+        }
     })
+}
+
+async fn wait_timeout(timeout: Option<Duration>) {
+    if let Some(timeout) = timeout {
+        tokio::time::sleep(timeout).await
+    } else {
+        future::pending().await
+    }
 }
 
 fn build_svr_cfg(matches: &ArgMatches) -> Result<ServerConfig, UrlTestError> {
@@ -179,8 +194,6 @@ fn build_svr_cfg(matches: &ArgMatches) -> Result<ServerConfig, UrlTestError> {
             }
         };
     }
-
-    // let connect_timeout = matches.get_one::<u64>("TIMEOUT").copied().map(Duration::from_secs);
 
     let svr_cfg = match ServerConfig::from_url(&server_url) {
         Ok(t) => t,
@@ -409,6 +422,7 @@ where
         Err(UrlTestError::Api(e)) => match e {
             api::ApiError::Other(msg) => write_error_lines(w, "Other", msg.as_ref()).await,
         },
+        Err(UrlTestError::Timeout(msg)) => write_lines(w, &["Timeout", msg.as_str()]).await,
     }
 }
 
