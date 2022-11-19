@@ -43,6 +43,11 @@ name = "ssservice"
 path = "bin/ssservice.rs"
 required-features = ["service"]
 
+[[bin]]
+name = "sscheck"
+path = "bin/sscheck.rs"
+required-features = ["local"]
+
 [workspace]
 members = [
     "crates/shadowsocks",
