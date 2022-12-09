@@ -340,11 +340,11 @@ async fn write_output(output_path: Option<&String>, result: Result<http::Respons
                 },
                 Err(err) => match err {
                     WriteResultError::TransferError(e) => {
-                        assert!(write_count == 0);
+                        assert!(write_count == 1);
                         writing_result = Some(Err(UrlTestError::ResponseBodyTransferError(e)))
                     }
                     WriteResultError::ContentLengthMismatch(expect, readed) => {
-                        assert!(write_count == 0);
+                        assert!(write_count == 1);
                         writing_result = Some(Err(UrlTestError::ContentLengthMismatch(expect, readed)))
                     }
                     WriteResultError::LocalIoError(e) => {
