@@ -52,7 +52,6 @@ required-features = ["local"]
 members = [
     "crates/shadowsocks",
     "crates/shadowsocks-service",
-    "crates/shadowsocks-tools",
     "depends/tracing-oslog",
 ]
 
@@ -213,11 +212,6 @@ rate-limit = ["shadowsocks-service/rate-limit", "governor", "hyper", "tower"]
 security-replay-attack-detect = ["shadowsocks-service/security-replay-attack-detect"]
 replay-attack-detect = ["security-replay-attack-detect"] # Backward compatibility. DO NOT USE.
 
-# Enable ARMv8 related optimizations
-armv8 = ["shadowsocks-service/armv8"]
-# Enable NEON releated optimizations
-neon = ["shadowsocks-service/neon"]
-
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
@@ -267,7 +261,7 @@ num_cpus = "1.13"
 
 governor = { version = "0.3.2", optional = true }
 
-ipnet = { version = "2.3", optional = true }
+ipnet = { version = "2.7", optional = true }
 
 mimalloc = { version = "0.1", default-features = false, optional = true }
 tcmalloc = { version = "0.3", optional = true }

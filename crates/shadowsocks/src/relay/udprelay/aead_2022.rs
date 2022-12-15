@@ -527,7 +527,7 @@ pub fn encrypt_client_payload_aead_2022(
 }
 
 /// Decrypt `Client -> Server` UDP AEAD protocol packet
-pub async fn decrypt_client_payload_aead_2022(
+pub fn decrypt_client_payload_aead_2022(
     context: &Context,
     method: CipherKind,
     key: &[u8],
@@ -579,7 +579,7 @@ pub async fn decrypt_client_payload_aead_2022(
         user,
     };
 
-    let addr = match Address::read_from(&mut cursor).await {
+    let addr = match Address::read_cursor(&mut cursor) {
         Ok(a) => a,
         Err(err) => return Err(ProtocolError::InvalidAddress(err)),
     };
@@ -639,7 +639,7 @@ pub fn encrypt_server_payload_aead_2022(
 }
 
 /// Decrypt `Server -> Client` UDP AEAD protocol packet
-pub async fn decrypt_server_payload_aead_2022(
+pub fn decrypt_server_payload_aead_2022(
     context: &Context,
     method: CipherKind,
     key: &[u8],
@@ -685,7 +685,7 @@ pub async fn decrypt_server_payload_aead_2022(
         user: None,
     };
 
-    let addr = match Address::read_from(&mut cursor).await {
+    let addr = match Address::read_cursor(&mut cursor) {
         Ok(a) => a,
         Err(err) => return Err(ProtocolError::InvalidAddress(err)),
     };

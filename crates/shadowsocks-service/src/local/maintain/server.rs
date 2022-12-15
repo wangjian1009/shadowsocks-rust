@@ -1,7 +1,6 @@
 use std::{
     future::Future,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -10,7 +9,7 @@ use hyper::{service::Service, Body, Request, Response};
 use super::{context::MaintainServerContext, GenericError, GenericResult};
 
 pub struct Svc {
-    context: Arc<MaintainServerContext>,
+    context: MaintainServerContext,
 }
 
 impl Service<Request<Body>> for Svc {
@@ -29,7 +28,7 @@ impl Service<Request<Body>> for Svc {
 }
 
 pub struct MakeSvc {
-    pub(super) context: Arc<MaintainServerContext>,
+    pub(super) context: MaintainServerContext,
 }
 
 impl<T> Service<T> for MakeSvc {

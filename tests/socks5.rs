@@ -12,7 +12,7 @@ use tokio::{
 use tracing_test::traced_test;
 
 use shadowsocks_service::{
-    config::{Config, ConfigType, LocalConfig, ProtocolType},
+    config::{Config, ConfigType, LocalConfig, LocalInstanceConfig, ProtocolType, ServerInstanceConfig},
     local::socks::client::socks5::{Socks5TcpClient, Socks5UdpClient},
     run_local, run_server,
     shadowsocks::{
@@ -74,22 +74,29 @@ impl Socks5TestServer {
             local_addr,
             svr_config: {
                 let mut cfg = Config::new(ConfigType::Server);
-                cfg.server = vec![ServerConfig::new(svr_addr, server_protocol)];
-                cfg.server[0].if_ss_mut(|c| c.set_mode(mode));
+                cfg.server = vec![ServerInstanceConfig::with_server_config(ServerConfig::new(
+                    svr_addr,
+                    server_protocol,
+                ))];
+                cfg.server[0].config.if_ss_mut(|c| c.set_mode(mode));
                 #[cfg(feature = "transport")]
-                cfg.server[0].set_acceptor_transport(server_transport);
+                cfg.server[0].config.set_acceptor_transport(server_transport);
                 cfg
             },
             cli_config: {
                 let mut cfg = Config::new(ConfigType::Local);
-                cfg.local = vec![LocalConfig::new_with_addr(
+
+                cfg.local = vec![LocalInstanceConfig::with_local_config(LocalConfig::new_with_addr(
                     ServerAddr::from(local_addr),
                     ProtocolType::Socks,
-                )];
-                cfg.local[0].mode = mode;
-                cfg.server = vec![ServerConfig::new(svr_addr, local_protocol)];
+                ))];
+                cfg.local[0].config.mode = mode;
+                cfg.server = vec![ServerInstanceConfig::with_server_config(ServerConfig::new(
+                    svr_addr,
+                    local_protocol,
+                ))];
                 #[cfg(feature = "transport")]
-                cfg.server[0].set_connector_transport(local_transport);
+                cfg.server[0].config.set_connector_transport(local_transport);
                 cfg
             },
         }

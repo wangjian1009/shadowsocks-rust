@@ -48,11 +48,6 @@ aead-cipher-2022-extra = ["aead-cipher-2022", "shadowsocks-crypto/v2-extra"]
 # Enable detection against replay attack
 security-replay-attack-detect = ["bloomfilter"]
 
-# Enable ARMv8 related optimizations
-armv8 = ["shadowsocks-crypto/armv8"]
-# Enable NEON releated optimizations
-neon = ["shadowsocks-crypto/neon"]
-
 transport = []
 transport-ws = ["transport", "tokio-tungstenite"]
 transport-tls = ["transport", "tokio-rustls", "webpki", "rustls-native-certs", "rustls-pemfile"]
@@ -129,10 +124,10 @@ sha2 = { version = "0.9"}
 aes-gcm = { version = "0.9.4"}
 
 [target.'cfg(any(target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
-shadowsocks-crypto = { version = "0.4", features = ["ring"] }
+shadowsocks-crypto = { version = "0.5.1", features = ["ring"] }
 
 [target.'cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
-shadowsocks-crypto = { version = "0.4", features = [] }
+shadowsocks-crypto = { version = "0.5.1", features = [] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.42", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_IO"] }

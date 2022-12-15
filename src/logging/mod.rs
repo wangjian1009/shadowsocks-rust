@@ -155,6 +155,7 @@ pub fn init_with_default(bin_name: &'static str) -> Guard {
 
 #[cfg(feature = "logging-apm")]
 fn build_apm_config(url: &url::Url) -> tracing_elastic_apm::config::Config {
+    use sysinfo::PidExt;
     use sysinfo::ProcessExt;
     use sysinfo::SystemExt;
     use tracing_elastic_apm::config::*;
@@ -207,8 +208,8 @@ fn build_apm_config(url: &url::Url) -> tracing_elastic_apm::config::Config {
             kubernetes: None,
         })
         .with_process(Process {
-            pid: process.pid().into(),
-            ppid: process.parent().map(|pid| pid.into()),
+            pid: process.pid().as_u32() as i32,
+            ppid: process.parent().map(|pid| pid.as_u32() as i32),
             title: Some(process.name().to_string()),
             argv: Some(process.cmd().iter().map(|v| v.clone()).collect()),
         })

@@ -19,7 +19,10 @@ use tracing::{error, info};
 use shadowsocks_service::config::RedirType;
 use shadowsocks_service::{
     acl::AccessControl,
-    config::{read_variable_field_value, Config, ConfigType, LocalConfig, ProtocolType},
+    config::{
+        read_variable_field_value, Config, ConfigType, LocalConfig, LocalInstanceConfig, ProtocolType,
+        ServerInstanceConfig,
+    },
     create_local,
     local::loadbalancing::PingBalancer,
     shadowsocks::{
@@ -741,11 +744,11 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 sc.set_timeout(timeout);
             }
 
-            config.server.push(sc);
+            config.server.push(ServerInstanceConfig::with_server_config(sc));
         }
 
         if let Some(svr_addr) = matches.get_one::<ServerConfig>("URL").cloned() {
-            config.server.push(svr_addr);
+            config.server.push(ServerInstanceConfig::with_server_config(svr_addr));
         }
 
         #[cfg(feature = "local-flow-stat")]
@@ -869,7 +872,9 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                     local_dns_config.local_dns_addr = local_config.local_dns_addr.take();
                     local_dns_config.remote_dns_addr = local_config.remote_dns_addr.take();
 
-                    config.local.push(local_dns_config);
+                    config
+                        .local
+                        .push(LocalInstanceConfig::with_local_config(local_dns_config));
                 }
             }
 
@@ -898,7 +903,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 local_config.mode = Mode::TcpAndUdp;
             }
 
-            config.local.push(local_config);
+            config.local.push(LocalInstanceConfig::with_local_config(local_config));
         }
 
         if matches.get_flag("TCP_NO_DELAY") {
@@ -919,7 +924,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             config
                 .server
                 .iter_mut()
-                .for_each(|c| c.set_connector_transport(Some(transport.clone())))
+                .for_each(|c| c.config.set_connector_transport(Some(transport.clone())))
         }
 
         #[cfg(feature = "rate-limit")]
@@ -1142,7 +1147,7 @@ fn launch_reload_server_task(config_path: PathBuf, balancer: PingBalancer, cance
                     }
                 };
 
-                let servers = config.server;
+                let servers: Vec<ServerConfig> = config.server.into_iter().map(|s| s.config).collect();
                 info!("auto-reload {} with {} servers", config_path.display(), servers.len());
 
                 let r = balancer.reset_servers(servers).await;

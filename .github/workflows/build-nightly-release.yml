@@ -48,10 +48,6 @@ jobs:
             fi
           fi
 
-          if [[ "$compile_target" == "aarch64-"* ]]; then
-            compile_features="$compile_features -f armv8 -f neon"
-          fi
-
           cd build
           ./build-release -t ${{ matrix.target }} $compile_features $compile_compress
 
@@ -64,7 +60,7 @@ jobs:
   build-unix:
     runs-on: ${{ matrix.os }}
     env:
-      BUILD_EXTRA_FEATURES: "local-redir local-tun armv8 neon"
+      BUILD_EXTRA_FEATURES: "local-redir local-tun"
       RUST_BACKTRACE: full
     strategy:
       matrix:
@@ -90,12 +86,6 @@ jobs:
           toolchain: nightly
           default: true
           override: true
-
-      # https://github.com/actions/virtual-environments/issues/2557#issuecomment-769611326
-      - if: ${{ matrix.target }} == 'aarch64-apple-darwin'
-        run: |
-          sudo xcode-select -s /Applications/Xcode_12.4.app &&
-          sudo rm -Rf /Library/Developer/CommandLineTools/SDKs/*
 
       - name: Build release
         shell: bash

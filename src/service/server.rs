@@ -15,7 +15,7 @@ use tracing::{error, info};
 
 use shadowsocks_service::{
     acl::AccessControl,
-    config::{read_variable_field_value, Config, ConfigType, ManagerConfig},
+    config::{read_variable_field_value, Config, ConfigType, ManagerConfig, ServerInstanceConfig},
     run_server,
     shadowsocks::{
         canceler::Canceler,
@@ -683,7 +683,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 sc.if_ss_mut(|c| c.set_mode(Mode::TcpAndUdp));
             }
 
-            config.server.push(sc);
+            config.server.push(ServerInstanceConfig::with_server_config(sc));
         }
 
         if matches.get_flag("TCP_NO_DELAY") {
@@ -704,7 +704,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             config
                 .server
                 .iter_mut()
-                .for_each(|c| c.set_acceptor_transport(Some(acceptor_transport.clone())))
+                .for_each(|c| c.config.set_acceptor_transport(Some(acceptor_transport.clone())))
         }
 
         #[cfg(feature = "rate-limit")]

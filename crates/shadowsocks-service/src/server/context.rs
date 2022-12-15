@@ -35,6 +35,7 @@ cfg_if! {
 use super::connection::ConnectionStat;
 
 /// Server Service Context
+#[derive(Clone)]
 pub struct ServiceContext {
     context: SharedContext,
     connect_opts: ConnectOpts,

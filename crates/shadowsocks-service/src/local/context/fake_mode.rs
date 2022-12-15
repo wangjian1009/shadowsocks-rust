@@ -96,17 +96,19 @@ impl FakeMode {
 
 impl ServiceContext {
     pub fn fake_mode(&self) -> FakeMode {
-        self.fake_mode.lock().clone()
+        self.fake_mode.clone()
     }
 
-    pub fn set_fake_mode(&self, mode: FakeMode) {
-        if {
-            let mut old_mode = self.fake_mode.lock();
-            let need_close_connections = if let FakeMode::None = *old_mode { true } else { false };
-            *old_mode = mode;
-            need_close_connections
-        } {
-            self.close_connections()
+    pub fn set_fake_mode(&mut self, mode: FakeMode) {
+        let need_close = match self.fake_mode {
+            FakeMode::None => false,
+            _ => true,
+        };
+
+        self.fake_mode = mode;
+
+        if need_close {
+            self.close_connections();
         }
     }
 }

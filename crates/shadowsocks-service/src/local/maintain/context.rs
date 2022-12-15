@@ -1,17 +1,17 @@
 use hyper::{Body, Method, Request, Response, StatusCode};
 use serde_json::json;
-use std::sync::Arc;
 
 use crate::local::ServiceContext;
 
 use super::GenericResult;
 
+#[derive(Clone)]
 pub(super) struct MaintainServerContext {
-    pub(super) service_context: Arc<ServiceContext>,
+    pub(super) service_context: ServiceContext,
 }
 
 impl MaintainServerContext {
-    pub fn new(service_context: Arc<ServiceContext>) -> Self {
+    pub fn new(service_context: ServiceContext) -> Self {
         Self { service_context }
     }
 

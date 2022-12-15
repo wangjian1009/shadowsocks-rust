@@ -132,14 +132,16 @@ impl Server {
 }
 
 /// Starts a shadowsocks local server
-pub async fn create(mut config: Config, cancel_waiter: CancelWaiter) -> io::Result<Server> {
+pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<Server> {
     assert!(config.config_type == ConfigType::Local && !config.local.is_empty());
 
     trace!("{:?}", config);
 
     // Warning for Stream Ciphers
     #[cfg(feature = "stream-cipher")]
-    for server in config.server.iter() {
+    for inst in config.server.iter() {
+        let server = &inst.config;
+
         server.if_ss(|ss_cfg| {
             if ss_cfg.method().is_stream() {
                 warn!("stream cipher {} for server {} have inherent weaknesses (see discussion in https://github.com/shadowsocks/shadowsocks-org/issues/36). \
@@ -156,6 +158,8 @@ pub async fn create(mut config: Config, cancel_waiter: CancelWaiter) -> io::Resu
         }
     }
 
+    // Global ServiceContext template
+    // Each Local instance will hold a copy of its fields
     let context = Context::new_shared(ServerType::Local);
     let mut context = ServiceContext::new(context, cancel_waiter.clone());
 
@@ -198,10 +202,8 @@ pub async fn create(mut config: Config, cancel_waiter: CancelWaiter) -> io::Resu
         context.set_ipv6_first(config.ipv6_first);
     }
 
-    let acl = config.acl;
-    config.acl = None;
-    if let Some(acl) = acl {
-        context.set_acl(acl);
+    if let Some(acl) = config.acl {
+        context.set_acl(Arc::new(acl));
     }
 
     context.set_security_config(&config.security);
@@ -223,8 +225,6 @@ pub async fn create(mut config: Config, cancel_waiter: CancelWaiter) -> io::Resu
 
     assert!(!config.local.is_empty(), "no valid local server configuration");
 
-    let context = Arc::new(context);
-
     let mut vfut = Vec::new();
 
     // Create a service balancer for choosing between multiple servers
@@ -232,10 +232,11 @@ pub async fn create(mut config: Config, cancel_waiter: CancelWaiter) -> io::Resu
         let mut mode = Mode::TcpOnly;
 
         for local in &config.local {
-            mode = mode.merge(local.mode);
+            mode = mode.merge(local.config.mode);
         }
 
-        let mut balancer_builder = PingBalancerBuilder::new(context.clone(), mode);
+        // Load balancer will hold an individual ServiceContext
+        let mut balancer_builder = PingBalancerBuilder::new(Arc::new(context.clone()), mode);
 
         // max_server_rtt have to be set before add_server
         if let Some(rtt) = config.balancer.max_server_rtt {
@@ -251,7 +252,9 @@ pub async fn create(mut config: Config, cancel_waiter: CancelWaiter) -> io::Resu
         }
 
         for server in config.server {
-            balancer_builder.add_server(server)?;
+            if let Err(err) = balancer_builder.add_server(server.config) {
+                warn!("add server failed, error: {}", err);
+            }
         }
 
         balancer_builder.build().await?
@@ -276,7 +279,19 @@ pub async fn create(mut config: Config, cancel_waiter: CancelWaiter) -> io::Resu
         )));
     }
 
-    for local_config in config.local {
+    for local_instance in config.local {
+        let local_config = local_instance.config;
+
+        // Clone from global ServiceContext instance
+        // It will shares Shadowsocks' global context, and FlowStat, DNS reverse cache
+        let mut context = context.clone();
+
+        // Private ACL
+        if let Some(acl) = local_instance.acl {
+            context.set_acl(Arc::new(acl))
+        }
+
+        let context = Arc::new(context);
         let balancer = balancer.clone();
 
         match local_config.protocol {

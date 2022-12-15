@@ -51,14 +51,15 @@ cfg_if! {
 }
 
 /// Local Service Context
+#[derive(Clone)]
 pub struct ServiceContext {
     context: SharedContext,
     connect_opts: ConnectOpts,
     accept_opts: AcceptOpts,
-    connection_close_notify: spin::Mutex<Arc<Notify>>,
+    connection_close_notify: Arc<Notify>,
 
     // Access Control
-    acl: Option<AccessControl>,
+    acl: Option<Arc<AccessControl>>,
 
     // Flow statistic report
     flow_stat: Arc<FlowStat>,
@@ -68,7 +69,7 @@ pub struct ServiceContext {
 
     // For DNS relay's ACL domain name reverse lookup -- whether the IP shall be forwarded
     #[cfg(feature = "local-dns")]
-    reverse_lookup_cache: Mutex<LruCache<IpAddr, bool>>,
+    reverse_lookup_cache: Arc<Mutex<LruCache<IpAddr, bool>>>,
 
     #[cfg(feature = "rate-limit")]
     rate_limiter: Arc<RateLimiter>,
@@ -80,7 +81,7 @@ pub struct ServiceContext {
     transport: Option<TransportConnectorConfig>,
 
     #[cfg(feature = "local-fake-mode")]
-    fake_mode: spin::Mutex<FakeMode>,
+    fake_mode: FakeMode,
 }
 
 impl Default for ServiceContext {
@@ -96,15 +97,15 @@ impl ServiceContext {
             context,
             connect_opts: ConnectOpts::default(),
             accept_opts: AcceptOpts::default(),
-            connection_close_notify: spin::Mutex::new(Arc::new(Notify::new())),
+            connection_close_notify: Arc::new(Notify::new()),
             acl: None,
             flow_stat: Arc::new(FlowStat::new()),
             cancel_waiter,
             #[cfg(feature = "local-dns")]
-            reverse_lookup_cache: Mutex::new(LruCache::with_expiry_duration_and_capacity(
+            reverse_lookup_cache: Arc::new(Mutex::new(LruCache::with_expiry_duration_and_capacity(
                 Duration::from_secs(3 * 24 * 60 * 60),
                 10240, // XXX: It should be enough for a normal user.
-            )),
+            ))),
             #[cfg(feature = "rate-limit")]
             rate_limiter: Arc::new(RateLimiter::new(None).unwrap()),
             #[cfg(feature = "sniffer")]
@@ -112,7 +113,7 @@ impl ServiceContext {
             #[cfg(feature = "transport")]
             transport: None,
             #[cfg(feature = "local-fake-mode")]
-            fake_mode: spin::Mutex::new(FakeMode::None),
+            fake_mode: FakeMode::None,
         }
     }
 
@@ -147,13 +148,13 @@ impl ServiceContext {
     }
 
     /// Set Access Control List
-    pub fn set_acl(&mut self, acl: AccessControl) {
+    pub fn set_acl(&mut self, acl: Arc<AccessControl>) {
         self.acl = Some(acl);
     }
 
     /// Get Access Control List reference
     pub fn acl(&self) -> Option<&AccessControl> {
-        self.acl.as_ref()
+        self.acl.as_deref()
     }
 
     /// Get cloned flow statistic
@@ -245,14 +246,13 @@ impl ServiceContext {
     }
 
     pub fn connection_close_notify(&self) -> Arc<Notify> {
-        self.connection_close_notify.lock().clone()
+        self.connection_close_notify.clone()
     }
 
-    pub fn close_connections(&self) {
+    pub fn close_connections(&mut self) {
         let notify = {
-            let mut notify = self.connection_close_notify.lock();
-            let old_notify = notify.clone();
-            *notify = Arc::new(Notify::new());
+            let old_notify = self.connection_close_notify.clone();
+            self.connection_close_notify = Arc::new(Notify::new());
             old_notify
         };
 

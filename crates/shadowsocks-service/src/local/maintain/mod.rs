@@ -1,5 +1,5 @@
 use hyper::Server as HttpServer;
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{io, net::SocketAddr};
 
 use crate::local::ServiceContext;
 
@@ -12,13 +12,13 @@ mod server;
 use context::MaintainServerContext;
 
 pub struct MaintainServer {
-    context: Arc<MaintainServerContext>,
+    context: MaintainServerContext,
 }
 
 impl MaintainServer {
-    pub fn new(service_context: Arc<ServiceContext>) -> MaintainServer {
+    pub fn new(service_context: ServiceContext) -> MaintainServer {
         MaintainServer {
-            context: Arc::new(MaintainServerContext::new(service_context)),
+            context: MaintainServerContext::new(service_context),
         }
     }
 
