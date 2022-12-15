@@ -77,6 +77,13 @@ pub extern "C" fn lib_local_run(
     let runtime = builder.enable_all().build().expect("create tokio Runtime");
 
     runtime.block_on(async move {
+        #[cfg(feature = "logging")]
+        let log_guard = {
+            let mut log_config = crate::config::LogConfig::default();
+            log_config.level = c_log_level as u32;
+            crate::logging::init_with_config("sslocal", &log_config)
+        };
+
         let config = load_config(
             &str_config,
             acl_path.as_deref(),
@@ -86,13 +93,6 @@ pub extern "C" fn lib_local_run(
             #[cfg(target_os = "android")]
             vpn_protect_path.as_deref(),
         );
-
-        #[cfg(feature = "logging")]
-        let log_guard = {
-            let mut log_config = crate::config::LogConfig::default();
-            log_config.level = c_log_level as u32;
-            crate::logging::init_with_config("sslocal", &log_config)
-        };
 
         run(config, control_port).await;
 

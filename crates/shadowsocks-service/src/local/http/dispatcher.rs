@@ -199,7 +199,11 @@ impl HttpDispatcher {
                 Err(_err) => {
                     let mut resp = Response::new(Body::from(format!("relay failed to {}", host)));
                     *resp.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                    trace!(response = ?resp);
+
+                    {
+                        let _enter = span.enter();
+                        trace!(response = ?resp);
+                    }
                     return Ok(resp);
                 }
             };
