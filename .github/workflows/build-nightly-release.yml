@@ -25,12 +25,15 @@ jobs:
         with:
           profile: minimal
           target: ${{ matrix.target }}
-          toolchain: nightly
+          toolchain: stable
           default: true
           override: true
 
-      - name: Install cross
-        run: cargo install cross
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
 
       - name: Build ${{ matrix.target }}
         timeout-minutes: 120
@@ -49,7 +52,7 @@ jobs:
           fi
 
           cd build
-          ./build-release -t ${{ matrix.target }} $compile_features $compile_compress
+          ./build-release-zigbuild -t ${{ matrix.target }} $compile_features $compile_compress
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v2
@@ -83,7 +86,7 @@ jobs:
         with:
           profile: minimal
           target: ${{ matrix.target }}
-          toolchain: nightly
+          toolchain: stable
           default: true
           override: true
 
@@ -110,7 +113,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: nightly
+          toolchain: stable
           default: true
           override: true
 

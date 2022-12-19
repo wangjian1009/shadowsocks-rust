@@ -546,3 +546,35 @@ async fn socks5_udp_relay_tuic() {
     )
     .await
 }
+
+#[tokio::test]
+#[traced_test]
+async fn socks5_relay_aead() {
+    const SERVER_ADDR: &str = "127.0.0.1:8110";
+    const LOCAL_ADDR: &str = "127.0.0.1:8210";
+
+    const PASSWORD: &str = "test-password";
+    const METHOD: CipherKind = CipherKind::AES_256_GCM;
+
+    let svr = Socks5TestServer::new(SERVER_ADDR, LOCAL_ADDR, PASSWORD, METHOD, false);
+    svr.run().await;
+
+    let mut c = Socks5TcpClient::connect(
+        Address::DomainNameAddress("detectportal.firefox.com".to_owned(), 80),
+        svr.client_addr(),
+    )
+    .await
+    .unwrap();
+
+    let req = b"GET /success.txt HTTP/1.0\r\nHost: detectportal.firefox.com\r\nAccept: */*\r\n\r\n";
+    c.write_all(req).await.unwrap();
+    c.flush().await.unwrap();
+
+    let mut r = BufReader::new(c);
+
+    let mut buf = Vec::new();
+    r.read_until(b'\n', &mut buf).await.unwrap();
+
+    let http_status = b"HTTP/1.0 200 OK\r\n";
+    assert!(buf.starts_with(http_status));
+}
