@@ -6,41 +6,42 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::{net::FlowStat, ServerAddr};
+use crate::{
+    transport::{DeviceOrGuard, PacketMutWrite, PacketRead, PacketWrite, StreamConnection},
+    ServerAddr,
+};
 
-use super::{DeviceOrGuard, PacketMutWrite, PacketRead, PacketWrite, StreamConnection};
+use super::BuContext;
 
 #[cfg(feature = "rate-limit")]
-use super::RateLimiter;
+use crate::transport::RateLimiter;
+
+fn counter(key: &'static str, count: u64, net: &'static str, context: &BuContext) {
+    counter!(key, count, "net" => net, "proto" => context.protocol.name(), "trans" => context.transport.as_ref().map(|t| t.name()).unwrap_or("none"));
+}
 
 #[pin_project::pin_project]
 pub struct MonTraffic<T> {
-    tx: Option<Arc<FlowStat>>,
-    rx: Option<Arc<FlowStat>>,
+    context: BuContext,
+    tx: Option<&'static str>,
+    rx: Option<&'static str>,
     #[pin]
     s: T,
 }
 
 impl<T> MonTraffic<T> {
     #[inline]
-    pub fn new_with_tx_rx(s: T, tx: Option<Arc<FlowStat>>, rx: Option<Arc<FlowStat>>) -> Self {
-        Self { tx, rx, s }
+    pub fn new(s: T, context: BuContext, tx: Option<&'static str>, rx: Option<&'static str>) -> Self {
+        Self { context, tx, rx, s }
     }
 
     #[inline]
-    pub fn new(s: T, flow_stat: Option<Arc<FlowStat>>) -> Self {
-        let tx = flow_stat.clone();
-        let rx = flow_stat;
-        Self { tx, rx, s }
-    }
-
-    #[inline]
-    pub fn set_tx(&mut self, tx: Option<Arc<FlowStat>>) {
+    pub fn set_tx(&mut self, tx: Option<&'static str>) {
         self.tx = tx;
     }
 
     #[inline]
-    pub fn set_rx(&mut self, rx: Option<Arc<FlowStat>>) {
+    pub fn set_rx(&mut self, rx: Option<&'static str>) {
         self.rx = rx;
     }
 }
@@ -49,7 +50,7 @@ impl<T> MonTraffic<T> {
 impl<T: PacketMutWrite> PacketMutWrite for MonTraffic<T> {
     async fn write_to_mut(&mut self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         self.s.write_to_mut(buf, addr).await?;
-        self.tx.as_ref().map(|tx| tx.incr_tx(buf.len() as u64));
+        self.tx.map(|tx| counter(tx, buf.len() as u64, "stream", &self.context));
         Ok(())
     }
 }
@@ -58,7 +59,7 @@ impl<T: PacketMutWrite> PacketMutWrite for MonTraffic<T> {
 impl<T: PacketWrite> PacketWrite for MonTraffic<T> {
     async fn write_to(&self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         self.s.write_to(buf, addr).await?;
-        self.tx.as_ref().map(|tx| tx.incr_tx(buf.len() as u64));
+        self.tx.map(|tx| counter(tx, buf.len() as u64, "stream", &self.context));
         Ok(())
     }
 }
@@ -67,7 +68,7 @@ impl<T: PacketWrite> PacketWrite for MonTraffic<T> {
 impl<T: PacketRead> PacketRead for MonTraffic<T> {
     async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
         let r = self.s.read_from(buf).await?;
-        self.rx.as_ref().map(|rx| rx.incr_rx(buf.len() as u64));
+        self.rx.map(|rx| counter(rx, buf.len() as u64, "stream", &self.context));
         Ok(r)
     }
 }
@@ -94,7 +95,8 @@ impl<T: AsyncRead> AsyncRead for MonTraffic<T> {
         let this = self.project();
         let r = ready!(this.s.poll_read(cx, buf));
         if r.is_ok() {
-            this.rx.as_ref().map(|rx| rx.incr_rx(buf.filled().len() as u64));
+            this.rx
+                .map(|rx| counter(rx, buf.filled().len() as u64, "stream", this.context));
         }
         Poll::Ready(Ok(()))
     }
@@ -105,7 +107,7 @@ impl<T: AsyncWrite> AsyncWrite for MonTraffic<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write(cx, buf));
         if let Ok(n) = r {
-            this.tx.as_ref().map(|tx| tx.incr_tx(n as u64));
+            this.tx.map(|tx| counter(tx, n as u64, "stream", this.context));
         }
         Poll::Ready(r)
     }
@@ -128,7 +130,7 @@ impl<T: AsyncWrite> AsyncWrite for MonTraffic<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write_vectored(cx, bufs));
         if let Ok(n) = r {
-            this.tx.as_ref().map(|tx| tx.incr_tx(n as u64));
+            this.tx.map(|tx| counter(tx, n as u64, "stream", this.context));
         }
         Poll::Ready(r)
     }
@@ -140,15 +142,16 @@ impl<T: AsyncWrite> AsyncWrite for MonTraffic<T> {
 
 #[pin_project::pin_project]
 pub struct MonTrafficRead<T> {
-    rx: Option<Arc<FlowStat>>,
+    context: BuContext,
+    rx: &'static str,
     #[pin]
     s: T,
 }
 
 impl<T> MonTrafficRead<T> {
     #[inline]
-    pub fn new(s: T, rx: Option<Arc<FlowStat>>) -> Self {
-        Self { rx, s }
+    pub fn new(s: T, context: BuContext, rx: &'static str) -> Self {
+        Self { context, rx, s }
     }
 }
 
@@ -157,7 +160,7 @@ impl<T: AsyncRead> AsyncRead for MonTrafficRead<T> {
         let this = self.project();
         let r = ready!(this.s.poll_read(cx, buf));
         if r.is_ok() {
-            this.rx.as_ref().map(|rx| rx.incr_rx(buf.filled().len() as u64));
+            counter(*this.rx, buf.filled().len() as u64, "stream", this.context);
         }
         Poll::Ready(Ok(()))
     }
@@ -165,15 +168,16 @@ impl<T: AsyncRead> AsyncRead for MonTrafficRead<T> {
 
 #[pin_project::pin_project]
 pub struct MonTrafficWrite<T> {
-    tx: Option<Arc<FlowStat>>,
+    context: BuContext,
+    tx: &'static str,
     #[pin]
     s: T,
 }
 
 impl<T> MonTrafficWrite<T> {
     #[inline]
-    pub fn new(s: T, tx: Option<Arc<FlowStat>>) -> Self {
-        Self { tx, s }
+    pub fn new(s: T, context: BuContext, tx: &'static str) -> Self {
+        Self { context, tx, s }
     }
 }
 
@@ -182,7 +186,7 @@ impl<T: AsyncWrite> AsyncWrite for MonTrafficWrite<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write(cx, buf));
         if let Ok(n) = r {
-            this.tx.as_ref().map(|tx| tx.incr_tx(n as u64));
+            counter(*this.tx, n as u64, "stream", this.context);
         }
         Poll::Ready(r)
     }
@@ -205,7 +209,7 @@ impl<T: AsyncWrite> AsyncWrite for MonTrafficWrite<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write_vectored(cx, bufs));
         if let Ok(n) = r {
-            this.tx.as_ref().map(|tx| tx.incr_tx(n as u64));
+            counter(*this.tx, n as u64, "stream", this.context);
         }
         Poll::Ready(r)
     }

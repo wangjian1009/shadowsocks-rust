@@ -57,6 +57,8 @@ impl TcpServer {
             authentication_timeout,
             idle_timeout,
             Arc::new(Box::new(ServerPolicy::new(self.context.clone(), svr_cfg.timeout()))),
+            #[cfg(feature = "statistics")]
+            shadowsocks::statistics::BuContext::new(shadowsocks::config::ServerProtocolType::Tuic, None),
         )?;
 
         info!("tuic listening on {}", svr_cfg.addr());

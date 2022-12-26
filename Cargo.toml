@@ -70,6 +70,7 @@ default = [
     "logging-file",
     "logging-apm",
     "logging-jaeger",
+    "statistics-prometheus",
     "trust-dns",
     "stream-cipher",
     "local",
@@ -157,6 +158,10 @@ logging-file = ["logging", "tracing-appender"]
 logging-apm = ["logging", "url", "tracing-elastic-apm", "sysinfo"]
 logging-jaeger = ["logging", "url", "tracing-opentelemetry", "opentelemetry", "opentelemetry-jaeger"]
 
+# Enable metrics
+statistics=["metrics", "shadowsocks-service/statistics"]
+statistics-prometheus = ["statistics", "metrics-util", "metrics-exporter-prometheus"]
+
 # Enable DNS-relay
 local-dns = ["local", "shadowsocks-service/local-dns"]
 # Enable client flow statistic report
@@ -237,6 +242,11 @@ opentelemetry-jaeger = { version = "*", features = ["rt-tokio", "hyper_collector
 tracing-elastic-apm = { version = "3.2.3", optional = true, features = ["rustls-tls"], default-features = false }
 url = { version = "*", optional = true }
 sysinfo = { version = "*", optional = true }
+
+#metrics
+metrics = { version = "0.20", optional = true }
+metrics-util = { version = "^0.14", optional = true }
+metrics-exporter-prometheus = { version = "0.11", optional = true }
 
 clap = { version = "4.0", features = ["wrap_help", "suggestions"] }
 cfg-if = "1"

@@ -29,6 +29,14 @@ cfg_if! {
         pub enum ServerMockProtocol {
             DNS,
         }
+
+        impl std::fmt::Display for ServerMockProtocol {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Self::DNS => write!(f, "dns"),
+                }
+            }
+        }
     }
 }
 

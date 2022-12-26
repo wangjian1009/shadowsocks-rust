@@ -54,6 +54,7 @@ transport-tls = ["transport", "tokio-rustls", "webpki", "rustls-native-certs", "
 transport-mkcp = ["transport", "arc-swap", "rand"]
 transport-skcp = ["transport"]
 flow-stat = []
+statistics = ["metrics"]
 
 trojan = ["rand"]
 vless = ["rand", "hex"]
@@ -62,8 +63,8 @@ tuic = ["byteorder", "quinn", "parking_lot", "crossbeam-utils", "rustls", "rustl
 rate-limit = ["governor", "nonzero_ext", "futures-timer", "quanta", "lazy_static", "regex"]
 
 [dependencies]
-tracing = "0.1.10"
-metrics = "0.20"
+tracing = "0.1.35"
+metrics = { version = "0.20", optional = true }
 
 libc = "0.2.94"
 bytes = "1.2"

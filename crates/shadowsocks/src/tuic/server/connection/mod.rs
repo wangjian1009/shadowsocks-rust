@@ -41,6 +41,8 @@ pub struct Connection {
     server_policy: Arc<Box<dyn ServerPolicy>>,
     flow_state: Option<Arc<FlowStat>>,
     idle_timeout: Duration,
+    #[cfg(feature = "statistics")]
+    bu_context: crate::statistics::BuContext,
 }
 
 impl Connection {
@@ -51,6 +53,7 @@ impl Connection {
         idle_timeout: Duration,
         server_policy: Arc<Box<dyn ServerPolicy>>,
         cancel_waiter: CancelWaiter,
+        #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
     ) {
         let (connection, mut uni_streams, mut bi_streams, mut datagrams) = match conn.await {
             Ok(NewConnection {
@@ -87,6 +90,8 @@ impl Connection {
             server_policy,
             flow_state,
             idle_timeout: idle_timeout.clone(),
+            #[cfg(feature = "statistics")]
+            bu_context,
         };
 
         let mut is_authed = false;

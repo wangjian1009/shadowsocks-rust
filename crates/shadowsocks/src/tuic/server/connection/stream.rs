@@ -18,7 +18,7 @@ use crate::{
     policy::{ServerPolicy, StreamAction},
     relay::tcprelay::utils_copy::copy_bidirectional,
     timeout::TimeoutWaiter,
-    transport::MonTraffic,
+    transport::{MonTraffic, MonTrafficRead, MonTrafficWrite},
     ServerAddr,
 };
 
@@ -35,6 +35,7 @@ pub async fn connect(
     addr: ServerAddr,
     flow_state: Option<Arc<FlowStat>>,
     idle_timeout: Duration,
+    #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
 ) {
     match server_policy
         .stream_check(Some(&ServerAddr::SocketAddr(peer_addr.clone())), &addr)
@@ -86,6 +87,15 @@ pub async fn connect(
             #[allow(unused_mut)]
             let mut tunnel = MonTraffic::new_with_tx_rx(BiStream(send, recv), flow_state_tx, flow_state.clone());
 
+            #[cfg(feature = "statistics")]
+            #[allow(unused_mut)]
+            let mut tunnel = crate::statistics::MonTraffic::new(
+                tunnel,
+                bu_context.clone(),
+                Some("total_traffic_bu_tx"),
+                Some("total_traffic_bu_rx"),
+            );
+
             cfg_if! {
                 if #[cfg(feature = "rate-limit")] {
                     let mut tunnel =
@@ -114,10 +124,13 @@ pub async fn connect(
                 None => return,
             };
 
-            let flow_state_tx = flow_state.clone();
-            let flow_state_rx = flow_state;
-            let send = MonTraffic::new_with_tx_rx(send, flow_state_tx, None);
-            let recv = MonTraffic::new_with_tx_rx(recv, None, flow_state_rx);
+            let send = MonTrafficWrite::new(send, flow_state.clone());
+            let recv = MonTrafficRead::new(recv, flow_state);
+
+            #[cfg(feature = "statistics")]
+            let send = crate::statistics::MonTrafficWrite::new(send, bu_context.clone(), "total_traffic_bu_tx");
+            #[cfg(feature = "statistics")]
+            let recv = crate::statistics::MonTrafficRead::new(recv, bu_context.clone(), "total_traffic_bu_rx");
 
             let timeout_waiter = TimeoutWaiter::new(idle_timeout);
             let timeout_ticker = timeout_waiter.ticker();

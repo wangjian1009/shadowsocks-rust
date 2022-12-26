@@ -50,6 +50,9 @@ pub async fn serve(
     idle_timeout: Duration,
     server_policy: Arc<Box<dyn ServerPolicy>>,
 ) -> io::Result<()> {
+    #[allow(unused_variables)]
+    let listen_addr = listener.local_addr().unwrap();
+
     loop {
         let (incoming, peer_addr) = tokio::select! {
             r = listener.accept_stream() => {

@@ -15,6 +15,9 @@ pub mod vparser;
 #[cfg(feature = "lib-entry")]
 mod libentry;
 
+#[cfg(feature = "statistics")]
+pub mod statistics;
+
 /// Exit code when server exits unexpectedly
 pub const EXIT_CODE_SERVER_EXIT_UNEXPECTEDLY: sysexits::ExitCode = sysexits::ExitCode::Software;
 /// Exit code when server aborted

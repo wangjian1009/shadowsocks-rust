@@ -56,13 +56,13 @@ cfg_if! {
 }
 
 mod protocol;
-pub use protocol::ServerProtocol;
+pub use protocol::{ServerProtocol, ServerProtocolType};
 
 // 传输配置
 cfg_if! {
     if #[cfg(feature = "transport")] {
         mod transport;
-        pub use transport::{TransportConnectorConfig, TransportAcceptorConfig, available_transports};
+        pub use transport::{TransportType, TransportConnectorConfig, TransportAcceptorConfig, available_transports};
     }
 }
 

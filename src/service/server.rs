@@ -54,6 +54,9 @@ use crate::{
     monitor, vparser,
 };
 
+#[cfg(feature = "statistics")]
+use crate::statistics;
+
 /// Defines command line options
 pub fn define_command_line_options(mut app: Command) -> Command {
     app = app
@@ -341,6 +344,17 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                 .action(ArgAction::Set)
                 .value_parser(clap::value_parser!(url::Url))
                 .help("log jaeger server url"),
+        );
+    }
+
+    #[cfg(feature = "statistics-prometheus")]
+    {
+        app = app.arg(
+            Arg::new("PROMETHEUS_PUSH_URL")
+                .long("prometheus-push-gateway")
+                .action(ArgAction::Set)
+                .value_parser(clap::value_parser!(url::Url))
+                .help("push metrics to prometheus PushGateway"),
         );
     }
 
@@ -875,6 +889,31 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
     runtime.block_on(async move {
         #[cfg(feature = "logging")]
         let log_guard = logging::init_with_config("ssserver", &service_config.log);
+
+        #[cfg(feature = "statistics-prometheus")]
+        if let Some(push_gateway) = matches.get_one::<url::Url>("PROMETHEUS_PUSH_URL") {
+            let instance = matches
+                .get_one::<String>("SERVER_ADDR")
+                .map(|t| {
+                    Address::parse_with_dft_port(t, 0)
+                        .map(|p| {
+                            if p.port() == 0 {
+                                None
+                            } else {
+                                Some(format!("{}", p.port()))
+                            }
+                        })
+                        .unwrap_or(None)
+                })
+                .unwrap_or(None);
+
+            statistics::prometheus::install_push_gateway(
+                push_gateway,
+                "miner",
+                instance.as_ref().map(|s| s.as_str()),
+                Duration::from_secs(10),
+            );
+        }
 
         info!("shadowsocks server {} build {}", crate::VERSION, crate::BUILD_TIME);
         info!("{:?}", service_config);

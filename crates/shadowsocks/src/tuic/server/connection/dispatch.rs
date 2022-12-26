@@ -86,12 +86,18 @@ impl Connection {
         let cmd = Command::read_from(&mut recv).await?;
         let rmt_addr = self.controller.remote_address();
 
+        #[cfg(feature = "statistics")]
+        let _in_conn_guard = crate::statistics::InConnGuard::new(self.bu_context.clone());
+
         if self.is_authenticated.clone().await {
             match cmd {
                 Command::Connect { addr } => {
                     let addr = ServerAddr::from(addr);
                     let span = info_span!("connection", target = addr.to_string());
                     async move {
+                        #[cfg(feature = "statistics")]
+                        let _in_conn_guard = _in_conn_guard;
+
                         tokio::select! {
                             _ = stream::connect(
                                 self.server_policy.clone(),
@@ -101,6 +107,7 @@ impl Connection {
                                 addr,
                                 self.flow_state.clone(),
                                 self.idle_timeout.clone(),
+                                #[cfg(feature = "statistics")] self.bu_context.clone(),
                             ) => {}
                             _ = waiter.wait() => {}
                         }

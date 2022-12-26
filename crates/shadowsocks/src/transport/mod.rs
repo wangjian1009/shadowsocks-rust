@@ -23,7 +23,7 @@ mod mut_packet;
 
 pub use device::{Device, DeviceGuard, DeviceOrGuard, PrivateDevice};
 pub use dummy_packet::DummyPacket;
-pub use mon_traffic::MonTraffic;
+pub use mon_traffic::{MonTraffic, MonTrafficRead, MonTrafficWrite};
 pub use mut_packet::MutPacketWriter;
 
 cfg_if! {

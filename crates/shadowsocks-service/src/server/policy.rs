@@ -17,7 +17,7 @@ use tokio::{
 
 use shadowsocks::{
     lookup_then,
-    net::{AddrFamily, FlowStat, TcpStream, UdpSocket},
+    net::{AddrCategory, AddrFamily, FlowStat, TcpStream, UdpSocket},
     policy,
     timeout::TimeoutTicker,
 };
@@ -57,7 +57,27 @@ impl Drop for InConnectionGuard {
 
 /// OutConnectionGuard
 pub struct OutConnectionGuard {
+    _category: AddrCategory,
     _guard: super::connection::OutConnectionGuard,
+}
+
+impl OutConnectionGuard {
+    pub fn new(guard: super::connection::OutConnectionGuard, category: AddrCategory) -> Self {
+        #[cfg(feature = "statistics")]
+        increment_gauge!("tcp_conn_out", 1.0, "addr-category" => format!("{}", category));
+
+        Self {
+            _category: category,
+            _guard: guard,
+        }
+    }
+}
+
+impl Drop for OutConnectionGuard {
+    fn drop(&mut self) {
+        #[cfg(feature = "statistics")]
+        decrement_gauge!("tcp_conn_out", 1.0, "addr-category" => format!("{}", self._category));
+    }
 }
 
 impl policy::ConnectionGuard for OutConnectionGuard {}
@@ -71,6 +91,22 @@ cfg_if! {
             context: Arc<ServiceContext>,
             protocol: ServerMockProtocol,
             _remote_guard: InConnectionGuard,
+        }
+
+        impl LocalProcessor {
+            pub fn new (context: Arc<ServiceContext>, protocol: ServerMockProtocol, guard: InConnectionGuard) -> Self {
+                #[cfg(feature = "statistics")]
+                increment_gauge!("tcp_conn_out", 1.0, "addr-category" => format!("inapp-{}", protocol));
+
+                Self { context, protocol, _remote_guard: guard }
+            }
+        }
+
+        impl Drop for LocalProcessor {
+            fn drop(&mut self) {
+                #[cfg(feature = "statistics")]
+                decrement_gauge!("tcp_conn_out", 1.0, "addr-category" => format!("inapp-{}", self.protocol));
+            }
         }
 
         #[async_trait]
@@ -124,6 +160,8 @@ impl policy::ServerPolicy for ServerPolicy {
         &self,
         target_addr: ServerAddr,
     ) -> io::Result<(TcpStream, Box<dyn policy::ConnectionGuard>)> {
+        let addr_category = AddrCategory::from(&target_addr);
+
         let stream = timeout_fut(
             self.connect_timeout.clone(),
             shadowsocks::net::TcpStream::connect_remote_with_opts(
@@ -136,9 +174,10 @@ impl policy::ServerPolicy for ServerPolicy {
 
         Ok((
             stream,
-            Box::new(OutConnectionGuard {
-                _guard: self.context.connection_stat().add_out_connection(),
-            }) as Box<dyn policy::ConnectionGuard>,
+            Box::new(OutConnectionGuard::new(
+                self.context.connection_stat().add_out_connection(),
+                addr_category,
+            )) as Box<dyn policy::ConnectionGuard>,
         ))
     }
 
@@ -214,11 +253,11 @@ impl policy::ServerPolicy for ServerPolicy {
             if #[cfg(feature = "server-mock")] {
                 if let Some(protocol) = self.context.mock_server_protocol(&target_addr) {
                     return Ok(policy::StreamAction::Local {
-                        processor: Box::new(LocalProcessor {
-                            context: self.context.clone(),
-                            protocol: protocol.clone(),
-                            _remote_guard: remote_guard,
-                        })
+                        processor: Box::new(LocalProcessor::new(
+                            self.context.clone(),
+                            protocol.clone(),
+                            remote_guard,
+                        ))
                     });
                 }
             }

@@ -556,8 +556,18 @@ async fn socks5_relay_aead() {
     const PASSWORD: &str = "test-password";
     const METHOD: CipherKind = CipherKind::AES_256_GCM;
 
-    let svr = Socks5TestServer::new(SERVER_ADDR, LOCAL_ADDR, PASSWORD, METHOD, false);
-    svr.run().await;
+    let svr = Socks5TestServer::new(
+        SERVER_ADDR,
+        ServerProtocol::SS(ShadowsocksConfig::new(PASSWORD, CipherKind::AES_256_GCM)),
+        #[cfg(feature = "transport")]
+        None,
+        LOCAL_ADDR,
+        ServerProtocol::SS(ShadowsocksConfig::new(PASSWORD, CipherKind::AES_256_GCM)),
+        #[cfg(feature = "transport")]
+        None,
+        Mode::TcpOnly,
+    );
+    svr.start().await.expect("start server error");
 
     let mut c = Socks5TcpClient::connect(
         Address::DomainNameAddress("detectportal.firefox.com".to_owned(), 80),

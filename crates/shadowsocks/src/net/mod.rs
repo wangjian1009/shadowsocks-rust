@@ -21,6 +21,9 @@ pub mod tcp;
 pub mod udp;
 pub mod util;
 
+mod addr_category;
+pub use addr_category::AddrCategory;
+
 #[cfg(any(unix, windows))]
 pub use util::check_peekable;
 

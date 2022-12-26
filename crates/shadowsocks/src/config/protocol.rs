@@ -1,5 +1,30 @@
 use super::*;
 
+#[derive(Clone)]
+pub enum ServerProtocolType {
+    SS,
+    #[cfg(feature = "trojan")]
+    Trojan,
+    #[cfg(feature = "vless")]
+    Vless,
+    #[cfg(feature = "tuic")]
+    Tuic,
+}
+
+impl ServerProtocolType {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::SS => "shadowsocks",
+            #[cfg(feature = "trojan")]
+            Self::Trojan => "trojan",
+            #[cfg(feature = "vless")]
+            Self::Vless => "vless",
+            #[cfg(feature = "tuic")]
+            Self::Tuic => "tuic",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ServerProtocol {
     SS(ShadowsocksConfig),
@@ -24,16 +49,20 @@ impl ServerProtocol {
         ]
     }
 
-    pub fn name(&self) -> &'static str {
+    pub fn tpe(&self) -> ServerProtocolType {
         match self {
-            Self::SS(..) => "shadowsocks",
+            Self::SS(..) => ServerProtocolType::SS,
             #[cfg(feature = "trojan")]
-            Self::Trojan(..) => "trojan",
+            Self::Trojan(..) => ServerProtocolType::Trojan,
             #[cfg(feature = "vless")]
-            Self::Vless(..) => "vless",
+            Self::Vless(..) => ServerProtocolType::Vless,
             #[cfg(feature = "tuic")]
-            Self::Tuic(..) => "tuic",
+            Self::Tuic(..) => ServerProtocolType::Tuic,
         }
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.tpe().name()
     }
 
     pub fn support_native_packet(&self) -> Option<bool> {

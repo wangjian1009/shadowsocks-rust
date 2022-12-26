@@ -236,6 +236,37 @@ pub const fn available_transports() -> &'static [&'static str] {
     ]
 }
 
+#[derive(Clone)]
+pub enum TransportType {
+    #[cfg(feature = "transport-ws")]
+    Ws,
+    #[cfg(feature = "transport-tls")]
+    Tls,
+    #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+    Wss,
+    #[cfg(feature = "transport-mkcp")]
+    Mkcp,
+    #[cfg(feature = "transport-skcp")]
+    Skcp,
+}
+
+impl TransportType {
+    pub fn name(&self) -> &'static str {
+        match self {
+            #[cfg(feature = "transport-ws")]
+            Self::Ws => "ws",
+            #[cfg(feature = "transport-tls")]
+            Self::Tls => "tss",
+            #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+            Self::Wss => "wss",
+            #[cfg(feature = "transport-mkcp")]
+            Self::Mkcp => "mkcp",
+            #[cfg(feature = "transport-skcp")]
+            Self::Skcp => "skcp",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransportConnectorConfig {
     #[cfg(feature = "transport-ws")]
@@ -275,21 +306,25 @@ impl TransportConnectorConfig {
         }
     }
 
-    pub fn name(&self) -> &str {
+    pub fn tpe(&self) -> TransportType {
         match self {
             #[cfg(feature = "transport-ws")]
-            Self::Ws(..) => "ws",
+            Self::Ws(..) => TransportType::Ws,
             #[cfg(feature = "transport-tls")]
-            Self::Tls(..) => "tls",
+            Self::Tls(..) => TransportType::Tls,
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
-            Self::Wss(..) => "wss",
+            Self::Wss(..) => TransportType::Wss,
             #[cfg(feature = "transport-mkcp")]
-            Self::Mkcp(..) => "mkcp",
+            Self::Mkcp(..) => TransportType::Mkcp,
             #[cfg(feature = "transport-skcp")]
-            Self::Skcp(..) => "skcp",
+            Self::Skcp(..) => TransportType::Skcp,
         }
     }
-    
+
+    pub fn name(&self) -> &'static str {
+        self.tpe().name()
+    }
+
     #[cfg(feature = "transport-ws")]
     #[inline]
     fn build_ws_config(host: &Option<&str>, path: &str) -> WebSocketConnectorConfig {
@@ -507,19 +542,24 @@ pub enum TransportAcceptorConfig {
 }
 
 impl TransportAcceptorConfig {
-    pub fn protocol_name(&self) -> &'static str {
+    pub fn tpe(&self) -> TransportType {
         match self {
             #[cfg(feature = "transport-ws")]
-            Self::Ws(..) => "ws",
+            Self::Ws(..) => TransportType::Ws,
             #[cfg(feature = "transport-tls")]
-            Self::Tls(..) => "tls",
+            Self::Tls(..) => TransportType::Tls,
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
-            Self::Wss(..) => "wss",
+            Self::Wss(..) => TransportType::Wss,
             #[cfg(feature = "transport-mkcp")]
-            Self::Mkcp(..) => "mkcp",
+            Self::Mkcp(..) => TransportType::Mkcp,
             #[cfg(feature = "transport-skcp")]
-            Self::Skcp(..) => "skcp",
+            Self::Skcp(..) => TransportType::Skcp,
         }
+    }
+
+    #[inline]
+    pub fn name(&self) -> &'static str {
+        self.tpe().name()
     }
 
     fn build(

@@ -35,6 +35,7 @@ default = [
     "server-mock",
     "rate-limit",
     "env-crypt",
+    "statistics",
     "sniffer-bittorrent",
     "sniffer-http",
     "sniffer-tls",
@@ -60,6 +61,7 @@ full = [
     "server-limit",
     "server-mock",
     "rate-limit",
+    "statistics",
     "sniffer-bittorrent",
     "sniffer-http",
     "sniffer-tls",
@@ -99,6 +101,9 @@ sniffer-tls = ["sniffer"]
 
 # env-crypt
 env-crypt = ["aes", "block-modes"]
+
+# statistics
+statistics = ["metrics", "shadowsocks/statistics"]
 
 # enable transport
 transport = []
@@ -157,8 +162,8 @@ aead-cipher-2022-extra = ["shadowsocks/aead-cipher-2022-extra"]
 security-replay-attack-detect = ["shadowsocks/security-replay-attack-detect"]
 
 [dependencies]
-metrics = "0.20"
-tracing = "0.1.10"
+tracing = "0.1.35"
+metrics = { version = "0.20", optional = true }
 
 cfg-if = "1"
 pin-project = "1.0"

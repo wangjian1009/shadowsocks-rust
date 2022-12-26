@@ -182,11 +182,13 @@ impl TcpServer {
         let server_policy = Arc::new(Box::new(ServerPolicy::new(self.context.clone(), svr_cfg.timeout()))
             as Box<dyn shadowsocks::policy::ServerPolicy>);
 
+        let listen_addr = listener.local_addr().unwrap();
+
         info!(
             proto = svr_cfg.protocol().name(),
             trans = svr_cfg.acceptor_transport_tag(),
             "tcp server listening on {}",
-            listener.local_addr().unwrap(),
+            listen_addr,
         );
 
         #[cfg(feature = "trojan")]
@@ -253,6 +255,12 @@ impl TcpServer {
                 }
             };
 
+            #[cfg(feature = "statistics")]
+            let _in_conn_guard = shadowsocks::statistics::InConnGuard::new(shadowsocks::statistics::BuContext::new(
+                svr_cfg.protocol().tpe(),
+                svr_cfg.acceptor_transport().map(|t| t.tpe()),
+            ));
+
             #[cfg(not(feature = "server-limit"))]
             let conn = connection_stat.add_in_connection(peer_addr).await;
 
@@ -279,6 +287,8 @@ impl TcpServer {
                             let delay = *delay;
                             tokio::spawn(
                                 async move {
+                                    #[cfg(feature = "statistics")]
+                                    let _in_conn_guard = _in_conn_guard;
                                     let _local_stream = local_stream;
                                     tokio::time::sleep(delay).await;
                                 }
@@ -322,6 +332,9 @@ impl TcpServer {
                     let method = ss_cfg.method();
                     tokio::spawn(
                         async move {
+                            #[cfg(feature = "statistics")]
+                            let _in_conn_guard = _in_conn_guard;
+
                             if let Err(err) = client.serve_ss(method, local_stream, connection_stat.clone()).await {
                                 debug!("tcp server stream aborted with error: {}", err);
                             }
@@ -340,6 +353,9 @@ impl TcpServer {
                     let inbound = vless_inbound.clone();
                     tokio::spawn(
                         async move {
+                            #[cfg(feature = "statistics")]
+                            let _in_conn_guard = _in_conn_guard;
+
                             if let Err(err) = client.serve_vless(inbound.unwrap(), local_stream).await {
                                 debug!("tcp server stream aborted with error: {}", err);
                             }

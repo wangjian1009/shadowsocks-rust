@@ -14,6 +14,8 @@ pub struct Server {
     authentication_timeout: Duration,
     idle_timeout: Duration,
     policy: Arc<Box<dyn ServerPolicy>>,
+    #[cfg(feature = "statistics")]
+    bu_context: crate::statistics::BuContext,
 }
 
 impl Server {
@@ -24,6 +26,7 @@ impl Server {
         auth_timeout: Duration,
         idle_timeout: Duration,
         policy: Arc<Box<dyn ServerPolicy>>,
+        #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
     ) -> Result<Self> {
         let (endpoint, incoming) = Endpoint::server(
             config,
@@ -41,6 +44,8 @@ impl Server {
             authentication_timeout: auth_timeout,
             idle_timeout,
             policy,
+            #[cfg(feature = "statistics")]
+            bu_context,
         })
     }
 
@@ -60,6 +65,7 @@ impl Server {
                                 self.idle_timeout,
                                 self.policy.clone(),
                                 cancel_waiter.clone(),
+                                self.bu_context.clone(),
                             )
                             .instrument(span),
                         );

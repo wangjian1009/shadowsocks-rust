@@ -60,3 +60,10 @@ pub mod tuic;
 
 #[cfg(test)]
 mod test;
+
+#[cfg(feature = "statistics")]
+#[macro_use]
+extern crate metrics;
+
+#[cfg(feature = "statistics")]
+pub mod statistics;
