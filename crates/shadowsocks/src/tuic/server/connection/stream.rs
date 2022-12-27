@@ -92,8 +92,7 @@ pub async fn connect(
             let mut tunnel = crate::statistics::MonTraffic::new(
                 tunnel,
                 bu_context.clone(),
-                Some("total_traffic_bu_tx"),
-                Some("total_traffic_bu_rx"),
+                crate::statistics::METRIC_TRAFFIC_BU_TOTAL,
             );
 
             cfg_if! {
@@ -128,9 +127,17 @@ pub async fn connect(
             let recv = MonTrafficRead::new(recv, flow_state);
 
             #[cfg(feature = "statistics")]
-            let send = crate::statistics::MonTrafficWrite::new(send, bu_context.clone(), "total_traffic_bu_tx");
+            let send = crate::statistics::MonTrafficWrite::new(
+                send,
+                bu_context.clone(),
+                crate::statistics::METRIC_TRAFFIC_BU_TOTAL,
+            );
             #[cfg(feature = "statistics")]
-            let recv = crate::statistics::MonTrafficRead::new(recv, bu_context.clone(), "total_traffic_bu_rx");
+            let recv = crate::statistics::MonTrafficRead::new(
+                recv,
+                bu_context.clone(),
+                crate::statistics::METRIC_TRAFFIC_BU_TOTAL,
+            );
 
             let timeout_waiter = TimeoutWaiter::new(idle_timeout);
             let timeout_ticker = timeout_waiter.ticker();

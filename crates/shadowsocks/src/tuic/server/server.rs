@@ -65,6 +65,7 @@ impl Server {
                                 self.idle_timeout,
                                 self.policy.clone(),
                                 cancel_waiter.clone(),
+                                #[cfg(feature = "statistics")]
                                 self.bu_context.clone(),
                             )
                             .instrument(span),

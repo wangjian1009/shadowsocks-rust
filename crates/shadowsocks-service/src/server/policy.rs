@@ -64,7 +64,8 @@ pub struct OutConnectionGuard {
 impl OutConnectionGuard {
     pub fn new(guard: super::connection::OutConnectionGuard, category: AddrCategory) -> Self {
         #[cfg(feature = "statistics")]
-        increment_gauge!("tcp_conn_out", 1.0, "addr-category" => format!("{}", category));
+        increment_gauge!(
+            shadowsocks::statistics::METRIC_TCP_CONN_OUT, 1.0, "category" => format!("{}", category));
 
         Self {
             _category: category,
@@ -76,7 +77,8 @@ impl OutConnectionGuard {
 impl Drop for OutConnectionGuard {
     fn drop(&mut self) {
         #[cfg(feature = "statistics")]
-        decrement_gauge!("tcp_conn_out", 1.0, "addr-category" => format!("{}", self._category));
+        decrement_gauge!(
+            shadowsocks::statistics::METRIC_TCP_CONN_OUT, 1.0, "category" => format!("{}", self._category));
     }
 }
 
@@ -96,7 +98,7 @@ cfg_if! {
         impl LocalProcessor {
             pub fn new (context: Arc<ServiceContext>, protocol: ServerMockProtocol, guard: InConnectionGuard) -> Self {
                 #[cfg(feature = "statistics")]
-                increment_gauge!("tcp_conn_out", 1.0, "addr-category" => format!("inapp-{}", protocol));
+                increment_gauge!(shadowsocks::statistics::METRIC_TCP_CONN_OUT, 1.0, "category" => format!("inapp-{}", protocol));
 
                 Self { context, protocol, _remote_guard: guard }
             }
@@ -105,7 +107,7 @@ cfg_if! {
         impl Drop for LocalProcessor {
             fn drop(&mut self) {
                 #[cfg(feature = "statistics")]
-                decrement_gauge!("tcp_conn_out", 1.0, "addr-category" => format!("inapp-{}", self.protocol));
+                decrement_gauge!(shadowsocks::statistics::METRIC_TCP_CONN_OUT, 1.0, "category" => format!("inapp-{}", self.protocol));
             }
         }
 

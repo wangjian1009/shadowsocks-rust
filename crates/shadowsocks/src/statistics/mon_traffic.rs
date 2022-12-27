@@ -11,38 +11,23 @@ use crate::{
     ServerAddr,
 };
 
-use super::BuContext;
+use super::{BuContext, TrafficNet, TrafficWay};
 
 #[cfg(feature = "rate-limit")]
 use crate::transport::RateLimiter;
 
-fn counter(key: &'static str, count: u64, net: &'static str, context: &BuContext) {
-    counter!(key, count, "net" => net, "proto" => context.protocol.name(), "trans" => context.transport.as_ref().map(|t| t.name()).unwrap_or("none"));
-}
-
 #[pin_project::pin_project]
 pub struct MonTraffic<T> {
     context: BuContext,
-    tx: Option<&'static str>,
-    rx: Option<&'static str>,
+    key: &'static str,
     #[pin]
     s: T,
 }
 
 impl<T> MonTraffic<T> {
     #[inline]
-    pub fn new(s: T, context: BuContext, tx: Option<&'static str>, rx: Option<&'static str>) -> Self {
-        Self { context, tx, rx, s }
-    }
-
-    #[inline]
-    pub fn set_tx(&mut self, tx: Option<&'static str>) {
-        self.tx = tx;
-    }
-
-    #[inline]
-    pub fn set_rx(&mut self, rx: Option<&'static str>) {
-        self.rx = rx;
+    pub fn new(s: T, context: BuContext, key: &'static str) -> Self {
+        Self { context, key, s }
     }
 }
 
@@ -50,7 +35,8 @@ impl<T> MonTraffic<T> {
 impl<T: PacketMutWrite> PacketMutWrite for MonTraffic<T> {
     async fn write_to_mut(&mut self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         self.s.write_to_mut(buf, addr).await?;
-        self.tx.map(|tx| counter(tx, buf.len() as u64, "stream", &self.context));
+        self.context
+            .count_traffic(self.key, buf.len() as u64, TrafficNet::Tcp, TrafficWay::Send);
         Ok(())
     }
 }
@@ -59,7 +45,8 @@ impl<T: PacketMutWrite> PacketMutWrite for MonTraffic<T> {
 impl<T: PacketWrite> PacketWrite for MonTraffic<T> {
     async fn write_to(&self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         self.s.write_to(buf, addr).await?;
-        self.tx.map(|tx| counter(tx, buf.len() as u64, "stream", &self.context));
+        self.context
+            .count_traffic(self.key, buf.len() as u64, TrafficNet::Tcp, TrafficWay::Send);
         Ok(())
     }
 }
@@ -68,7 +55,8 @@ impl<T: PacketWrite> PacketWrite for MonTraffic<T> {
 impl<T: PacketRead> PacketRead for MonTraffic<T> {
     async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
         let r = self.s.read_from(buf).await?;
-        self.rx.map(|rx| counter(rx, buf.len() as u64, "stream", &self.context));
+        self.context
+            .count_traffic(self.key, buf.len() as u64, TrafficNet::Tcp, TrafficWay::Recv);
         Ok(r)
     }
 }
@@ -95,8 +83,8 @@ impl<T: AsyncRead> AsyncRead for MonTraffic<T> {
         let this = self.project();
         let r = ready!(this.s.poll_read(cx, buf));
         if r.is_ok() {
-            this.rx
-                .map(|rx| counter(rx, buf.filled().len() as u64, "stream", this.context));
+            this.context
+                .count_traffic(this.key, buf.filled().len() as u64, TrafficNet::Tcp, TrafficWay::Recv);
         }
         Poll::Ready(Ok(()))
     }
@@ -107,7 +95,8 @@ impl<T: AsyncWrite> AsyncWrite for MonTraffic<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write(cx, buf));
         if let Ok(n) = r {
-            this.tx.map(|tx| counter(tx, n as u64, "stream", this.context));
+            this.context
+                .count_traffic(this.key, n as u64, TrafficNet::Tcp, TrafficWay::Send);
         }
         Poll::Ready(r)
     }
@@ -130,7 +119,8 @@ impl<T: AsyncWrite> AsyncWrite for MonTraffic<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write_vectored(cx, bufs));
         if let Ok(n) = r {
-            this.tx.map(|tx| counter(tx, n as u64, "stream", this.context));
+            this.context
+                .count_traffic(this.key, n as u64, TrafficNet::Tcp, TrafficWay::Send);
         }
         Poll::Ready(r)
     }
@@ -143,15 +133,15 @@ impl<T: AsyncWrite> AsyncWrite for MonTraffic<T> {
 #[pin_project::pin_project]
 pub struct MonTrafficRead<T> {
     context: BuContext,
-    rx: &'static str,
+    key: &'static str,
     #[pin]
     s: T,
 }
 
 impl<T> MonTrafficRead<T> {
     #[inline]
-    pub fn new(s: T, context: BuContext, rx: &'static str) -> Self {
-        Self { context, rx, s }
+    pub fn new(s: T, context: BuContext, key: &'static str) -> Self {
+        Self { context, key, s }
     }
 }
 
@@ -160,7 +150,8 @@ impl<T: AsyncRead> AsyncRead for MonTrafficRead<T> {
         let this = self.project();
         let r = ready!(this.s.poll_read(cx, buf));
         if r.is_ok() {
-            counter(*this.rx, buf.filled().len() as u64, "stream", this.context);
+            this.context
+                .count_traffic(*this.key, buf.filled().len() as u64, TrafficNet::Tcp, TrafficWay::Recv);
         }
         Poll::Ready(Ok(()))
     }
@@ -169,15 +160,15 @@ impl<T: AsyncRead> AsyncRead for MonTrafficRead<T> {
 #[pin_project::pin_project]
 pub struct MonTrafficWrite<T> {
     context: BuContext,
-    tx: &'static str,
+    key: &'static str,
     #[pin]
     s: T,
 }
 
 impl<T> MonTrafficWrite<T> {
     #[inline]
-    pub fn new(s: T, context: BuContext, tx: &'static str) -> Self {
-        Self { context, tx, s }
+    pub fn new(s: T, context: BuContext, key: &'static str) -> Self {
+        Self { context, key, s }
     }
 }
 
@@ -186,7 +177,8 @@ impl<T: AsyncWrite> AsyncWrite for MonTrafficWrite<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write(cx, buf));
         if let Ok(n) = r {
-            counter(*this.tx, n as u64, "stream", this.context);
+            this.context
+                .count_traffic(*this.key, n as u64, TrafficNet::Tcp, TrafficWay::Send);
         }
         Poll::Ready(r)
     }
@@ -209,7 +201,8 @@ impl<T: AsyncWrite> AsyncWrite for MonTrafficWrite<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write_vectored(cx, bufs));
         if let Ok(n) = r {
-            counter(*this.tx, n as u64, "stream", this.context);
+            this.context
+                .count_traffic(*this.key, n as u64, TrafficNet::Tcp, TrafficWay::Send);
         }
         Poll::Ready(r)
     }

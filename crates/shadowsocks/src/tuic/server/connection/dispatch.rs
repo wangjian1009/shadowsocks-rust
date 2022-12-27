@@ -39,7 +39,15 @@ impl Connection {
                     }
 
                     let pkt = Bytes::from(buf);
+
                     self.flow_state.as_ref().map(|f| f.incr_rx(pkt.len() as u64));
+                    #[cfg(feature = "statistics")]
+                    self.bu_context.count_traffic(
+                        crate::statistics::METRIC_TRAFFIC_BU_TOTAL,
+                        pkt.len() as u64,
+                        crate::statistics::TrafficNet::Udp,
+                        crate::statistics::TrafficWay::Recv,
+                    );
 
                     if let Err(err) = self
                         .udp_sessions
@@ -50,6 +58,8 @@ impl Connection {
                             addr,
                             self.controller.remote_address(),
                             self.server_policy.clone(),
+                            #[cfg(feature = "statistics")]
+                            self.bu_context.clone(),
                         )
                         .await
                     {
@@ -87,7 +97,11 @@ impl Connection {
         let rmt_addr = self.controller.remote_address();
 
         #[cfg(feature = "statistics")]
-        let _in_conn_guard = crate::statistics::InConnGuard::new(self.bu_context.clone());
+        let _in_conn_guard = crate::statistics::ConnGuard::new(
+            self.bu_context.clone(),
+            crate::statistics::METRIC_TCP_CONN_IN,
+            Some(crate::statistics::METRIC_TCP_CONN_IN_TOTAL),
+        );
 
         if self.is_authenticated.clone().await {
             match cmd {
@@ -133,7 +147,15 @@ impl Connection {
                 Command::Packet { assoc_id, addr, .. } => {
                     let addr = ServerAddr::from(addr);
                     let pkt = datagram.slice(cmd_len..);
+
                     self.flow_state.as_ref().map(|f| f.incr_rx(pkt.len() as u64));
+                    #[cfg(feature = "statistics")]
+                    self.bu_context.count_traffic(
+                        crate::statistics::METRIC_TRAFFIC_BU_TOTAL,
+                        pkt.len() as u64,
+                        crate::statistics::TrafficNet::Udp,
+                        crate::statistics::TrafficWay::Recv,
+                    );
 
                     if let Err(err) = self
                         .udp_sessions
@@ -144,6 +166,8 @@ impl Connection {
                             addr,
                             self.controller.remote_address(),
                             self.server_policy.clone(),
+                            #[cfg(feature = "statistics")]
+                            self.bu_context.clone(),
                         )
                         .await
                     {
@@ -202,6 +226,13 @@ impl Connection {
                     }
 
                     self.flow_state.as_ref().map(|f| f.incr_tx(pkt.len() as u64));
+                    #[cfg(feature = "statistics")]
+                    self.bu_context.count_traffic(
+                        crate::statistics::METRIC_TRAFFIC_BU_TOTAL,
+                        pkt.len() as u64,
+                        crate::statistics::TrafficNet::Udp,
+                        crate::statistics::TrafficWay::Send,
+                    )
                 }
                 UdpSessionSource::Datagram => {
                     let cmd = Command::new_packet(assoc_id, pkt.len() as u16, Address::from(addr));
@@ -219,6 +250,13 @@ impl Connection {
                     }
 
                     self.flow_state.as_ref().map(|f| f.incr_tx(len as u64));
+                    #[cfg(feature = "statistics")]
+                    self.bu_context.count_traffic(
+                        crate::statistics::METRIC_TRAFFIC_BU_TOTAL,
+                        len as u64,
+                        crate::statistics::TrafficNet::Udp,
+                        crate::statistics::TrafficWay::Send,
+                    )
                 }
             }
 

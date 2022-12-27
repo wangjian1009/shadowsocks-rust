@@ -256,10 +256,14 @@ impl TcpServer {
             };
 
             #[cfg(feature = "statistics")]
-            let _in_conn_guard = shadowsocks::statistics::InConnGuard::new(shadowsocks::statistics::BuContext::new(
-                svr_cfg.protocol().tpe(),
-                svr_cfg.acceptor_transport().map(|t| t.tpe()),
-            ));
+            let _in_conn_guard = shadowsocks::statistics::ConnGuard::new(
+                shadowsocks::statistics::BuContext::new(
+                    svr_cfg.protocol().tpe(),
+                    svr_cfg.acceptor_transport().map(|t| t.tpe()),
+                ),
+                shadowsocks::statistics::METRIC_TCP_CONN_IN,
+                Some(shadowsocks::statistics::METRIC_TCP_CONN_IN_TOTAL),
+            );
 
             #[cfg(not(feature = "server-limit"))]
             let conn = connection_stat.add_in_connection(peer_addr).await;

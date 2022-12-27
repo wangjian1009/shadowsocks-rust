@@ -90,6 +90,7 @@ impl UdpSessionMap {
         addr: ServerAddr,
         src_addr: SocketAddr,
         server_policy: Arc<Box<dyn ServerPolicy>>,
+        #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
     ) -> Result<usize, IoError> {
         let mut send_pkt_tx = self
             .map
@@ -105,6 +106,8 @@ impl UdpSessionMap {
                 self.session_close_tx.clone(),
                 server_policy.as_ref(),
                 self.idle_timeout.clone(),
+                #[cfg(feature = "statistics")]
+                bu_context,
             )
             .instrument(info_span!("udp-session", id = assoc_id, source = format!("{:?}", source)).or_current())
             .await?;
@@ -174,6 +177,8 @@ struct UdpSession {
     span: Span,
     canceler: Canceler,
     task: tokio::task::JoinHandle<()>,
+    #[cfg(feature = "statistics")]
+    _in_conn_guard: crate::statistics::ConnGuard,
 }
 
 impl UdpSession {
@@ -184,6 +189,7 @@ impl UdpSession {
         session_close_tx: SessionCloseSender,
         server_policy: &Box<dyn ServerPolicy>,
         idle_timeout: Duration,
+        #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
     ) -> Result<Self, IoError> {
         let socket = Arc::new(server_policy.create_out_udp_socket().await?);
         let (send_pkt_tx, send_pkt_rx) = mpsc::channel(1);
@@ -217,6 +223,12 @@ impl UdpSession {
             span: Span::current(),
             canceler,
             task,
+            #[cfg(feature = "statistics")]
+            _in_conn_guard: crate::statistics::ConnGuard::new(
+                bu_context,
+                crate::statistics::METRIC_UDP_SESSION,
+                Some(crate::statistics::METRIC_UDP_SESSION_TOTAL),
+            ),
         })
     }
 
