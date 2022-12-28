@@ -52,10 +52,19 @@ pub trait UdpSocket: Sync + Send {
 #[async_trait]
 pub trait ServerPolicy: Sync + Send {
     fn create_connection_flow_state(&self) -> Option<Arc<FlowStat>>;
-    async fn create_out_connection(&self, target_addr: ServerAddr)
-        -> io::Result<(TcpStream, Box<dyn ConnectionGuard>)>;
+    async fn create_out_connection(
+        &self,
+        target_addr: ServerAddr,
+        #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
+    ) -> io::Result<(TcpStream, Box<dyn ConnectionGuard>)>;
     async fn create_out_udp_socket(&self) -> io::Result<Box<dyn UdpSocket>>;
 
-    async fn stream_check(&self, src_addr: Option<&ServerAddr>, target_addr: &ServerAddr) -> io::Result<StreamAction>;
+    async fn stream_check(
+        &self,
+        src_addr: Option<&ServerAddr>,
+        target_addr: &ServerAddr,
+        #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
+    ) -> io::Result<StreamAction>;
+
     async fn packet_check(&self, src_addr: Option<&ServerAddr>, target_addr: &ServerAddr) -> io::Result<PacketAction>;
 }

@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use cfg_if::cfg_if;
-use shadowsocks::{policy::StreamAction, ServerAddr};
 use std::{
     future::Future,
     io,
@@ -17,9 +16,10 @@ use tokio::{
 
 use shadowsocks::{
     lookup_then,
-    net::{AddrCategory, AddrFamily, FlowStat, TcpStream, UdpSocket},
-    policy,
+    net::{AddrFamily, FlowStat, TcpStream, UdpSocket},
+    policy::{self, StreamAction},
     timeout::TimeoutTicker,
+    ServerAddr,
 };
 
 use tracing::{error, info_span, trace, Instrument};
@@ -57,28 +57,21 @@ impl Drop for InConnectionGuard {
 
 /// OutConnectionGuard
 pub struct OutConnectionGuard {
-    _category: AddrCategory,
     _guard: super::connection::OutConnectionGuard,
+    #[cfg(feature = "statistics")]
+    _out_conn_guard: shadowsocks::statistics::ConnGuard,
 }
 
 impl OutConnectionGuard {
-    pub fn new(guard: super::connection::OutConnectionGuard, category: AddrCategory) -> Self {
-        #[cfg(feature = "statistics")]
-        increment_gauge!(
-            shadowsocks::statistics::METRIC_TCP_CONN_OUT, 1.0, "category" => format!("{}", category));
-
+    pub fn new(
+        guard: super::connection::OutConnectionGuard,
+        #[cfg(feature = "statistics")] _out_conn_guard: shadowsocks::statistics::ConnGuard,
+    ) -> Self {
         Self {
-            _category: category,
             _guard: guard,
+            #[cfg(feature = "statistics")]
+            _out_conn_guard,
         }
-    }
-}
-
-impl Drop for OutConnectionGuard {
-    fn drop(&mut self) {
-        #[cfg(feature = "statistics")]
-        decrement_gauge!(
-            shadowsocks::statistics::METRIC_TCP_CONN_OUT, 1.0, "category" => format!("{}", self._category));
     }
 }
 
@@ -93,21 +86,14 @@ cfg_if! {
             context: Arc<ServiceContext>,
             protocol: ServerMockProtocol,
             _remote_guard: InConnectionGuard,
+            #[cfg(feature = "statistics")]
+            _out_conn_guard: shadowsocks::statistics::ConnGuard,
         }
 
         impl LocalProcessor {
-            pub fn new (context: Arc<ServiceContext>, protocol: ServerMockProtocol, guard: InConnectionGuard) -> Self {
-                #[cfg(feature = "statistics")]
-                increment_gauge!(shadowsocks::statistics::METRIC_TCP_CONN_OUT, 1.0, "category" => format!("inapp-{}", protocol));
-
-                Self { context, protocol, _remote_guard: guard }
-            }
-        }
-
-        impl Drop for LocalProcessor {
-            fn drop(&mut self) {
-                #[cfg(feature = "statistics")]
-                decrement_gauge!(shadowsocks::statistics::METRIC_TCP_CONN_OUT, 1.0, "category" => format!("inapp-{}", self.protocol));
+            pub fn new (context: Arc<ServiceContext>, protocol: ServerMockProtocol, guard: InConnectionGuard,
+                        #[cfg(feature = "statistics")] _out_conn_guard: shadowsocks::statistics::ConnGuard) -> Self {
+                Self { context, protocol, _remote_guard: guard, #[cfg(feature = "statistics")] _out_conn_guard }
             }
         }
 
@@ -161,8 +147,10 @@ impl policy::ServerPolicy for ServerPolicy {
     async fn create_out_connection(
         &self,
         target_addr: ServerAddr,
+        #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<(TcpStream, Box<dyn policy::ConnectionGuard>)> {
-        let addr_category = AddrCategory::from(&target_addr);
+        #[cfg(feature = "statistics")]
+        let category = shadowsocks::net::AddrCategory::from(&target_addr);
 
         let stream = timeout_fut(
             self.connect_timeout.clone(),
@@ -178,7 +166,13 @@ impl policy::ServerPolicy for ServerPolicy {
             stream,
             Box::new(OutConnectionGuard::new(
                 self.context.connection_stat().add_out_connection(),
-                addr_category,
+                #[cfg(feature = "statistics")]
+                shadowsocks::statistics::ConnGuard::new_with_target(
+                    bu_context,
+                    shadowsocks::statistics::Target::Net(category),
+                    shadowsocks::statistics::METRIC_TCP_CONN_OUT,
+                    Some(shadowsocks::statistics::METRIC_TCP_CONN_OUT_TOTAL),
+                ),
             )) as Box<dyn policy::ConnectionGuard>,
         ))
     }
@@ -194,6 +188,7 @@ impl policy::ServerPolicy for ServerPolicy {
         &self,
         src_addr: Option<&ServerAddr>,
         target_addr: &ServerAddr,
+        #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<policy::StreamAction> {
         // 后续支持不同地址的处理
         let src_addr = match src_addr {
@@ -259,6 +254,13 @@ impl policy::ServerPolicy for ServerPolicy {
                             self.context.clone(),
                             protocol.clone(),
                             remote_guard,
+                            #[cfg(feature = "statistics")]
+                            shadowsocks::statistics::ConnGuard::new_with_target(
+                                bu_context,
+                                shadowsocks::statistics::Target::Inapp(protocol.name()),
+                                shadowsocks::statistics::METRIC_TCP_CONN_OUT,
+                                Some(shadowsocks::statistics::METRIC_TCP_CONN_OUT_TOTAL),
+                            ),
                         ))
                     });
                 }

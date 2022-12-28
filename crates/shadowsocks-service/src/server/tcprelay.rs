@@ -191,6 +191,12 @@ impl TcpServer {
             listen_addr,
         );
 
+        #[cfg(feature = "statistics")]
+        let bu_context = shadowsocks::statistics::BuContext::new(
+            svr_cfg.protocol().tpe(),
+            svr_cfg.acceptor_transport().map(|t| t.tpe()),
+        );
+
         #[cfg(feature = "trojan")]
         if let ServerProtocol::Trojan(trojan_config) = svr_cfg.protocol() {
             return shadowsocks::trojan::server::serve(
@@ -200,6 +206,8 @@ impl TcpServer {
                 svr_cfg.request_recv_timeout(),
                 svr_cfg.idle_timeout(),
                 server_policy,
+                #[cfg(feature = "statistics")]
+                bu_context,
             )
             .await;
         }
@@ -257,10 +265,7 @@ impl TcpServer {
 
             #[cfg(feature = "statistics")]
             let _in_conn_guard = shadowsocks::statistics::ConnGuard::new(
-                shadowsocks::statistics::BuContext::new(
-                    svr_cfg.protocol().tpe(),
-                    svr_cfg.acceptor_transport().map(|t| t.tpe()),
-                ),
+                bu_context.clone(),
                 shadowsocks::statistics::METRIC_TCP_CONN_IN,
                 Some(shadowsocks::statistics::METRIC_TCP_CONN_IN_TOTAL),
             );
@@ -334,12 +339,22 @@ impl TcpServer {
                         ss_cfg.clone_user_manager(),
                     );
                     let method = ss_cfg.method();
+                    let bu_context = bu_context.clone();
                     tokio::spawn(
                         async move {
                             #[cfg(feature = "statistics")]
                             let _in_conn_guard = _in_conn_guard;
 
-                            if let Err(err) = client.serve_ss(method, local_stream, connection_stat.clone()).await {
+                            if let Err(err) = client
+                                .serve_ss(
+                                    method,
+                                    local_stream,
+                                    connection_stat.clone(),
+                                    #[cfg(feature = "statistics")]
+                                    bu_context,
+                                )
+                                .await
+                            {
                                 debug!("tcp server stream aborted with error: {}", err);
                             }
 
@@ -355,12 +370,24 @@ impl TcpServer {
                 #[cfg(feature = "vless")]
                 ServerProtocol::Vless(..) => {
                     let inbound = vless_inbound.clone();
+
+                    #[cfg(feature = "statistics")]
+                    let bu_context = bu_context.clone();
+
                     tokio::spawn(
                         async move {
                             #[cfg(feature = "statistics")]
                             let _in_conn_guard = _in_conn_guard;
 
-                            if let Err(err) = client.serve_vless(inbound.unwrap(), local_stream).await {
+                            if let Err(err) = client
+                                .serve_vless(
+                                    inbound.unwrap(),
+                                    local_stream,
+                                    #[cfg(feature = "statistics")]
+                                    bu_context,
+                                )
+                                .await
+                            {
                                 debug!("tcp server stream aborted with error: {}", err);
                             }
 
@@ -415,6 +442,7 @@ impl TcpServerClient {
         method: CipherKind,
         mut stream: ProxyServerStream<IS>,
         connection_stat: Arc<ConnectionStat>,
+        #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<()>
     where
         IS: StreamConnection + 'static,
@@ -490,15 +518,33 @@ impl TcpServerClient {
             target_addr
         );
 
+        #[cfg(feature = "statistics")]
+        let mut stream = shadowsocks::statistics::MonTraffic::new(
+            stream,
+            bu_context.clone(),
+            shadowsocks::statistics::METRIC_TRAFFIC_BU_TOTAL,
+        );
+
         #[cfg(feature = "server-mock")]
         match self.context.mock_server_protocol(&target_addr) {
-            Some(protocol) => match protocol {
-                ServerMockProtocol::DNS => {
-                    let (mut r, mut w) = tokio::io::split(stream);
-                    run_dns_tcp_stream(self.context.dns_resolver(), &mut r, &mut w, None).await?;
-                    return Ok(());
+            Some(protocol) => {
+                #[cfg(feature = "statistics")]
+                let _out_conn_guard = shadowsocks::statistics::ConnGuard::new_with_target(
+                    bu_context,
+                    shadowsocks::statistics::Target::Inapp(protocol.name()),
+                    shadowsocks::statistics::METRIC_TCP_CONN_OUT,
+                    Some(shadowsocks::statistics::METRIC_TCP_CONN_OUT_TOTAL),
+                );
+
+                match protocol {
+                    ServerMockProtocol::DNS => {
+                        let (mut r, mut w) = tokio::io::split(stream);
+                        run_dns_tcp_stream(self.context.dns_resolver(), &mut r, &mut w, None).await?;
+                    }
                 }
-            },
+
+                return Ok(());
+            }
             None => {}
         }
 
@@ -508,6 +554,14 @@ impl TcpServerClient {
         }
 
         let destination = Destination::Tcp(target_addr.clone().into());
+
+        #[cfg(feature = "statistics")]
+        let _out_conn_guard = shadowsocks::statistics::ConnGuard::new_with_target(
+            bu_context,
+            shadowsocks::statistics::Target::Net((&target_addr).into()),
+            shadowsocks::statistics::METRIC_TCP_CONN_OUT,
+            Some(shadowsocks::statistics::METRIC_TCP_CONN_OUT_TOTAL),
+        );
 
         let mut remote_stream = match timeout_fut(
             self.timeout,

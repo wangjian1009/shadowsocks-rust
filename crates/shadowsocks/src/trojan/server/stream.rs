@@ -21,8 +21,17 @@ pub(super) async fn serve_tcp(
     target_addr: ServerAddr,
     idle_timeout: Duration,
     server_policy: Arc<Box<dyn ServerPolicy>>,
+    #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
 ) -> CloseReason {
-    match server_policy.stream_check(peer_addr.as_ref(), &target_addr).await {
+    match server_policy
+        .stream_check(
+            peer_addr.as_ref(),
+            &target_addr,
+            #[cfg(feature = "statistics")]
+            bu_context.clone(),
+        )
+        .await
+    {
         Err(err) => {
             warn!(error = ?err, "policy check error");
             CloseReason::InternalError
@@ -45,7 +54,14 @@ pub(super) async fn serve_tcp(
             rate_limit,
         }) => {
             #[allow(unused_mut)]
-            let (mut target, _guard) = match server_policy.create_out_connection(target_addr).await {
+            let (mut target, _guard) = match server_policy
+                .create_out_connection(
+                    target_addr,
+                    #[cfg(feature = "statistics")]
+                    bu_context,
+                )
+                .await
+            {
                 Ok(s) => s,
                 Err(err) => {
                     error!(error = ?err, "create out connection fail");

@@ -88,10 +88,6 @@ extern crate mockall;
 #[macro_use]
 extern crate tracing_test;
 
-#[cfg(feature = "statistics")]
-#[macro_use]
-extern crate metrics;
-
 /// Default UDP association's expire duration
 #[allow(dead_code)]
 const DEFAULT_UDP_EXPIRY_DURATION: Duration = Duration::from_secs(5 * 60);

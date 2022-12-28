@@ -6,7 +6,12 @@ use shadowsocks::{
 use super::*;
 
 impl TcpServerClient {
-    pub async fn serve_vless<IS>(self, inbound: Arc<InboundHandler>, stream: MonProxyStream<IS>) -> io::Result<()>
+    pub async fn serve_vless<IS>(
+        self,
+        inbound: Arc<InboundHandler>,
+        stream: MonProxyStream<IS>,
+        #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
+    ) -> io::Result<()>
     where
         IS: StreamConnection + 'static,
     {
@@ -28,7 +33,16 @@ impl TcpServerClient {
                 },
                 {
                     let arc_self = arc_self.clone();
-                    move |r, w, addr| arc_self.clone().serve_vless_udp(r, w, addr)
+
+                    move |r, w, addr| {
+                        arc_self.clone().serve_vless_udp(
+                            r,
+                            w,
+                            addr,
+                            #[cfg(feature = "statistics")]
+                            bu_context.clone(),
+                        )
+                    }
                 },
                 {
                     let arc_self = arc_self.clone();
@@ -166,9 +180,18 @@ impl TcpServerClient {
         reader: VlessUdpReader<Box<dyn StreamConnection + 'static>>,
         writer: VlessUdpWriter<Box<dyn StreamConnection + 'static>>,
         address: ServerAddr,
+        #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<()> {
-        super::super::udprelay::vless::serve_vless_udp(self.context.clone(), &self.peer_addr, address, reader, writer)
-            .await
+        super::super::udprelay::vless::serve_vless_udp(
+            self.context.clone(),
+            &self.peer_addr,
+            address,
+            reader,
+            writer,
+            #[cfg(feature = "statistics")]
+            bu_context,
+        )
+        .await
     }
 
     async fn serve_vless_err<IS>(self: Arc<Self>, mut stream: IS, err: io::Error) -> io::Result<()>

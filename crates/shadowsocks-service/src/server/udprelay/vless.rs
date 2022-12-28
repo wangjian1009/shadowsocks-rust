@@ -13,6 +13,7 @@ pub async fn serve_vless_udp(
     target_address: ServerAddr,
     mut reader: VlessUdpReader,
     writer: VlessUdpWriter,
+    #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
 ) -> io::Result<()> {
     let (keepalive_tx, mut keepalive_rx) = mpsc::channel(UDP_ASSOCIATION_CLOSE_CHANNEL_SIZE);
 
@@ -21,6 +22,8 @@ pub async fn serve_vless_udp(
         MultiProtocolSocket::Vless(writer),
         peer_addr.clone(),
         keepalive_tx,
+        #[cfg(feature = "statistics")]
+        bu_context,
     );
 
     let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];

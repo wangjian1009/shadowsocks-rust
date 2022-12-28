@@ -75,15 +75,19 @@ impl AddrCategory {
             Self::Public
         }
     }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Broadcast => "boradcast",
+            Self::Loopback => "loopback",
+            Self::Private => "private",
+        }
+    }
 }
 
 impl fmt::Display for AddrCategory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Public => write!(f, "public"),
-            Self::Broadcast => write!(f, "boradcast"),
-            Self::Loopback => write!(f, "loopback"),
-            Self::Private => write!(f, "private"),
-        }
+        f.write_str(self.name())
     }
 }

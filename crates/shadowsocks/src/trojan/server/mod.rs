@@ -49,6 +49,7 @@ pub async fn serve(
     request_recv_timeout: Duration,
     idle_timeout: Duration,
     server_policy: Arc<Box<dyn ServerPolicy>>,
+    #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
 ) -> io::Result<()> {
     #[allow(unused_variables)]
     let listen_addr = listener.local_addr().unwrap();
@@ -82,6 +83,8 @@ pub async fn serve(
                 request_recv_timeout,
                 idle_timeout,
                 server_policy,
+                #[cfg(feature = "statistics")]
+                bu_context.clone(),
             )
             .instrument(span),
         );
@@ -96,6 +99,7 @@ async fn process_incoming(
     request_recv_timeout: Duration,
     idle_timeout: Duration,
     server_policy: Arc<Box<dyn ServerPolicy>>,
+    #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
 ) -> CloseReason {
     let request = match read_request(&cancel_waiter, &mut incoming, cfg_hash.as_ref(), request_recv_timeout).await {
         Ok(request) => request,
@@ -108,7 +112,7 @@ async fn process_incoming(
             let span = info_span!("connection", target = addr.to_string());
             async move {
                 tokio::select! {
-                    r = stream::serve_tcp(incoming, peer_addr, addr, idle_timeout, server_policy) => { r }
+                    r = stream::serve_tcp(incoming, peer_addr, addr, idle_timeout, server_policy, #[cfg(feature = "statistics")] bu_context) => { r }
                     _ = cancel_waiter.wait() => {
                         CloseReason::Canceled
                     }

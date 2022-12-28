@@ -38,7 +38,12 @@ pub async fn connect(
     #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
 ) {
     match server_policy
-        .stream_check(Some(&ServerAddr::SocketAddr(peer_addr.clone())), &addr)
+        .stream_check(
+            Some(&ServerAddr::SocketAddr(peer_addr.clone())),
+            &addr,
+            #[cfg(feature = "statistics")]
+            bu_context.clone(),
+        )
         .await
     {
         Err(err) => {
@@ -67,7 +72,14 @@ pub async fn connect(
             rate_limit,
         }) => {
             #[allow(unused_mut)]
-            let (mut target, _guard) = match server_policy.create_out_connection(addr).await {
+            let (mut target, _guard) = match server_policy
+                .create_out_connection(
+                    addr,
+                    #[cfg(feature = "statistics")]
+                    bu_context.clone(),
+                )
+                .await
+            {
                 Ok(s) => {
                     send = match write_response(send, true).await {
                         Some(send) => send,
