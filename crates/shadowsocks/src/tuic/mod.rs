@@ -11,13 +11,19 @@ pub enum CongestionController {
     Bbr,
 }
 
+impl CongestionController {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Cubic => "cubic",
+            Self::NewReno => "new_reno",
+            Self::Bbr => "bbr",
+        }
+    }
+}
+
 impl fmt::Display for CongestionController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Cubic => write!(f, "cubic"),
-            Self::NewReno => write!(f, "new_reno"),
-            Self::Bbr => write!(f, "bbr"),
-        }
+        f.write_str(self.name())
     }
 }
 

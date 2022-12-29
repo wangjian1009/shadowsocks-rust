@@ -58,7 +58,12 @@ impl TcpServer {
             idle_timeout,
             Arc::new(Box::new(ServerPolicy::new(self.context.clone(), svr_cfg.timeout()))),
             #[cfg(feature = "statistics")]
-            shadowsocks::statistics::BuContext::new(shadowsocks::config::ServerProtocolType::Tuic, None),
+            shadowsocks::statistics::BuContext::new(
+                shadowsocks::statistics::ProtocolInfo::Tuic {
+                    cc: tuic_cfg.congestion_controller.name(),
+                },
+                None,
+            ),
         )?;
 
         info!("tuic listening on {}", svr_cfg.addr());

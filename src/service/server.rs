@@ -270,14 +270,14 @@ pub fn define_command_line_options(mut app: Command) -> Command {
             .arg(
                 Arg::new("TUIC_TOKEN")
                     .long("tuic-token")
-                    .action(ArgAction::Set)
+                    .action(ArgAction::Append)
                     .requires("PROTOCOL_TUIC")
                     .help("tuic server's user token"),
             )
             .arg(
                 Arg::new("TUIC_ALPN")
                     .long("tuic-alpn")
-                    .action(ArgAction::Set)
+                    .action(ArgAction::Append)
                     .requires("PROTOCOL_TUIC")
                     .help("tuic tls alpn config"),
             )
@@ -344,6 +344,16 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                 .action(ArgAction::Set)
                 .value_parser(clap::value_parser!(url::Url))
                 .help("log jaeger server url"),
+        );
+    }
+
+    #[cfg(feature = "statistics")]
+    {
+        app = app.arg(
+            Arg::new("STATISTICS_TAG")
+                .long("tag")
+                .action(ArgAction::Append)
+                .help("metrics tag"),
         );
     }
 
@@ -492,7 +502,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
         app = app.arg(
             Arg::new("MOCK_DNS")
                 .long("mock-dns")
-                .action(ArgAction::Set)
+                .action(ArgAction::Append)
                 .help("mock proxied dns connection to local"),
         );
     }
@@ -892,6 +902,10 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
         #[cfg(feature = "statistics-prometheus")]
         if let Some(push_gateway) = matches.get_one::<url::Url>("PROMETHEUS_PUSH_URL") {
+            let tags: Option<Vec<&str>> = matches
+                .get_many::<String>("STATISTICS_TAG")
+                .map(|tags| tags.into_iter().map(|t| t.as_str()).collect());
+
             let instance = matches
                 .get_one::<String>("SERVER_ADDR")
                 .map(|t| {
@@ -912,6 +926,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 "miner",
                 instance.as_ref().map(|s| s.as_str()),
                 Duration::from_secs(10),
+                tags,
             );
         }
 

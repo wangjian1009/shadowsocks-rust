@@ -24,9 +24,9 @@ pub struct ConnGuard {
 impl ConnGuard {
     pub fn new(context: BuContext, count: &'static str, total: Option<&'static str>) -> Self {
         total.map(|total| {
-            increment_counter!(total,  "proto" => context.protocol.name(), "trans" => context.transport.as_ref().map(|t| t.name()).unwrap_or("none"));
+            increment_counter!(total,  "proto" => context.protocol().name(), "trans" => context.transport().as_ref().map(|t| t.name()).unwrap_or("none"));
         });
-        increment_gauge!(count, 1.0, "proto" => context.protocol.name(), "trans" => context.transport.as_ref().map(|t| t.name()).unwrap_or("none"));
+        increment_gauge!(count, 1.0, "proto" => context.protocol().name(), "trans" => context.transport().as_ref().map(|t| t.name()).unwrap_or("none"));
         Self {
             context,
             count,
@@ -41,9 +41,9 @@ impl ConnGuard {
         total: Option<&'static str>,
     ) -> Self {
         total.map(|total| {
-            increment_counter!(total,  "proto" => context.protocol.name(), "trans" => context.transport.as_ref().map(|t| t.name()).unwrap_or("none"), "category" => target.name());
+            increment_counter!(total,  "proto" => context.protocol().name(), "trans" => context.transport().as_ref().map(|t| t.name()).unwrap_or("none"), "category" => target.name());
         });
-        increment_gauge!(count, 1.0, "proto" => context.protocol.name(), "trans" => context.transport.as_ref().map(|t| t.name()).unwrap_or("none"), "category" => target.name());
+        increment_gauge!(count, 1.0, "proto" => context.protocol().name(), "trans" => context.transport().as_ref().map(|t| t.name()).unwrap_or("none"), "category" => target.name());
         Self {
             context,
             count,
@@ -59,9 +59,9 @@ impl ConnGuard {
 impl Drop for ConnGuard {
     fn drop(&mut self) {
         if let Some(category) = self.target.as_ref() {
-            decrement_gauge!(self.count, 1.0, "proto" => self.context.protocol.name(), "trans" => self.context.transport.as_ref().map(|t| t.name()).unwrap_or("none"), "category" => category.name());
+            decrement_gauge!(self.count, 1.0, "proto" => self.context.protocol().name(), "trans" => self.context.transport().as_ref().map(|t| t.name()).unwrap_or("none"), "category" => category.name());
         } else {
-            decrement_gauge!(self.count, 1.0, "proto" => self.context.protocol.name(), "trans" => self.context.transport.as_ref().map(|t| t.name()).unwrap_or("none"));
+            decrement_gauge!(self.count, 1.0, "proto" => self.context.protocol().name(), "trans" => self.context.transport().as_ref().map(|t| t.name()).unwrap_or("none"));
         }
     }
 }

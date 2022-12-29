@@ -145,7 +145,7 @@ impl UdpServer {
 
         #[cfg(feature = "statistics")]
         let bu_context = shadowsocks::statistics::BuContext::new(
-            svr_cfg.protocol().tpe(),
+            shadowsocks::statistics::ProtocolInfo::from(svr_cfg.protocol()),
             svr_cfg.acceptor_transport().map(|t| t.tpe()),
         );
 
