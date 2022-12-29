@@ -40,9 +40,7 @@ impl ServerConfig {
                 tuic_config.udp_relay_mode = udp_relay_mode;
             }
 
-            if let Some(congestion_controller) =
-                Self::from_url_get_arg_as::<CongestionController>(query, "congestion-controller")?
-            {
+            if let Some(congestion_controller) = Self::from_url_get_arg_as::<CongestionController>(query, "cc")? {
                 tuic_config.congestion_controller = congestion_controller;
             }
 

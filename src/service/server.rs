@@ -290,7 +290,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
             )
             .arg(
                 Arg::new("TUIC_CONGESTION_CONTROLLER")
-                    .long("tuic-congestion-controller")
+                    .long("tuic-cc")
                     .action(ArgAction::Set)
                     .value_parser(clap::value_parser!(CongestionController))
                     .requires("PROTOCOL_TUIC")
