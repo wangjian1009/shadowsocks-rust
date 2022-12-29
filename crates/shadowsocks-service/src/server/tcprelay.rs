@@ -280,6 +280,9 @@ impl TcpServer {
             {
                 Ok(r) => r,
                 Err(_err) => {
+                    #[cfg(feature = "statistics")]
+                    bu_context.increment_conn_error("client-conn-limit");
+
                     match self.context.limit_connection_close_delay() {
                         None => error!(
                             "tcp server: from {} limit {} reached, close immediately",
@@ -310,6 +313,9 @@ impl TcpServer {
             };
 
             if self.context.check_client_blocked(&peer_addr) {
+                #[cfg(feature = "statistics")]
+                bu_context.increment_conn_error("client-blocked");
+
                 warn!("access denied from {} by ACL rules", peer_addr);
                 continue;
             }
@@ -458,6 +464,9 @@ impl TcpServerClient {
             //     return Ok(());
             // }
             Err(err) if err.kind() == ErrorKind::UnexpectedEof => {
+                #[cfg(feature = "statistics")]
+                bu_context.increment_conn_error("ss.handshake-broken");
+
                 debug!(
                     "tcp handshake failed, received EOF before a complete target Address, peer: {}",
                     self.peer_addr
@@ -465,6 +474,9 @@ impl TcpServerClient {
                 return Ok(());
             }
             Err(err) if err.kind() == ErrorKind::TimedOut => {
+                #[cfg(feature = "statistics")]
+                bu_context.increment_conn_error("ss.handshake-timeout");
+
                 debug!(
                     "tcp handshake failed, timeout before a complete target Address, peer: {}",
                     self.peer_addr
@@ -490,6 +502,9 @@ impl TcpServerClient {
 
                     return Ok(());
                 }
+
+                #[cfg(feature = "statistics")]
+                bu_context.increment_conn_error("ss.handshake-internal");
 
                 debug!("tcp silent-drop peer: {}", self.peer_addr);
 
@@ -548,17 +563,12 @@ impl TcpServerClient {
             None => {}
         }
 
-        if self.context.check_client_blocked(&self.peer_addr) {
-            warn!("access denied from {} by ACL rules", self.peer_addr);
-            return Ok(());
-        }
-
         let destination = Destination::Tcp(target_addr.clone().into());
 
         #[cfg(feature = "statistics")]
         let _out_conn_guard = shadowsocks::statistics::ConnGuard::new_with_target(
-            bu_context,
-            shadowsocks::statistics::Target::Net((&target_addr).into()),
+            bu_context.clone(),
+            shadowsocks::statistics::Target::from(&target_addr),
             shadowsocks::statistics::METRIC_TCP_CONN_OUT,
             Some(shadowsocks::statistics::METRIC_TCP_CONN_OUT_TOTAL),
         );
@@ -574,6 +584,13 @@ impl TcpServerClient {
                 Connection::Packet { .. } => unreachable!(),
             },
             Err(err) => {
+                #[cfg(feature = "statistics")]
+                if err.kind() == io::ErrorKind::TimedOut {
+                    bu_context.increment_conn_error("remote-connect-timeout");
+                } else {
+                    bu_context.increment_conn_error("remote-connect-error");
+                }
+
                 error!(
                     "tcp tunnel {} -> {} connect failed, error: {}",
                     self.peer_addr, target_addr, err

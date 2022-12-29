@@ -24,6 +24,9 @@ pub mod util;
 mod addr_category;
 pub use addr_category::AddrCategory;
 
+mod addr_type;
+pub use addr_type::AddrType;
+
 #[cfg(any(unix, windows))]
 pub use util::check_peekable;
 

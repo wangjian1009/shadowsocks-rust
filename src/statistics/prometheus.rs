@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use metrics_exporter_prometheus::PrometheusBuilder;
-use metrics_util::MetricKindMask;
+// use metrics_util::MetricKindMask;
 
 pub fn install_push_gateway(
     url: &url::Url,
@@ -35,10 +35,10 @@ pub fn install_push_gateway(
     PrometheusBuilder::new()
         .with_push_gateway(url, timeout)
         .expect("push gateway endpoint should be valid")
-        .idle_timeout(
-            MetricKindMask::COUNTER | MetricKindMask::HISTOGRAM,
-            Some(Duration::from_secs(timeout.as_secs() * 3)),
-        )
+        // .idle_timeout(
+        //     MetricKindMask::COUNTER | MetricKindMask::HISTOGRAM,
+        //     Some(Duration::from_secs(timeout.as_secs() * 3)),
+        // )
         .install()
         .expect("failed to install Prometheus recorder");
 }

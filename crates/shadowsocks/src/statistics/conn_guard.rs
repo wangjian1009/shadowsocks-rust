@@ -1,17 +1,17 @@
 use super::BuContext;
-use crate::net::AddrCategory;
+use crate::{
+    net::{AddrCategory, AddrType},
+    ServerAddr,
+};
 
 pub enum Target {
-    Net(AddrCategory),
+    Net(AddrCategory, AddrType),
     Inapp(&'static str),
 }
 
-impl Target {
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Net(category) => category.name(),
-            Self::Inapp(name) => name,
-        }
+impl From<&ServerAddr> for Target {
+    fn from(value: &ServerAddr) -> Self {
+        Self::Net(AddrCategory::from(value), AddrType::from(value))
     }
 }
 
@@ -40,10 +40,24 @@ impl ConnGuard {
         count: &'static str,
         total: Option<&'static str>,
     ) -> Self {
-        total.map(|total| {
-            increment_counter!(total,  "proto" => context.protocol().name(), "trans" => context.transport().as_ref().map(|t| t.name()).unwrap_or("none"), "category" => target.name());
-        });
-        increment_gauge!(count, 1.0, "proto" => context.protocol().name(), "trans" => context.transport().as_ref().map(|t| t.name()).unwrap_or("none"), "category" => target.name());
+        let proto = context.protocol().name();
+        let trans = context.transport().as_ref().map(|t| t.name()).unwrap_or("none");
+
+        match &target {
+            Target::Net(category, t) => {
+                total.map(|total| {
+                    increment_counter!(total,  "proto" => proto, "trans" => trans, "category" => category.name(), "type" => t.name());
+                });
+                increment_gauge!(count, 1.0, "proto" => proto, "trans" => trans, "category" => category.name(), "type" => t.name());
+            }
+            Target::Inapp(p) => {
+                total.map(|total| {
+                    increment_counter!(total,  "proto" => proto, "trans" => trans, "category" => *p);
+                });
+                increment_gauge!(count, 1.0, "proto" => proto, "trans" => trans, "category" => *p);
+            }
+        }
+
         Self {
             context,
             count,
@@ -58,8 +72,15 @@ impl ConnGuard {
 
 impl Drop for ConnGuard {
     fn drop(&mut self) {
-        if let Some(category) = self.target.as_ref() {
-            decrement_gauge!(self.count, 1.0, "proto" => self.context.protocol().name(), "trans" => self.context.transport().as_ref().map(|t| t.name()).unwrap_or("none"), "category" => category.name());
+        if let Some(target) = self.target.as_ref() {
+            match target {
+                Target::Net(category, t) => {
+                    decrement_gauge!(self.count, 1.0, "proto" => self.context.protocol().name(), "trans" => self.context.transport().as_ref().map(|t| t.name()).unwrap_or("none"), "category" => category.name(), "type" => t.name());
+                }
+                Target::Inapp(p) => {
+                    decrement_gauge!(self.count, 1.0, "proto" => self.context.protocol().name(), "trans" => self.context.transport().as_ref().map(|t| t.name()).unwrap_or("none"), "category" => *p);
+                }
+            }
         } else {
             decrement_gauge!(self.count, 1.0, "proto" => self.context.protocol().name(), "trans" => self.context.transport().as_ref().map(|t| t.name()).unwrap_or("none"));
         }

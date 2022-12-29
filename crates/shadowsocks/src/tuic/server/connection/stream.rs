@@ -47,21 +47,33 @@ pub async fn connect(
         .await
     {
         Err(err) => {
+            #[cfg(feature = "statistics")]
+            bu_context.increment_conn_error("check-internal");
+
             warn!(error = ?err, "ack check error");
             let _ = write_response(send, false).await;
             return;
         }
         Ok(StreamAction::ClientBlocked) => {
+            #[cfg(feature = "statistics")]
+            bu_context.increment_conn_error("client-blocked");
+
             warn!("client blocked by ACL rules");
             let _ = write_response(send, false).await;
             return;
         }
         Ok(StreamAction::OutboundBlocked) => {
+            #[cfg(feature = "statistics")]
+            bu_context.increment_conn_error("remote-blocked");
+
             warn!("outbound blocked by ACL rules");
             let _ = write_response(send, false).await;
             return;
         }
         Ok(StreamAction::ConnectionLimited) => {
+            #[cfg(feature = "statistics")]
+            bu_context.increment_conn_error("client-conn-limit");
+
             warn!("connection limited");
             let _ = write_response(send, false).await;
             return;
@@ -88,6 +100,13 @@ pub async fn connect(
                     s
                 }
                 Err(err) => {
+                    #[cfg(feature = "statistics")]
+                    if err.kind() == io::ErrorKind::TimedOut {
+                        bu_context.increment_conn_error("remote-connect-timeout");
+                    } else {
+                        bu_context.increment_conn_error("remote-connect-error");
+                    }
+
                     error!(error = ?err, "create out connection fail");
                     let _ = write_response(send, false).await;
                     return;

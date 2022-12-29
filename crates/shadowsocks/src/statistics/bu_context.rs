@@ -97,6 +97,26 @@ impl BuContext {
         self.transport.as_ref()
     }
 
+    pub fn increment_conn_error(&self, reason: &'static str) {
+        match self.protocol {
+            ProtocolInfo::SS { ref method } => {
+                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"), "ss_method" => method.clone())
+            }
+            #[cfg(feature = "trojan")]
+            ProtocolInfo::Trojan => {
+                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"))
+            }
+            #[cfg(feature = "vless")]
+            ProtocolInfo::Vless => {
+                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"))
+            }
+            #[cfg(feature = "tuic")]
+            ProtocolInfo::Tuic { cc } => {
+                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"), "tuic_cc" => cc)
+            }
+        }
+    }
+
     pub fn count_traffic(&self, key: &'static str, count: u64, net: TrafficNet, way: TrafficWay) {
         match self.protocol {
             ProtocolInfo::SS { ref method } => {

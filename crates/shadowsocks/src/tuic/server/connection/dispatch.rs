@@ -131,9 +131,17 @@ impl Connection {
 
                     Ok(())
                 }
-                _ => Err(DispatchError::BadCommand),
+                _ => {
+                    #[cfg(feature = "statistics")]
+                    self.bu_context.increment_conn_error("tuic.bad-command");
+
+                    Err(DispatchError::BadCommand)
+                }
             }
         } else {
+            #[cfg(feature = "statistics")]
+            self.bu_context.increment_conn_error("tuic.auth-timeout");
+
             Err(DispatchError::AuthenticationTimeout)
         }
     }

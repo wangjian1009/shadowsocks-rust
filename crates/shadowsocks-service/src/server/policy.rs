@@ -150,7 +150,7 @@ impl policy::ServerPolicy for ServerPolicy {
         #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<(TcpStream, Box<dyn policy::ConnectionGuard>)> {
         #[cfg(feature = "statistics")]
-        let category = shadowsocks::net::AddrCategory::from(&target_addr);
+        let target = shadowsocks::statistics::Target::from(&target_addr);
 
         let stream = timeout_fut(
             self.connect_timeout.clone(),
@@ -169,7 +169,7 @@ impl policy::ServerPolicy for ServerPolicy {
                 #[cfg(feature = "statistics")]
                 shadowsocks::statistics::ConnGuard::new_with_target(
                     bu_context,
-                    shadowsocks::statistics::Target::Net(category),
+                    target,
                     shadowsocks::statistics::METRIC_TCP_CONN_OUT,
                     Some(shadowsocks::statistics::METRIC_TCP_CONN_OUT_TOTAL),
                 ),
