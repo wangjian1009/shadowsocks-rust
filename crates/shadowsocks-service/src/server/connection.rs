@@ -10,8 +10,11 @@ use std::{
 
 use cfg_if::cfg_if;
 
-use shadowsocks::net::FlowStat;
 use shadowsocks::relay::socks5::Address;
+use shadowsocks::{
+    net::{AddrCategory, FlowStat},
+    ServerAddr,
+};
 
 use std::net::{IpAddr, SocketAddr};
 use tokio::sync::Mutex;
@@ -35,6 +38,9 @@ pub struct ConnectionStat {
     in_conns: Mutex<HashMap<u32, Arc<ConnectionInfo>>>,
     #[cfg(feature = "server-limit")]
     in_conns_count_by_source_ip: Mutex<HashMap<IpAddr, u32>>,
+
+    // 业务连接根据IP计数
+    bu_conn_by_source_ip: spin::Mutex<HashMap<IpAddr, u32>>,
 }
 
 impl Default for ConnectionStat {
@@ -47,6 +53,8 @@ impl Default for ConnectionStat {
 
             #[cfg(feature = "server-limit")]
             in_conns_count_by_source_ip: Mutex::new(HashMap::new()),
+
+            bu_conn_by_source_ip: spin::Mutex::new(HashMap::new()),
         }
     }
 }
@@ -164,6 +172,11 @@ impl ConnectionStat {
         self.out_conn_count.load(Ordering::Relaxed)
     }
 
+    // async fn cin_by_ip_bu(&self) -> u32 {
+    //     let bu_conn_by_source_ip = self.bu_conn_by_source_ip.lock().await;
+    //     bu_conn_by_source_ip.len() as u32
+    // }
+
     #[inline]
     async fn cin_by_ip_internal(&self) -> u32 {
         let in_conns = self.in_conns.lock().await;
@@ -175,6 +188,51 @@ impl ConnectionStat {
         }
 
         ips.len() as u32
+    }
+
+    fn inc_bu_connection(
+        &self,
+        source_addr: &SocketAddr,
+        #[cfg(feature = "statistics")] bu_context: &shadowsocks::statistics::BuContext,
+    ) {
+        let mut in_conns = self.bu_conn_by_source_ip.lock();
+        let ip = source_addr.ip();
+        match in_conns.get_mut(&ip) {
+            None => {
+                in_conns.insert(ip, 1);
+
+                #[cfg(feature = "statistics")]
+                bu_context.increment_bu_client();
+            }
+            Some(count) => {
+                *count = *count + 1u32;
+            }
+        }
+    }
+
+    fn dec_bu_connection(
+        &self,
+        source_addr: &SocketAddr,
+        #[cfg(feature = "statistics")] bu_context: &shadowsocks::statistics::BuContext,
+    ) {
+        let mut in_conns = self.bu_conn_by_source_ip.lock();
+        let ip = source_addr.ip();
+
+        match in_conns.get_mut(&ip) {
+            None => {
+                unreachable!()
+            }
+            Some(count) => {
+                assert!(*count > 0u32);
+                *count = *count - 1u32;
+                if *count == 0 {
+                    in_conns.remove(&ip);
+
+                    #[cfg(feature = "statistics")]
+                    bu_context.increment_bu_client();
+                }
+            }
+        }
     }
 
     #[inline]
@@ -221,25 +279,74 @@ impl ConnectionStat {
         result
     }
 
-    pub fn add_out_connection(self: Arc<ConnectionStat>) -> OutConnectionGuard {
-        self.out_conn_count.fetch_add(1, Ordering::AcqRel);
-        OutConnectionGuard::new(self)
+    pub fn add_out_connection(
+        self: Arc<ConnectionStat>,
+        source_addr: Option<&SocketAddr>,
+        target_addr: &ServerAddr,
+        #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
+    ) -> OutConnectionGuard {
+        let mut bu_addr = None;
+        if source_addr.is_some() && Self::is_bu_conn(target_addr) {
+            bu_addr = source_addr.clone();
+        }
+
+        OutConnectionGuard::new(
+            self,
+            bu_addr,
+            #[cfg(feature = "statistics")]
+            shadowsocks::statistics::ConnGuard::new_with_target(
+                bu_context,
+                shadowsocks::statistics::Target::from(target_addr),
+                shadowsocks::statistics::METRIC_TCP_CONN_OUT,
+                Some(shadowsocks::statistics::METRIC_TCP_CONN_OUT_TOTAL),
+            ),
+        )
+    }
+
+    fn is_bu_conn(target_addr: &ServerAddr) -> bool {
+        let category = AddrCategory::from(target_addr);
+        match category {
+            AddrCategory::Public => true,
+            _ => false,
+        }
     }
 }
 
 pub struct OutConnectionGuard {
     stat: Arc<ConnectionStat>,
+    source_ip: Option<SocketAddr>,
+    #[cfg(feature = "statistics")]
+    _out_conn_guard: shadowsocks::statistics::ConnGuard,
 }
 
 impl Drop for OutConnectionGuard {
     fn drop(&mut self) {
         self.stat.out_conn_count.fetch_sub(1, Ordering::AcqRel);
+        if let Some(ip) = self.source_ip.as_ref() {
+            self.stat.dec_bu_connection(ip, self._out_conn_guard.bu_context());
+        }
     }
 }
 
 impl OutConnectionGuard {
-    pub fn new(stat: Arc<ConnectionStat>) -> OutConnectionGuard {
-        OutConnectionGuard { stat }
+    pub fn new(
+        stat: Arc<ConnectionStat>,
+        is_bu: Option<&SocketAddr>,
+        #[cfg(feature = "statistics")] _out_conn_guard: shadowsocks::statistics::ConnGuard,
+    ) -> OutConnectionGuard {
+        stat.out_conn_count.fetch_add(1, Ordering::AcqRel);
+
+        let mut source_ip = None;
+        if let Some(source_addr) = is_bu {
+            stat.inc_bu_connection(source_addr, _out_conn_guard.bu_context());
+            source_ip = Some(source_addr.clone());
+        }
+
+        OutConnectionGuard {
+            stat,
+            source_ip,
+            _out_conn_guard,
+        }
     }
 }
 
@@ -271,7 +378,17 @@ pub mod tests {
     pub fn out_conn_guard() {
         let conn_stat = Arc::new(ConnectionStat::default());
         {
-            let _guard = conn_stat.clone().add_out_connection();
+            let _guard = conn_stat.clone().add_out_connection(
+                &"127.0.0.1:8081".parse().unwrap(),
+                &"www.google.com".parse().unwrap(),
+                #[cfg(feature = "statistics")]
+                shadowsocks::statistics::BuContext::new(
+                    shadowsocks::statistics::ProtocolInfo::SS {
+                        method: "test-method".to_string(),
+                    },
+                    None,
+                ),
+            );
             assert_eq!(1, conn_stat.count());
         }
         assert_eq!(0, conn_stat.count());

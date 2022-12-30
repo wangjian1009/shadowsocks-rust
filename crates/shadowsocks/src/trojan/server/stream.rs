@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::{io, net::SocketAddr, sync::Arc};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     time::Duration,
@@ -17,7 +17,7 @@ use super::*;
 
 pub(super) async fn serve_tcp(
     incoming: impl StreamConnection + 'static,
-    peer_addr: Option<ServerAddr>,
+    peer_addr: Option<SocketAddr>,
     target_addr: ServerAddr,
     idle_timeout: Duration,
     server_policy: Arc<Box<dyn ServerPolicy>>,
@@ -56,6 +56,7 @@ pub(super) async fn serve_tcp(
             #[allow(unused_mut)]
             let (mut target, _guard) = match server_policy
                 .create_out_connection(
+                    peer_addr.as_ref(),
                     target_addr,
                     #[cfg(feature = "statistics")]
                     bu_context,

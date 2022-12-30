@@ -1,9 +1,4 @@
-use crate::ServerAddr;
-
-use super::{
-    super::{Acceptor, Connection},
-    cvt_error, BinaryWsStream,
-};
+use super::{super::Acceptor, cvt_error, BinaryWsStream};
 use async_trait::async_trait;
 use std::{io, net::SocketAddr};
 use tokio_tungstenite::{
@@ -44,28 +39,21 @@ pub struct WebSocketAcceptor<T: Acceptor> {
 
 #[async_trait]
 impl<T: Acceptor> Acceptor for WebSocketAcceptor<T> {
-    type PR = T::PR;
-    type PW = T::PW;
     type TS = BinaryWsStream<T::TS>;
 
-    async fn accept(&mut self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
+    async fn accept(&mut self) -> io::Result<(Self::TS, Option<SocketAddr>)> {
         let (stream, addr) = self.inner.accept().await?;
-        match stream {
-            Connection::Stream(stream) => {
-                let stream = accept_hdr_async_with_config(
-                    stream,
-                    WebSocketCallback {
-                        path: self.path.clone(),
-                    },
-                    None,
-                )
-                .await
-                .map_err(|e| cvt_error(e))?;
-                let stream = BinaryWsStream::new(stream);
-                Ok((Connection::Stream(stream), addr))
-            }
-            Connection::Packet { r, w, local_addr } => Ok((Connection::Packet { r, w, local_addr }, addr)),
-        }
+        let stream = accept_hdr_async_with_config(
+            stream,
+            WebSocketCallback {
+                path: self.path.clone(),
+            },
+            None,
+        )
+        .await
+        .map_err(|e| cvt_error(e))?;
+        let stream = BinaryWsStream::new(stream);
+        Ok((stream, addr))
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {

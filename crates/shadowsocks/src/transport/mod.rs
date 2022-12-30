@@ -3,10 +3,7 @@ use cfg_if::cfg_if;
 use std::{io, net::SocketAddr};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::{
-    net::{ConnectOpts, Destination},
-    ServerAddr,
-};
+use crate::{net::ConnectOpts, ServerAddr};
 
 mod common;
 
@@ -73,7 +70,7 @@ pub trait StreamConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {
 /// Packet traits
 #[async_trait]
 pub trait PacketRead: Send + Sync + Unpin {
-    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)>;
+    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)>;
 }
 
 #[async_trait]
@@ -86,49 +83,20 @@ pub trait PacketWrite: PacketMutWrite {
     async fn write_to(&self, buf: &[u8], addr: &ServerAddr) -> io::Result<()>;
 }
 
-/// Connection;
-pub enum Connection<T: StreamConnection, PR: PacketRead, PW: PacketMutWrite> {
-    Stream(T),
-    Packet { r: PR, w: PW, local_addr: Destination },
-}
-
 /// Connector traits
 #[async_trait]
 pub trait Connector: Send + Sync + Unpin + 'static {
     type TS: StreamConnection + 'static;
-    type PR: PacketRead;
-    type PW: PacketMutWrite;
 
-    async fn connect(
-        &self,
-        destination: &Destination,
-        connect_opts: &ConnectOpts,
-    ) -> io::Result<Connection<Self::TS, Self::PR, Self::PW>>;
-
-    async fn connect_stream(&self, addr: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
-        let destination = Destination::Tcp(addr.clone());
-        match self.connect(&destination, connect_opts).await? {
-            Connection::Stream(stream) => Ok(stream),
-            Connection::Packet { .. } => unreachable!(),
-        }
-    }
+    async fn connect(&self, addr: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS>;
 }
 
 /// Acceptor
 #[async_trait]
 pub trait Acceptor: Send + Sync + 'static {
     type TS: StreamConnection + 'static;
-    type PR: PacketRead;
-    type PW: PacketMutWrite;
 
-    async fn accept(&mut self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)>;
-
-    async fn accept_stream(&mut self) -> io::Result<(Self::TS, Option<ServerAddr>)> {
-        match self.accept().await? {
-            (Connection::Stream(stream), addr) => Ok((stream, addr)),
-            (Connection::Packet { .. }, _addr) => unreachable!(),
-        }
-    }
+    async fn accept(&mut self) -> io::Result<(Self::TS, Option<SocketAddr>)>;
 
     fn local_addr(&self) -> io::Result<SocketAddr>;
 }

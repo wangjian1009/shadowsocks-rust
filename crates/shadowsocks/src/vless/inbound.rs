@@ -135,14 +135,14 @@ impl InboundHandler {
 
         let mut response = BytesMut::with_capacity(16);
         let response_len = encoding::encode_response_header(&mut response, request.version, &addons)?;
-        stream.write(&response[..response_len]).await?;
+        let _ = stream.write(&response[..response_len]).await?;
 
         match request.command {
             protocol::RequestCommand::TCP => {
                 if let Some(address) = request.address {
                     serve_stream(Box::new(stream), ServerAddr::from(address)).await
                 } else {
-                    Err(new_error(format!("TCP rquest no target address")))
+                    Err(new_error("TCP rquest no target address"))
                 }
             }
             protocol::RequestCommand::UDP => {
@@ -151,7 +151,7 @@ impl InboundHandler {
                     let (reader, writer) = new_vless_packet_connection(stream);
                     serve_udp(reader, writer, ServerAddr::from(address)).await
                 } else {
-                    Err(new_error(format!("udp rquest no target address")))
+                    Err(new_error("udp rquest no target address"))
                 }
             }
             protocol::RequestCommand::Mux => mux::serve(stream, peer_addr, serve_stream, serve_udp).await,

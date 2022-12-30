@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use std::{io, net::SocketAddr, sync::Arc};
 use tokio_rustls::{server::TlsStream as TokioTlsStream, TlsAcceptor as TokioTlsAcceptor};
 
-use crate::{ssl, ServerAddr};
+use crate::ssl;
 
-use super::super::{Acceptor, Connection, DeviceOrGuard, DummyPacket, StreamConnection};
+use super::super::{Acceptor, DeviceOrGuard, StreamConnection};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TlsAcceptorConfig {
@@ -39,26 +39,19 @@ where
     S: StreamConnection + 'static,
     T: Acceptor + Acceptor<TS = S>,
 {
-    type PR = DummyPacket;
-    type PW = DummyPacket;
     type TS = TokioTlsStream<S>;
 
-    async fn accept(&mut self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
+    async fn accept(&mut self) -> io::Result<(Self::TS, Option<SocketAddr>)> {
         loop {
             let (stream, addr) = self.inner.accept().await?;
-            match stream {
-                Connection::Stream(stream) => {
-                    let stream = match self.tls_acceptor.accept(stream).await {
-                        Ok(stream) => stream,
-                        Err(err) => {
-                            tracing::debug!(error = ?err, "tls accept connection fail");
-                            continue;
-                        }
-                    };
-                    return Ok((Connection::Stream(stream), addr));
+            let stream = match self.tls_acceptor.accept(stream).await {
+                Ok(stream) => stream,
+                Err(err) => {
+                    tracing::debug!(error = ?err, "tls accept connection fail");
+                    continue;
                 }
-                Connection::Packet { .. } => unimplemented!(),
-            }
+            };
+            return Ok((stream, addr));
         }
     }
 

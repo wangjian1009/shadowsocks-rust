@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use futures::ready;
 use std::io::{self, IoSlice};
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -53,7 +54,7 @@ impl<T: PacketWrite> PacketWrite for MonTraffic<T> {
 
 #[async_trait]
 impl<T: PacketRead> PacketRead for MonTraffic<T> {
-    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
+    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         let r = self.s.read_from(buf).await?;
         self.context
             .count_traffic(self.key, buf.len() as u64, TrafficNet::Tcp, TrafficWay::Recv);
@@ -151,7 +152,7 @@ impl<T: AsyncRead> AsyncRead for MonTrafficRead<T> {
         let r = ready!(this.s.poll_read(cx, buf));
         if r.is_ok() {
             this.context
-                .count_traffic(*this.key, buf.filled().len() as u64, TrafficNet::Tcp, TrafficWay::Recv);
+                .count_traffic(this.key, buf.filled().len() as u64, TrafficNet::Tcp, TrafficWay::Recv);
         }
         Poll::Ready(Ok(()))
     }
@@ -178,7 +179,7 @@ impl<T: AsyncWrite> AsyncWrite for MonTrafficWrite<T> {
         let r = ready!(this.s.poll_write(cx, buf));
         if let Ok(n) = r {
             this.context
-                .count_traffic(*this.key, n as u64, TrafficNet::Tcp, TrafficWay::Send);
+                .count_traffic(this.key, n as u64, TrafficNet::Tcp, TrafficWay::Send);
         }
         Poll::Ready(r)
     }
@@ -202,7 +203,7 @@ impl<T: AsyncWrite> AsyncWrite for MonTrafficWrite<T> {
         let r = ready!(this.s.poll_write_vectored(cx, bufs));
         if let Ok(n) = r {
             this.context
-                .count_traffic(*this.key, n as u64, TrafficNet::Tcp, TrafficWay::Send);
+                .count_traffic(this.key, n as u64, TrafficNet::Tcp, TrafficWay::Send);
         }
         Poll::Ready(r)
     }

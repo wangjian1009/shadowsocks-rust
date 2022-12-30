@@ -69,11 +69,11 @@ impl ServerProtocol {
         match self {
             ServerProtocol::SS(..) => None,
             #[cfg(feature = "trojan")]
-            ServerProtocol::Trojan(..) => return Some(false),
+            ServerProtocol::Trojan(..) => Some(false),
             #[cfg(feature = "vless")]
-            ServerProtocol::Vless(..) => return Some(false),
+            ServerProtocol::Vless(..) => Some(false),
             #[cfg(feature = "tuic")]
-            ServerProtocol::Tuic(..) => return Some(true),
+            ServerProtocol::Tuic(..) => Some(true),
         }
     }
 }

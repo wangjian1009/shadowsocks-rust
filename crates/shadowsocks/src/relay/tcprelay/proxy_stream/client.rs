@@ -23,12 +23,12 @@ use crate::{
     config::{ServerConfig, ShadowsocksConfig},
     context::SharedContext,
     crypto::CipherKind,
-    net::{ConnectOpts, Destination},
+    net::ConnectOpts,
     relay::{
         socks5,
         tcprelay::crypto_io::{CryptoRead, CryptoStream, CryptoWrite, StreamType},
     },
-    transport::{Connection, Connector, DeviceOrGuard, StreamConnection},
+    transport::{Connector, DeviceOrGuard, StreamConnection},
     ServerAddr,
 };
 
@@ -140,9 +140,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         C: Connector,
         F: FnOnce(C::TS) -> S,
     {
-        let destination = Destination::Tcp(svr_cfg.external_addr().clone());
-
-        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(&destination, opts)).await {
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.external_addr(), opts)).await {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => return Err(e),
             Err(..) => {
@@ -160,15 +158,12 @@ impl<S: StreamConnection> ProxyClientStream<S> {
             opts
         );
 
-        match stream {
-            Connection::Stream(stream) => Ok(ProxyClientStream::from_stream(
-                context,
-                map_fn(stream),
-                svr_ss_cfg,
-                addr,
-            )),
-            Connection::Packet { .. } => panic!(),
-        }
+        Ok(ProxyClientStream::from_stream(
+            context,
+            map_fn(stream),
+            svr_ss_cfg,
+            addr.clone(),
+        ))
     }
 
     /// Create a `ProxyClientStream` with a connected `stream` to a shadowsocks' server
@@ -180,7 +175,6 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         svr_ss_cfg: &ShadowsocksConfig,
         addr: ServerAddr,
     ) -> ProxyClientStream<S> {
-        let addr = addr.into();
         let stream = CryptoStream::from_stream_with_identity(
             &context,
             stream,

@@ -16,7 +16,7 @@ use crate::{
     ServerAddr,
 };
 
-use super::super::{Acceptor, Connection, DummyPacket};
+use super::super::Acceptor;
 use super::kcp::{self, KcpResult};
 use super::{config::KcpConfig, io::InputDecorate, session::KcpSessionManager, stream::KcpStream};
 
@@ -35,12 +35,10 @@ impl Drop for KcpListener {
 #[async_trait]
 impl Acceptor for KcpListener {
     type TS = KcpStream;
-    type PR = DummyPacket;
-    type PW = DummyPacket;
 
-    async fn accept(&mut self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
+    async fn accept(&mut self) -> io::Result<(Self::TS, Option<SocketAddr>)> {
         match self.accept_rx.recv().await {
-            Some((stream, addr)) => Ok((Connection::Stream(stream), Some(ServerAddr::SocketAddr(addr)))),
+            Some((stream, addr)) => Ok((stream, Some(addr))),
             None => Err(io::Error::new(ErrorKind::Other, "accept channel closed unexpectly")),
         }
     }

@@ -39,7 +39,7 @@ pub async fn connect(
 ) {
     match server_policy
         .stream_check(
-            Some(&ServerAddr::SocketAddr(peer_addr.clone())),
+            Some(peer_addr),
             &addr,
             #[cfg(feature = "statistics")]
             bu_context.clone(),
@@ -86,6 +86,7 @@ pub async fn connect(
             #[allow(unused_mut)]
             let (mut target, _guard) = match server_policy
                 .create_out_connection(
+                    Some(peer_addr),
                     addr,
                     #[cfg(feature = "statistics")]
                     bu_context.clone(),

@@ -1,11 +1,6 @@
 use std::io;
 
-use crate::{
-    relay::socks5::Address,
-    transport::{PacketMutWrite, PacketRead},
-    ServerAddr,
-};
-use async_trait::async_trait;
+use crate::{relay::socks5::Address, ServerAddr};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 
 pub struct TrojanUdpReader<T> {
@@ -14,9 +9,8 @@ pub struct TrojanUdpReader<T> {
 
 use super::protocol;
 
-#[async_trait]
-impl<T: AsyncRead + Unpin + Send + Sync> PacketRead for TrojanUdpReader<T> {
-    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
+impl<T: AsyncRead + Unpin + Send + Sync> TrojanUdpReader<T> {
+    pub async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
         let header = protocol::UdpHeader::read_from(&mut self.inner).await?;
         self.inner.read_exact(&mut buf[..header.payload_len as usize]).await?;
         Ok((header.payload_len as usize, header.address.into()))
@@ -27,9 +21,8 @@ pub struct TrojanUdpWriter<T> {
     inner: WriteHalf<T>,
 }
 
-#[async_trait]
-impl<T: AsyncWrite + Unpin + Send + Sync> PacketMutWrite for TrojanUdpWriter<T> {
-    async fn write_to_mut(&mut self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
+impl<T: AsyncWrite + Unpin + Send + Sync> TrojanUdpWriter<T> {
+    pub async fn write_to_mut(&mut self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         let header = protocol::UdpHeader::new(
             match addr {
                 ServerAddr::SocketAddr(addr) => Address::SocketAddress(addr.clone()),
@@ -38,7 +31,7 @@ impl<T: AsyncWrite + Unpin + Send + Sync> PacketMutWrite for TrojanUdpWriter<T> 
             buf.len(),
         );
         header.write_to(&mut self.inner).await?;
-        self.inner.write(buf).await?;
+        let _ = self.inner.write(buf).await?;
         Ok(())
     }
 }

@@ -16,8 +16,8 @@ use tokio::{
 
 use crate::{
     config::ServerConfig,
-    net::{ConnectOpts, Destination},
-    transport::{Connection, Connector, DeviceOrGuard, StreamConnection},
+    net::ConnectOpts,
+    transport::{Connector, DeviceOrGuard, StreamConnection},
     vless::{new_error, Config},
     ServerAddr,
 };
@@ -77,9 +77,7 @@ impl<S: StreamConnection> ClientStream<S> {
         C: Connector,
         F: FnOnce(C::TS) -> S,
     {
-        let destination = Destination::Tcp(svr_cfg.external_addr().clone());
-
-        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(&destination, opts)).await {
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.external_addr(), opts)).await {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => return Err(e),
             Err(..) => {
@@ -99,19 +97,14 @@ impl<S: StreamConnection> ClientStream<S> {
             opts
         );
 
-        match stream {
-            Connection::Stream(stream) => {
-                let request = protocol::RequestHeader {
-                    version: 0,
-                    user: Self::pick_user(svr_vless_cfg)?.account.id.clone(),
-                    command,
-                    address: target_address.map(|o| protocol::Address::from(o)),
-                };
+        let request = protocol::RequestHeader {
+            version: 0,
+            user: Self::pick_user(svr_vless_cfg)?.account.id.clone(),
+            command,
+            address: target_address.map(|o| protocol::Address::from(o)),
+        };
 
-                Ok(ClientStream::new(map_fn(stream), request))
-            }
-            Connection::Packet { .. } => panic!(),
-        }
+        Ok(ClientStream::new(map_fn(stream), request))
     }
 
     #[inline]
@@ -141,7 +134,7 @@ impl<S: StreamConnection> ClientStream<S> {
 }
 
 impl<S> ClientStream<S> {
-    fn process_response(self: &mut Self, addon: Option<protocol::Addons>) -> io::Result<()> {
+    fn process_response(&mut self, addon: Option<protocol::Addons>) -> io::Result<()> {
         if addon.is_some() {
             return Err(new_error(format!("decode rquest: not support addon")));
         }

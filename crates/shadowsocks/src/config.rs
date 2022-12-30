@@ -549,7 +549,7 @@ impl ServerConfig {
             #[cfg(feature = "trojan")]
             ServerProtocol::Trojan(config) => {
                 let param = format!("{}@{}", config.password(), self.addr());
-                return format!("trojan://{}", encode_config(&param, URL_SAFE_NO_PAD));
+                return format!("trojan://{}", encode_config(param, URL_SAFE_NO_PAD));
             }
             #[cfg(feature = "vless")]
             ServerProtocol::Vless(_config) => {
@@ -1269,9 +1269,7 @@ macro_rules! create_connector_then {
                 }
                 #[cfg(feature = "transport-mkcp")]
                 &shadowsocks::config::TransportConnectorConfig::Mkcp(ref mkcp_config) => {
-                    let $connector = shadowsocks::transport::direct::TcpConnector::new($context);
-                    let $connector =
-                        $crate::transport::mkcp::MkcpConnector::new(Arc::new(mkcp_config.clone()), $connector, None);
+                    let $connector = $crate::transport::mkcp::MkcpConnector::new(Arc::new(mkcp_config.clone()), None);
                     $body
                 }
                 #[cfg(feature = "transport-skcp")]

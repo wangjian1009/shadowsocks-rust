@@ -97,42 +97,94 @@ impl BuContext {
         self.transport.as_ref()
     }
 
-    pub fn increment_conn_error(&self, reason: &'static str) {
+    pub fn increment_bu_client(&self) {
+        let protocol = self.protocol.name();
+        let trans = self.transport.as_ref().map(|t| t.name()).unwrap_or("none");
+
         match self.protocol {
             ProtocolInfo::SS { ref method } => {
-                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"), "ss_method" => method.clone())
+                increment_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans, "ss_method" => method.clone())
             }
             #[cfg(feature = "trojan")]
             ProtocolInfo::Trojan => {
-                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"))
+                increment_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans)
             }
             #[cfg(feature = "vless")]
             ProtocolInfo::Vless => {
-                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"))
+                increment_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans)
             }
             #[cfg(feature = "tuic")]
             ProtocolInfo::Tuic { cc } => {
-                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"), "tuic_cc" => cc)
+                increment_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans, "tuic_cc" => cc)
+            }
+        }
+    }
+
+    pub fn decrement_bu_client(&self) {
+        let protocol = self.protocol.name();
+        let trans = self.transport.as_ref().map(|t| t.name()).unwrap_or("none");
+
+        match self.protocol {
+            ProtocolInfo::SS { ref method } => {
+                decrement_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans, "ss_method" => method.clone())
+            }
+            #[cfg(feature = "trojan")]
+            ProtocolInfo::Trojan => {
+                decrement_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans)
+            }
+            #[cfg(feature = "vless")]
+            ProtocolInfo::Vless => {
+                decrement_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans)
+            }
+            #[cfg(feature = "tuic")]
+            ProtocolInfo::Tuic { cc } => {
+                decrement_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans, "tuic_cc" => cc)
+            }
+        }
+    }
+
+    pub fn increment_conn_error(&self, reason: &'static str) {
+        let protocol = self.protocol.name();
+        let trans = self.transport.as_ref().map(|t| t.name()).unwrap_or("none");
+
+        match self.protocol {
+            ProtocolInfo::SS { ref method } => {
+                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => protocol, "trans" => trans, "ss_method" => method.clone())
+            }
+            #[cfg(feature = "trojan")]
+            ProtocolInfo::Trojan => {
+                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => protocol, "trans" => trans)
+            }
+            #[cfg(feature = "vless")]
+            ProtocolInfo::Vless => {
+                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => protocol, "trans" => trans)
+            }
+            #[cfg(feature = "tuic")]
+            ProtocolInfo::Tuic { cc } => {
+                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => protocol, "trans" => trans, "tuic_cc" => cc)
             }
         }
     }
 
     pub fn count_traffic(&self, key: &'static str, count: u64, net: TrafficNet, way: TrafficWay) {
+        let protocol = self.protocol.name();
+        let trans = self.transport.as_ref().map(|t| t.name()).unwrap_or("none");
+
         match self.protocol {
             ProtocolInfo::SS { ref method } => {
-                counter!(key, count, "way" => way.name(), "net" => net.name(), "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"), "ss_method" => method.clone())
+                counter!(key, count, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans, "ss_method" => method.clone())
             }
             #[cfg(feature = "trojan")]
             ProtocolInfo::Trojan => {
-                counter!(key, count, "way" => way.name(), "net" => net.name(), "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"))
+                counter!(key, count, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans)
             }
             #[cfg(feature = "vless")]
             ProtocolInfo::Vless => {
-                counter!(key, count, "way" => way.name(), "net" => net.name(), "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"))
+                counter!(key, count, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans)
             }
             #[cfg(feature = "tuic")]
             ProtocolInfo::Tuic { cc } => {
-                counter!(key, count, "way" => way.name(), "net" => net.name(), "proto" => self.protocol.name(), "trans" => self.transport.as_ref().map(|t| t.name()).unwrap_or("none"), "tuic_cc" => cc)
+                counter!(key, count, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans, "tuic_cc" => cc)
             }
         }
     }

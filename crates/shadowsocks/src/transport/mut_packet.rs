@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use std::{io, sync::Arc};
 use tokio::{sync::mpsc, task::JoinHandle};
 
-use super::{PacketMutWrite, PacketWrite};
 use crate::ServerAddr;
+
+use super::{PacketMutWrite, PacketWrite};
 
 struct Packet {
     addr: ServerAddr,

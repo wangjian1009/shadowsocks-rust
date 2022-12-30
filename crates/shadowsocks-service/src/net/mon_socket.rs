@@ -213,8 +213,14 @@ impl Deref for MonProxyReader {
 
 #[async_trait]
 impl PacketRead for MonProxyReader {
-    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
+    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         let (sz, addr) = self.inner.recv(buf).await?;
-        Ok((sz, addr.into()))
+        Ok((
+            sz,
+            match addr {
+                ServerAddr::SocketAddr(addr) => addr,
+                ServerAddr::DomainName(..) => unimplemented!(),
+            },
+        ))
     }
 }

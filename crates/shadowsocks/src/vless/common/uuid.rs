@@ -39,6 +39,12 @@ impl UUID {
     }
 }
 
+impl Default for UUID {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ParseString converts a UUID in string form to object.
 impl FromStr for UUID {
     type Err = io::Error;
@@ -54,11 +60,11 @@ impl FromStr for UUID {
         let mut b: &mut [u8] = &mut uuid;
 
         for byte_group in BYTE_GROUPS {
-            if text[0] == '-' as u8 {
+            if text[0] == b'-' as u8 {
                 text = &text[1..];
             }
 
-            hex::decode_to_slice(&text[..byte_group], &mut b[..byte_group / 2]).map_err(|e| new_error(e))?;
+            hex::decode_to_slice(&text[..byte_group], &mut b[..byte_group / 2]).map_err(new_error)?;
 
             text = &text[byte_group..];
             b = &mut b[byte_group / 2..];

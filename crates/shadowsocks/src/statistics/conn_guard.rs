@@ -45,15 +45,15 @@ impl ConnGuard {
 
         match &target {
             Target::Net(category, t) => {
-                total.map(|total| {
+                if let Some(total) = total {
                     increment_counter!(total,  "proto" => proto, "trans" => trans, "category" => category.name(), "type" => t.name());
-                });
+                };
                 increment_gauge!(count, 1.0, "proto" => proto, "trans" => trans, "category" => category.name(), "type" => t.name());
             }
             Target::Inapp(p) => {
-                total.map(|total| {
+                if let Some(total) = total {
                     increment_counter!(total,  "proto" => proto, "trans" => trans, "category" => *p);
-                });
+                };
                 increment_gauge!(count, 1.0, "proto" => proto, "trans" => trans, "category" => *p);
             }
         }

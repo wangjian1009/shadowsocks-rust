@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use futures::ready;
 use std::io::{self, IoSlice};
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -65,7 +66,7 @@ impl<T: PacketWrite> PacketWrite for MonTraffic<T> {
 
 #[async_trait]
 impl<T: PacketRead> PacketRead for MonTraffic<T> {
-    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
+    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         let r = self.s.read_from(buf).await?;
         self.rx.as_ref().map(|rx| rx.incr_rx(buf.len() as u64));
         Ok(r)

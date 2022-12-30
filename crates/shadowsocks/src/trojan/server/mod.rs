@@ -1,4 +1,5 @@
 use std::fmt;
+use std::net::SocketAddr;
 use std::{io, sync::Arc};
 use tokio::time::{self, Duration};
 use tracing::{debug, error, info_span, Instrument};
@@ -56,7 +57,7 @@ pub async fn serve(
 
     loop {
         let (incoming, peer_addr) = tokio::select! {
-            r = listener.accept_stream() => {
+            r = listener.accept() => {
                 r?
             }
             _ = cancel_waiter.wait() => {
@@ -94,7 +95,7 @@ pub async fn serve(
 async fn process_incoming(
     cancel_waiter: CancelWaiter,
     mut incoming: impl StreamConnection + 'static,
-    peer_addr: Option<ServerAddr>,
+    peer_addr: Option<SocketAddr>,
     cfg_hash: Arc<[u8]>,
     request_recv_timeout: Duration,
     idle_timeout: Duration,

@@ -5,7 +5,6 @@ use std::net::SocketAddr;
 #[cfg(unix)]
 pub use self::sys::uds::{UnixListener, UnixStream};
 pub use self::{
-    destination::Destination,
     flow::FlowStat,
     option::{AcceptOpts, ConnectOpts, TcpSocketOpts},
     sys::{set_tcp_fastopen, socket_bind_dual_stack},
@@ -13,7 +12,6 @@ pub use self::{
     udp::UdpSocket,
 };
 
-mod destination;
 pub mod flow;
 mod option;
 pub mod sys;

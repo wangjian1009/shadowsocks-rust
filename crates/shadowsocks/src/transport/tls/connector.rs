@@ -6,12 +6,9 @@ use tokio_rustls::{
     TlsConnector as TokioTlsConnector,
 };
 
-use crate::{
-    net::{ConnectOpts, Destination},
-    ssl,
-};
+use crate::{net::ConnectOpts, ssl, ServerAddr};
 
-use super::super::{Connection, Connector, DeviceOrGuard, DummyPacket, StreamConnection};
+use super::super::{Connector, DeviceOrGuard, StreamConnection};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TlsConnectorConfig {
@@ -67,26 +64,16 @@ where
     S: StreamConnection + 'static,
     C: Connector + Connector<TS = S>,
 {
-    type PR = DummyPacket;
-    type PW = DummyPacket;
     type TS = TokioTlsStream<S>;
 
-    async fn connect(
-        &self,
-        destination: &Destination,
-        connect_opts: &ConnectOpts,
-    ) -> io::Result<Connection<Self::TS, Self::PR, Self::PW>> {
-        match self.inner.connect(destination, connect_opts).await? {
-            Connection::Stream(stream) => {
-                let dns_name = ServerName::try_from(self.sni.as_str())
-                    .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
-                let stream = TokioTlsConnector::from(self.tls_config.clone())
-                    .connect(dns_name, stream)
-                    .await?;
+    async fn connect(&self, destination: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
+        let stream = self.inner.connect(destination, connect_opts).await?;
+        let dns_name = ServerName::try_from(self.sni.as_str())
+            .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
+        let stream = TokioTlsConnector::from(self.tls_config.clone())
+            .connect(dns_name, stream)
+            .await?;
 
-                Ok(Connection::Stream(stream))
-            }
-            Connection::Packet { .. } => unimplemented!(),
-        }
+        Ok(stream)
     }
 }

@@ -1,10 +1,10 @@
-use super::super::{Acceptor, Connection};
+use super::super::Acceptor;
 use crate::{
     context::Context,
-    net::{AcceptOpts, TcpListener, UdpSocket},
+    net::{AcceptOpts, TcpListener},
     ServerAddr,
 };
-use std::{io, net::SocketAddr, sync::Arc};
+use std::{io, net::SocketAddr};
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -18,20 +18,18 @@ use super::super::RateLimitedStream;
 
 #[async_trait]
 impl Acceptor for TcpAcceptor {
-    type PR = Arc<UdpSocket>;
-    type PW = Arc<UdpSocket>;
     #[cfg(feature = "rate-limit")]
     type TS = RateLimitedStream<tokio::net::TcpStream>;
     #[cfg(not(feature = "rate-limit"))]
     type TS = tokio::net::TcpStream;
 
-    async fn accept(&mut self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
+    async fn accept(&mut self) -> io::Result<(Self::TS, Option<SocketAddr>)> {
         let (stream, addr) = self.inner.accept().await?;
 
         #[cfg(feature = "rate-limit")]
         let stream = RateLimitedStream::from_stream(stream, None);
 
-        Ok((Connection::Stream(stream), Some(ServerAddr::SocketAddr(addr))))
+        Ok((stream, Some(addr)))
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {

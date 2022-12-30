@@ -29,7 +29,16 @@ impl TcpServerClient {
                 request_timeout,
                 {
                     let arc_self = arc_self.clone();
-                    move |s, addr| arc_self.clone().serve_vless_tcp(s, addr)
+                    #[cfg(feature = "statistics")]
+                    let bu_context = bu_context.clone();
+                    move |s, addr| {
+                        arc_self.clone().serve_vless_tcp(
+                            s,
+                            addr,
+                            #[cfg(feature = "statistics")]
+                            bu_context.clone(),
+                        )
+                    }
                 },
                 {
                     let arc_self = arc_self.clone();
@@ -56,6 +65,7 @@ impl TcpServerClient {
         self: Arc<Self>,
         mut stream: Box<dyn StreamConnection>,
         target_addr: ServerAddr,
+        #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<()> {
         let connection_stat = self.context.connection_stat();
 
@@ -85,18 +95,13 @@ impl TcpServerClient {
             return Ok(());
         }
 
-        let destination = Destination::Tcp(target_addr.clone().into());
-
         let mut remote_stream = match timeout_fut(
             self.timeout,
-            self.connector.connect(&destination, self.context.connect_opts_ref()),
+            self.connector.connect(&target_addr, self.context.connect_opts_ref()),
         )
         .await
         {
-            Ok(s) => match s {
-                Connection::Stream(s) => s,
-                Connection::Packet { .. } => unreachable!(),
-            },
+            Ok(s) => s,
             Err(err) => {
                 error!(
                     "vless tcp tunnel {} -> {} connect failed, error: {}",
@@ -110,7 +115,12 @@ impl TcpServerClient {
         remote_stream.set_rate_limit(self.rate_limiter.clone());
 
         // let mut remote_stream = OutboundTcpStream::from_stream(remote_stream, self.rate_limiter);
-        let _out_guard = connection_stat.add_out_connection();
+        let _out_guard = connection_stat.add_out_connection(
+            Some(&self.peer_addr),
+            &target_addr,
+            #[cfg(feature = "statistics")]
+            bu_context.clone(),
+        );
 
         // https://github.com/shadowsocks/shadowsocks-rust/issues/232
         //

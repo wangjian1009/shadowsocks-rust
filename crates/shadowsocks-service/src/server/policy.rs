@@ -58,20 +58,11 @@ impl Drop for InConnectionGuard {
 /// OutConnectionGuard
 pub struct OutConnectionGuard {
     _guard: super::connection::OutConnectionGuard,
-    #[cfg(feature = "statistics")]
-    _out_conn_guard: shadowsocks::statistics::ConnGuard,
 }
 
 impl OutConnectionGuard {
-    pub fn new(
-        guard: super::connection::OutConnectionGuard,
-        #[cfg(feature = "statistics")] _out_conn_guard: shadowsocks::statistics::ConnGuard,
-    ) -> Self {
-        Self {
-            _guard: guard,
-            #[cfg(feature = "statistics")]
-            _out_conn_guard,
-        }
+    pub fn new(guard: super::connection::OutConnectionGuard) -> Self {
+        Self { _guard: guard }
     }
 }
 
@@ -146,17 +137,15 @@ impl policy::ServerPolicy for ServerPolicy {
 
     async fn create_out_connection(
         &self,
+        source_addr: Option<&SocketAddr>,
         target_addr: ServerAddr,
         #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<(TcpStream, Box<dyn policy::ConnectionGuard>)> {
-        #[cfg(feature = "statistics")]
-        let target = shadowsocks::statistics::Target::from(&target_addr);
-
         let stream = timeout_fut(
             self.connect_timeout.clone(),
             shadowsocks::net::TcpStream::connect_remote_with_opts(
                 self.context.context_ref(),
-                target_addr,
+                target_addr.clone(),
                 self.context.connect_opts_ref(),
             ),
         )
@@ -165,13 +154,11 @@ impl policy::ServerPolicy for ServerPolicy {
         Ok((
             stream,
             Box::new(OutConnectionGuard::new(
-                self.context.connection_stat().add_out_connection(),
-                #[cfg(feature = "statistics")]
-                shadowsocks::statistics::ConnGuard::new_with_target(
-                    bu_context,
-                    target,
-                    shadowsocks::statistics::METRIC_TCP_CONN_OUT,
-                    Some(shadowsocks::statistics::METRIC_TCP_CONN_OUT_TOTAL),
+                self.context.connection_stat().add_out_connection(
+                    source_addr,
+                    &target_addr,
+                    #[cfg(feature = "statistics")]
+                    bu_context.clone(),
                 ),
             )) as Box<dyn policy::ConnectionGuard>,
         ))
@@ -186,16 +173,13 @@ impl policy::ServerPolicy for ServerPolicy {
 
     async fn stream_check(
         &self,
-        src_addr: Option<&ServerAddr>,
+        src_addr: Option<&SocketAddr>,
         target_addr: &ServerAddr,
         #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<policy::StreamAction> {
         // 后续支持不同地址的处理
         let src_addr = match src_addr {
-            Some(src_addr) => match src_addr {
-                ServerAddr::SocketAddr(src_addr) => src_addr,
-                _ => unreachable!(),
-            },
+            Some(src_addr) => src_addr,
             None => unreachable!(),
         };
 
@@ -276,19 +260,16 @@ impl policy::ServerPolicy for ServerPolicy {
 
     async fn packet_check(
         &self,
-        src_addr: Option<&ServerAddr>,
+        src_addr: Option<&SocketAddr>,
         target_addr: &ServerAddr,
     ) -> io::Result<policy::PacketAction> {
         // 后续支持不同地址的处理
         match src_addr {
-            Some(src_addr) => match src_addr {
-                ServerAddr::SocketAddr(src_addr) => {
-                    if self.context.check_client_blocked(src_addr) {
-                        return Ok(policy::PacketAction::ClientBlocked);
-                    }
+            Some(src_addr) => {
+                if self.context.check_client_blocked(src_addr) {
+                    return Ok(policy::PacketAction::ClientBlocked);
                 }
-                _ => unreachable!(),
-            },
+            }
             None => {}
         };
 

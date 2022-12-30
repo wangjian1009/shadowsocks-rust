@@ -9,8 +9,6 @@ use std::{
 use bytes::Bytes;
 use spin::Mutex;
 
-use crate::transport::PacketWrite;
-
 use super::{
     connection::{MkcpConnMetadata, MkcpConnectionContext, MkcpState},
     segment,
@@ -149,11 +147,8 @@ impl SendingWindow {
     }
 }
 
-pub struct SendingWorker<PW>
-where
-    PW: PacketWrite,
-{
-    context: Arc<MkcpConnectionContext<PW>>,
+pub struct SendingWorker {
+    context: Arc<MkcpConnectionContext>,
     window: SendingWindow,
     first_unacknowledged: AtomicU32,
     next_number: AtomicU32,
@@ -164,11 +159,8 @@ where
     closed: AtomicBool,
 }
 
-impl<PW> SendingWorker<PW>
-where
-    PW: PacketWrite,
-{
-    pub fn new(context: Arc<MkcpConnectionContext<PW>>) -> Self {
+impl SendingWorker {
+    pub fn new(context: Arc<MkcpConnectionContext>) -> Self {
         let config = context.config();
 
         Self {

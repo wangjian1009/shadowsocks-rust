@@ -5,6 +5,7 @@ use spin::Mutex as SpinMutex;
 use std::{
     fmt::{self, Display},
     io,
+    net::SocketAddr,
     sync::{
         atomic::{AtomicU32, AtomicU8, Ordering},
         Arc,
@@ -17,9 +18,7 @@ use tokio::{io::ReadBuf, sync::mpsc, task::JoinHandle, time::Instant};
 
 use crate::ServerAddr;
 
-use super::{
-    super::PacketWrite, io::MkcpPacketWriter, segment, MkcpConfig, ReceivingWorker, SendingWorker, StatisticStat,
-};
+use super::{io::MkcpPacketWriter, segment, MkcpConfig, ReceivingWorker, SendingWorker, StatisticStat};
 
 #[derive(Clone)]
 pub struct RoundTripInfo {
@@ -88,8 +87,8 @@ pub enum UpdaterCmd {
     Wakeup,
 }
 
-const UPDATER_DATA: &'static str = "data";
-const UPDATER_PING: &'static str = "ping";
+const UPDATER_DATA: &str = "data";
+const UPDATER_PING: &str = "ping";
 
 struct Updater {
     notifier: mpsc::Sender<UpdaterCmd>,
@@ -190,7 +189,7 @@ pub enum MkcpConnWay {
 
 pub struct MkcpConnMetadata {
     pub way: MkcpConnWay,
-    pub local_addr: ServerAddr,
+    pub local_addr: SocketAddr,
     pub remote_addr: ServerAddr,
     pub conversation: u16,
 }
@@ -200,7 +199,7 @@ impl Display for MkcpConnMetadata {
         match &self.way {
             &MkcpConnWay::Incoming => write!(f, "S {} #{}", self.remote_addr, self.conversation),
             &MkcpConnWay::Outgoing => {
-                if self.local_addr.is_unspecified() {
+                if self.local_addr.ip().is_unspecified() {
                     write!(f, "C #{}", self.conversation)
                 } else {
                     write!(f, "C {} #{}", self.local_addr, self.conversation)
@@ -210,10 +209,7 @@ impl Display for MkcpConnMetadata {
     }
 }
 
-pub struct MkcpConnectionContext<PW>
-where
-    PW: PacketWrite,
-{
+pub struct MkcpConnectionContext {
     config: Arc<MkcpConfig>,
     meta: MkcpConnMetadata,
     remove: Option<Box<dyn Fn() + Send + Sync>>,
@@ -228,21 +224,18 @@ where
     last_incoming_time: AtomicU32,
     last_ping_time: AtomicU32,
     mss: u32,
-    output: Arc<MkcpPacketWriter<PW>>,
+    output: Arc<MkcpPacketWriter>,
     round_trip: ArcSwap<RoundTripInfo>,
     data_updater: Updater,
     ping_updater: Updater,
 }
 
-impl<PW> MkcpConnectionContext<PW>
-where
-    PW: PacketWrite,
-{
+impl MkcpConnectionContext {
     pub fn new(
         config: Arc<MkcpConfig>,
         meta: MkcpConnMetadata,
         remove: Option<Box<dyn Fn() + Send + Sync>>,
-        output: Arc<MkcpPacketWriter<PW>>,
+        output: Arc<MkcpPacketWriter>,
         statistic: Option<Arc<StatisticStat>>,
     ) -> (Self, mpsc::Receiver<UpdaterCmd>, mpsc::Receiver<UpdaterCmd>) {
         let (data_updater, data_receiver) = Updater::new();
@@ -333,7 +326,7 @@ where
     }
 
     #[inline]
-    pub fn output(&self) -> &Arc<MkcpPacketWriter<PW>> {
+    pub fn output(&self) -> &Arc<MkcpPacketWriter> {
         &self.output
     }
 
@@ -399,8 +392,8 @@ where
     #[inline]
     fn set_state(
         &self,
-        receiving_worker: &ReceivingWorker<PW>,
-        sending_worker: &SendingWorker<PW>,
+        receiving_worker: &ReceivingWorker,
+        sending_worker: &SendingWorker,
         state: MkcpState,
         reason: &str,
     ) {
@@ -463,11 +456,7 @@ where
         }
     }
 
-    async fn flush(
-        &self,
-        receiving_worker: &ReceivingWorker<PW>,
-        sending_worker: &SendingWorker<PW>,
-    ) -> io::Result<()> {
+    async fn flush(&self, receiving_worker: &ReceivingWorker, sending_worker: &SendingWorker) -> io::Result<()> {
         let mut current = self.elapsed();
 
         if self.state() == MkcpState::Terminated {
@@ -557,7 +546,7 @@ where
         Ok(())
     }
 
-    fn terminate(&self, receiving_worker: &ReceivingWorker<PW>, sending_worker: &SendingWorker<PW>) {
+    fn terminate(&self, receiving_worker: &ReceivingWorker, sending_worker: &SendingWorker) {
         let state = self.state();
         tracing::debug!("#{}: ({}): terminating connection", self.meta(), state);
         let _ = self.data_input_tx.try_send(0);
@@ -571,7 +560,7 @@ where
         }
     }
 
-    fn close(&self, receiving_worker: &ReceivingWorker<PW>, sending_worker: &SendingWorker<PW>) -> io::Result<()> {
+    fn close(&self, receiving_worker: &ReceivingWorker, sending_worker: &SendingWorker) -> io::Result<()> {
         let _ = self.data_input_tx.try_send(0);
         let _ = self.data_output_tx.try_send(0);
 
@@ -597,8 +586,8 @@ where
 
     pub async fn ping(
         &self,
-        receiving_worker: &ReceivingWorker<PW>,
-        sending_worker: &SendingWorker<PW>,
+        receiving_worker: &ReceivingWorker,
+        sending_worker: &SendingWorker,
         current: &u32,
         cmd: segment::Command,
         reason: &str,
@@ -630,25 +619,19 @@ where
     }
 }
 
-pub struct MkcpConnection<PW>
-where
-    PW: PacketWrite,
-{
-    context: Arc<MkcpConnectionContext<PW>>,
-    receiving_worker: Arc<ReceivingWorker<PW>>,
-    sending_worker: Arc<SendingWorker<PW>>,
+pub struct MkcpConnection {
+    context: Arc<MkcpConnectionContext>,
+    receiving_worker: Arc<ReceivingWorker>,
+    sending_worker: Arc<SendingWorker>,
     output_task: JoinHandle<()>,
 }
 
-impl<PW> MkcpConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
+impl MkcpConnection {
     pub fn new(
         config: Arc<MkcpConfig>,
         meta: MkcpConnMetadata,
         remove: Option<Box<dyn Fn() + Send + Sync>>,
-        output: Arc<MkcpPacketWriter<PW>>,
+        output: Arc<MkcpPacketWriter>,
         statistic: Option<Arc<StatisticStat>>,
     ) -> Self {
         tracing::info!("#{}: creating connection", meta);
@@ -890,9 +873,9 @@ where
     }
 
     async fn process_output(
-        context: Arc<MkcpConnectionContext<PW>>,
-        receiving_worker: Arc<ReceivingWorker<PW>>,
-        sending_worker: Arc<SendingWorker<PW>>,
+        context: Arc<MkcpConnectionContext>,
+        receiving_worker: Arc<ReceivingWorker>,
+        sending_worker: Arc<SendingWorker>,
         mut data_receiver: mpsc::Receiver<UpdaterCmd>,
         mut ping_receiver: mpsc::Receiver<UpdaterCmd>,
         mut data_update_interval: Duration,
@@ -1000,10 +983,7 @@ where
     }
 }
 
-impl<PW> Drop for MkcpConnection<PW>
-where
-    PW: PacketWrite,
-{
+impl Drop for MkcpConnection {
     fn drop(&mut self) {
         self.output_task.abort();
         tracing::info!("#{}: connection droped", self.context.meta());

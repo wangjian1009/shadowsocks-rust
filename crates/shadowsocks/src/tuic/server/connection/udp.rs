@@ -123,10 +123,7 @@ impl UdpSessionMap {
             let addr_for_log = addr.to_string();
             let len = pkt.len();
 
-            match server_policy
-                .packet_check(Some(&ServerAddr::SocketAddr(src_addr.clone())), &addr)
-                .await?
-            {
+            match server_policy.packet_check(Some(&src_addr), &addr).await? {
                 PacketAction::ClientBlocked => {
                     warn!(target = addr_for_log, "client blocked by ACL rules");
                     return Ok(0);

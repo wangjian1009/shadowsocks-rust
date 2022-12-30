@@ -4,8 +4,8 @@ use tracing::error;
 
 use crate::{
     config::ServerConfig,
-    net::{ConnectOpts, Destination},
-    transport::{Connection, Connector, StreamConnection},
+    net::ConnectOpts,
+    transport::{Connector, StreamConnection},
 };
 
 mod delay_connect_stream;
@@ -20,13 +20,8 @@ where
     S: StreamConnection,
     F: FnOnce(C::TS) -> S,
 {
-    let destination = Destination::Tcp(svr_cfg.external_addr().clone());
-
-    let stream = match time::timeout(svr_cfg.timeout(), connector.connect(&destination, opts)).await {
-        Ok(Ok(s)) => match s {
-            Connection::Stream(s) => s,
-            Connection::Packet { .. } => panic!(),
-        },
+    let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.external_addr(), opts)).await {
+        Ok(Ok(s)) => s,
         Ok(Err(e)) => {
             error!(error = ?e, "connect error");
             return Err(e);

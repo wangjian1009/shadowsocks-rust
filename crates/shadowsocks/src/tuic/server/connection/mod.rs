@@ -89,7 +89,7 @@ impl Connection {
             is_authenticated: is_authed,
             server_policy,
             flow_state,
-            idle_timeout: idle_timeout.clone(),
+            idle_timeout,
             #[cfg(feature = "statistics")]
             bu_context,
         };

@@ -15,8 +15,8 @@ use tracing::error;
 
 use crate::{
     config::ServerConfig,
-    net::{ConnectOpts, Destination},
-    transport::{Connection, Connector, DeviceOrGuard, StreamConnection},
+    net::ConnectOpts,
+    transport::{Connector, DeviceOrGuard, StreamConnection},
     ServerAddr,
 };
 
@@ -68,9 +68,7 @@ impl<S: StreamConnection> DelayConnectStream<S> {
         C: Connector,
         F: FnOnce(C::TS) -> S,
     {
-        let destination = Destination::Tcp(svr_cfg.external_addr().clone());
-
-        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(&destination, opts)).await {
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.external_addr(), opts)).await {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
                 error!(error = ?e, "connect error");
@@ -82,10 +80,7 @@ impl<S: StreamConnection> DelayConnectStream<S> {
             }
         };
 
-        match stream {
-            Connection::Stream(stream) => Ok(DelayConnectStream::new_stream(map_fn(stream), svr_trojan_cfg, addr)),
-            Connection::Packet { .. } => panic!(),
-        }
+        Ok(DelayConnectStream::new_stream(map_fn(stream), svr_trojan_cfg, addr))
     }
 
     fn new_stream(stream: S, svr_trojan_cfg: &Config, addr: ServerAddr) -> DelayConnectStream<S> {

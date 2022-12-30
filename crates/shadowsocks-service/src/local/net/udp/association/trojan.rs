@@ -8,7 +8,6 @@ use tokio::{
 use shadowsocks::{
     config::TrojanConfig,
     create_connector_then,
-    transport::{PacketMutWrite, PacketRead},
     trojan::{client::connect_packet, TrojanUdpReader, TrojanUdpWriter},
     ServerAddr,
 };

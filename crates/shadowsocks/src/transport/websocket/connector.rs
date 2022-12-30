@@ -1,15 +1,13 @@
-use super::{
-    super::{Connection, Connector},
-    cvt_error,
-    BinaryWsStream,
-};
-use crate::net::{ConnectOpts, Destination};
 use async_trait::async_trait;
 use std::io;
 use tokio_tungstenite::{
     client_async,
     tungstenite::http::{StatusCode, Uri},
 };
+
+use crate::{net::ConnectOpts, ServerAddr};
+
+use super::{super::Connector, cvt_error, BinaryWsStream};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WebSocketConnectorConfig {
@@ -24,26 +22,16 @@ pub struct WebSocketConnector<T: Connector> {
 
 #[async_trait]
 impl<T: Connector> Connector for WebSocketConnector<T> {
-    type PR = T::PR;
-    type PW = T::PW;
     type TS = BinaryWsStream<T::TS>;
 
-    async fn connect(
-        &self,
-        destination: &Destination,
-        connect_opts: &ConnectOpts,
-    ) -> io::Result<Connection<Self::TS, Self::PR, Self::PW>> {
-        match self.inner.connect(destination, connect_opts).await? {
-            Connection::Stream(stream) => {
-                let (stream, resp) = client_async(&self.uri, stream).await.map_err(|e| cvt_error(e))?;
-                if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
-                    return Err(cvt_error(format!("bad status: {}", resp.status())));
-                }
-                let stream = BinaryWsStream::new(stream);
-                Ok(Connection::Stream(stream))
-            }
-            Connection::Packet { r, w, local_addr } => Ok(Connection::Packet { r, w, local_addr }),
+    async fn connect(&self, destination: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
+        let stream = self.inner.connect(destination, connect_opts).await?;
+        let (stream, resp) = client_async(&self.uri, stream).await.map_err(|e| cvt_error(e))?;
+        if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
+            return Err(cvt_error(format!("bad status: {}", resp.status())));
         }
+        let stream = BinaryWsStream::new(stream);
+        Ok(stream)
     }
 }
 

@@ -15,13 +15,13 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::ServerAddr;
+use crate::{net::UdpSocket, ServerAddr};
 
 #[cfg(feature = "rate-limit")]
 use crate::transport::RateLimiter;
 
 use super::{
-    super::{Acceptor, Connection, DeviceOrGuard, DummyPacket, PacketRead, PacketWrite, StreamConnection},
+    super::{Acceptor, DeviceOrGuard, StreamConnection},
     MkcpConfig, StatisticStat,
 };
 
@@ -35,37 +35,31 @@ use super::{
 
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
 struct MkcpConnectionID {
-    pub remote: ServerAddr,
+    pub remote: SocketAddr,
     pub conv: u16,
 }
 
-struct MkcpAcceptorCtx<PW: PacketWrite> {
+struct MkcpAcceptorCtx {
     config: Arc<MkcpConfig>,
     local_addr: SocketAddr,
     statistic: Option<Arc<StatisticStat>>,
-    connections: Mutex<HashMap<MkcpConnectionID, Arc<MkcpConnection<PW>>>>,
+    connections: Mutex<HashMap<MkcpConnectionID, Arc<MkcpConnection>>>,
 }
 
-pub struct MkcpAcceptor<PW: PacketWrite> {
-    context: Arc<MkcpAcceptorCtx<PW>>,
+pub struct MkcpAcceptor {
+    context: Arc<MkcpAcceptorCtx>,
     rx: tokio::sync::Mutex<mpsc::Receiver<MkcpConnectionID>>,
     recv_task: JoinHandle<()>,
 }
 
-impl<PW> MkcpAcceptor<PW>
-where
-    PW: PacketWrite + 'static,
-{
-    pub fn new<PR>(
+impl MkcpAcceptor {
+    pub fn new(
         config: Arc<MkcpConfig>,
         local_addr: SocketAddr,
-        pr: PR,
-        pw: PW,
+        pr: Arc<UdpSocket>,
+        pw: Arc<UdpSocket>,
         statistic: Option<Arc<StatisticStat>>,
-    ) -> Self
-    where
-        PR: PacketRead + 'static,
-    {
+    ) -> Self {
         let header = match config.create_header() {
             Some(header) => Some(Arc::new(header)),
             None => None,
@@ -111,15 +105,12 @@ where
         self.context.statistic.clone()
     }
 
-    async fn handle_incoming<PR>(
-        context: Arc<MkcpAcceptorCtx<PW>>,
+    async fn handle_incoming(
+        context: Arc<MkcpAcceptorCtx>,
         new_conn_tx: mpsc::Sender<MkcpConnectionID>,
-        mut reader: MkcpPacketReader<PR>,
-        writer: MkcpPacketWriter<PW>,
-    ) -> io::Result<()>
-    where
-        PR: PacketRead,
-    {
+        mut reader: MkcpPacketReader,
+        writer: MkcpPacketWriter,
+    ) -> io::Result<()> {
         let writer = Arc::new(writer);
         let (remove_conn_tx, mut remove_conn_rx) = mpsc::channel(1);
         let remove_conn_tx = Arc::new(remove_conn_tx);
@@ -148,12 +139,12 @@ where
     }
 
     async fn on_receive(
-        context: &MkcpAcceptorCtx<PW>,
+        context: &MkcpAcceptorCtx,
         new_conn_tx: &mpsc::Sender<MkcpConnectionID>,
         remove_conn_tx: &Arc<mpsc::Sender<MkcpConnectionID>>,
-        writer: &Arc<MkcpPacketWriter<PW>>,
+        writer: &Arc<MkcpPacketWriter>,
         segments: Vec<Segment>,
-        src: ServerAddr,
+        src: SocketAddr,
     ) -> io::Result<()> {
         if segments.len() == 0 {
             return Err(new_error(format!("discarding invalid payload from {}", src)));
@@ -189,8 +180,8 @@ where
                             context.config.clone(),
                             MkcpConnMetadata {
                                 way: MkcpConnWay::Incoming,
-                                local_addr: ServerAddr::SocketAddr(context.local_addr.clone()),
-                                remote_addr: id.remote.clone(),
+                                local_addr: context.local_addr.clone(),
+                                remote_addr: ServerAddr::SocketAddr(id.remote.clone()),
                                 conversation: conv,
                             },
                             Some(Box::new(remove_fn)),
@@ -226,22 +217,17 @@ where
     }
 }
 
-impl<PW> Drop for MkcpAcceptor<PW>
-where
-    PW: PacketWrite,
-{
+impl Drop for MkcpAcceptor {
     fn drop(&mut self) {
         self.recv_task.abort()
     }
 }
 
 #[async_trait]
-impl<PW: PacketWrite + 'static> Acceptor for MkcpAcceptor<PW> {
-    type PR = DummyPacket;
-    type PW = DummyPacket;
-    type TS = MkcpAcceptorConnection<PW>;
+impl Acceptor for MkcpAcceptor {
+    type TS = MkcpAcceptorConnection;
 
-    async fn accept(&mut self) -> io::Result<(Connection<Self::TS, Self::PR, Self::PW>, Option<ServerAddr>)> {
+    async fn accept(&mut self) -> io::Result<(Self::TS, Option<SocketAddr>)> {
         loop {
             let id = match self.rx.lock().await.recv().await {
                 Some(id) => id,
@@ -261,7 +247,7 @@ impl<PW: PacketWrite + 'static> Acceptor for MkcpAcceptor<PW> {
                 inner: connection,
             };
 
-            return Ok((Connection::Stream(connection), Some(remote_addr)));
+            return Ok((connection, Some(remote_addr)));
         }
     }
 
@@ -270,19 +256,13 @@ impl<PW: PacketWrite + 'static> Acceptor for MkcpAcceptor<PW> {
     }
 }
 
-pub struct MkcpAcceptorConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
-    context: Arc<MkcpAcceptorCtx<PW>>,
+pub struct MkcpAcceptorConnection {
+    context: Arc<MkcpAcceptorCtx>,
     id: MkcpConnectionID,
-    inner: Arc<MkcpConnection<PW>>,
+    inner: Arc<MkcpConnection>,
 }
 
-impl<PW> Drop for MkcpAcceptorConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
+impl Drop for MkcpAcceptorConnection {
     fn drop(&mut self) {
         let connection = {
             let connections = self.context.connections.lock();
@@ -300,10 +280,7 @@ where
 }
 
 #[async_trait]
-impl<PW> StreamConnection for MkcpAcceptorConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
+impl StreamConnection for MkcpAcceptorConnection {
     #[inline]
     fn check_connected(&self) -> bool {
         true
@@ -320,20 +297,14 @@ where
     }
 }
 
-impl<PW> AsyncRead for MkcpAcceptorConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
+impl AsyncRead for MkcpAcceptorConnection {
     #[inline]
     fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         self.inner.poll_read(cx, buf)
     }
 }
 
-impl<PW> AsyncWrite for MkcpAcceptorConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
+impl AsyncWrite for MkcpAcceptorConnection {
     #[inline]
     fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         self.inner.poll_write(cx, buf)

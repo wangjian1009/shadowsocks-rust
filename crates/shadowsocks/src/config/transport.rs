@@ -80,7 +80,7 @@ impl ServerConfig {
     pub(crate) fn from_url_transport_connector(
         query: &Vec<(String, String)>,
     ) -> Result<Option<TransportConnectorConfig>, UrlParseError> {
-        let transport_type = match Self::from_url_get_arg(&query, "type") {
+        let transport_type = match Self::from_url_get_arg(query, "type") {
             Some(transport_type) => transport_type,
             None => return Ok(None),
         };
@@ -88,12 +88,12 @@ impl ServerConfig {
         match transport_type.as_str() {
             #[cfg(feature = "transport-ws")]
             "ws" => {
-                if let Some(security) = Self::from_url_get_arg(&query, "security") {
+                if let Some(security) = Self::from_url_get_arg(query, "security") {
                     match security.as_str() {
                         #[cfg(feature = "transport-tls")]
                         "tls" => Ok(Some(TransportConnectorConfig::Wss(
-                            Self::from_url_ws(&query)?,
-                            Self::from_url_tls(&query)?,
+                            Self::from_url_ws(query)?,
+                            Self::from_url_tls(query)?,
                         ))),
                         _ => {
                             error!("url to config: vless: not support security {}", security);
@@ -101,15 +101,15 @@ impl ServerConfig {
                         }
                     }
                 } else {
-                    Ok(Some(TransportConnectorConfig::Ws(Self::from_url_ws(&query)?)))
+                    Ok(Some(TransportConnectorConfig::Ws(Self::from_url_ws(query)?)))
                 }
             }
             #[cfg(feature = "transport-mkcp")]
-            "kcp" | "mkcp" => Ok(Some(TransportConnectorConfig::Mkcp(Self::from_url_mkcp(&query)?))),
+            "kcp" | "mkcp" => Ok(Some(TransportConnectorConfig::Mkcp(Self::from_url_mkcp(query)?))),
             #[cfg(feature = "transport-skcp")]
-            "skcp" => Ok(Some(TransportConnectorConfig::Skcp(Self::from_url_skcp(&query)?))),
+            "skcp" => Ok(Some(TransportConnectorConfig::Skcp(Self::from_url_skcp(query)?))),
             #[cfg(feature = "transport-tls")]
-            "tls" => Ok(Some(TransportConnectorConfig::Tls(Self::from_url_tls(&query)?))),
+            "tls" => Ok(Some(TransportConnectorConfig::Tls(Self::from_url_tls(query)?))),
             _ => {
                 error!("url to config: vless: not support transport type {}", transport_type);
                 Err(UrlParseError::InvalidQueryString)
@@ -191,7 +191,7 @@ impl ServerConfig {
 
     #[cfg(feature = "transport-skcp")]
     fn from_url_skcp(params: &Vec<(String, String)>) -> Result<SkcpConfig, UrlParseError> {
-        let params = params.into_iter().map(|e| (e.0.as_str(), e.1.as_str())).collect();
+        let params = params.iter().map(|e| (e.0.as_str(), e.1.as_str())).collect();
         match transport::build_skcp_config(&Some(params)) {
             Ok(c) => Ok(c),
             Err(e) => {
@@ -329,7 +329,7 @@ impl TransportConnectorConfig {
     #[inline]
     fn build_ws_config(host: &Option<&str>, path: &str) -> WebSocketConnectorConfig {
         WebSocketConnectorConfig {
-            path: if path.starts_with("/") {
+            path: if path.starts_with('/') {
                 path.to_owned()
             } else {
                 format!("/{}", path)
@@ -341,7 +341,7 @@ impl TransportConnectorConfig {
     #[cfg(feature = "transport-ws")]
     #[inline]
     fn fmt_ws_path(config: &WebSocketConnectorConfig, f: &mut fmt::Formatter) -> fmt::Result {
-        if config.path.starts_with("/") {
+        if config.path.starts_with('/') {
             write!(f, "{}", &config.path[1..])
         } else {
             write!(f, "{}", config.path)
@@ -357,8 +357,14 @@ impl TransportConnectorConfig {
             cert: None,
         };
 
-        find_arg(args, "cert").map(|v| config.cert = Some(v.to_owned()));
-        find_all_arg(args, "cipher").map(|cipher| config.cipher = Some(cipher.iter().map(|c| c.to_string()).collect()));
+        if let Some(v) = find_arg(args, "cert") {
+            config.cert = Some(v.to_owned());
+        }
+
+        if let Some(cipher) = find_all_arg(args, "cipher") {
+            config.cipher = Some(cipher.iter().map(|c| c.to_string()).collect());
+        }
+
         Ok(config)
     }
 
@@ -590,7 +596,7 @@ impl TransportAcceptorConfig {
     #[inline]
     fn build_ws_config(path: &str) -> WebSocketAcceptorConfig {
         WebSocketAcceptorConfig {
-            path: if path.starts_with("/") {
+            path: if path.starts_with('/') {
                 path.to_owned()
             } else {
                 format!("/{}", path)
@@ -600,7 +606,7 @@ impl TransportAcceptorConfig {
 
     #[cfg(feature = "transport-ws")]
     fn fmt_ws_path(config: &WebSocketAcceptorConfig, f: &mut fmt::Formatter) -> fmt::Result {
-        if config.path.starts_with("/") {
+        if config.path.starts_with('/') {
             write!(f, "{}", &config.path[1..])
         } else {
             write!(f, "{}", config.path)
@@ -619,7 +625,9 @@ impl TransportAcceptorConfig {
             cipher: None,
         };
 
-        find_all_arg(args, "cipher").map(|cipher| config.cipher = Some(cipher.iter().map(|c| c.to_string()).collect()));
+        if let Some(cipher) = find_all_arg(args, "cipher") {
+            config.cipher = Some(cipher.iter().map(|c| c.to_string()).collect());
+        }
 
         Ok(config)
     }

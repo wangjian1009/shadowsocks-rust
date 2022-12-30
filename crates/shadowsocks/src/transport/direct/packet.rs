@@ -1,13 +1,15 @@
-pub(crate) use super::super::{PacketMutWrite, PacketRead, PacketWrite};
-use crate::{net::UdpSocket, ServerAddr};
 use async_trait::async_trait;
-use std::{io, sync::Arc};
+use std::{io, net::SocketAddr, sync::Arc};
+
+use crate::{net::UdpSocket, ServerAddr};
+
+pub(crate) use super::super::{PacketMutWrite, PacketRead, PacketWrite};
 
 #[async_trait]
 impl PacketRead for Arc<UdpSocket> {
-    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
+    async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         let (size, addr) = self.recv_from(buf).await?;
-        Ok((size, ServerAddr::SocketAddr(addr)))
+        Ok((size, addr))
     }
 }
 

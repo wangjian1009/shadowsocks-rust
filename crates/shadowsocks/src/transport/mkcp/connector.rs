@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use std::{
     io::{self, IoSlice},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     pin::Pin,
     sync::{
         atomic::{AtomicU16, Ordering},
@@ -12,17 +11,13 @@ use std::{
 
 use tokio::sync::mpsc;
 
-use crate::{
-    net::{ConnectOpts, Destination},
-    transport::{DeviceOrGuard, PacketRead, PacketWrite},
-    ServerAddr,
-};
+use crate::{net::ConnectOpts, net::UdpSocket, transport::DeviceOrGuard, ServerAddr};
 
 use super::{
-    super::{Connection, Connector, DummyPacket, StreamConnection},
+    super::{Connector, StreamConnection},
     connection::MkcpState,
     io::{MkcpPacketReader, MkcpPacketWriter},
-    new_error, MkcpConfig, MkcpConnMetadata, MkcpConnWay, StatisticStat,
+    MkcpConfig, MkcpConnMetadata, MkcpConnWay, StatisticStat,
 };
 
 use super::MkcpConnection;
@@ -33,24 +28,16 @@ use tokio::task::JoinHandle;
 #[cfg(feature = "rate-limit")]
 use crate::transport::RateLimiter;
 
-pub struct MkcpConnector<C>
-where
-    C: Connector,
-{
+pub struct MkcpConnector {
     config: Arc<MkcpConfig>,
     next_conv: AtomicU16,
-    inner: C,
     statistic: Option<Arc<StatisticStat>>,
 }
 
-impl<C> MkcpConnector<C>
-where
-    C: Connector,
-{
-    pub fn new(config: Arc<MkcpConfig>, inner: C, statistic: Option<Arc<StatisticStat>>) -> Self {
+impl MkcpConnector {
+    pub fn new(config: Arc<MkcpConfig>, statistic: Option<Arc<StatisticStat>>) -> Self {
         Self {
             config,
-            inner,
             statistic,
             next_conv: AtomicU16::new(rand::random()),
         }
@@ -58,93 +45,50 @@ where
 }
 
 #[async_trait]
-impl<C, PW> Connector for MkcpConnector<C>
-where
-    PW: PacketWrite + 'static,
-    C: Connector + Connector<PW = PW>,
-{
-    type PR = DummyPacket;
-    type PW = DummyPacket;
-    type TS = MkcpConnectorConnection<C::PW>;
+impl Connector for MkcpConnector {
+    type TS = MkcpConnectorConnection;
 
-    async fn connect(
-        &self,
-        destination: &Destination,
-        connect_opts: &ConnectOpts,
-    ) -> io::Result<Connection<Self::TS, Self::PR, Self::PW>> {
-        match destination {
-            Destination::Tcp(addr) => match self
-                .inner
-                .connect(
-                    &Destination::Udp(match addr {
-                        ServerAddr::SocketAddr(addr) => match addr {
-                            SocketAddr::V4(..) => {
-                                ServerAddr::SocketAddr(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))
-                            }
-                            SocketAddr::V6(..) => {
-                                ServerAddr::SocketAddr(SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0))
-                            }
-                        },
-                        ServerAddr::DomainName(..) => {
-                            return Err(new_error("not support connect DomainName connection"))
-                        }
-                    }),
-                    connect_opts,
-                )
-                .await?
-            {
-                Connection::Stream(_stream) => unreachable!(),
-                Connection::Packet { r, w, local_addr } => {
-                    let local_addr = match local_addr {
-                        Destination::Udp(local_addr) => local_addr,
-                        _ => unreachable!(),
-                    };
+    async fn connect(&self, addr: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
+        let addr = match addr {
+            ServerAddr::SocketAddr(addr) => addr,
+            ServerAddr::DomainName(..) => return Err(io::Error::new(io::ErrorKind::Other, "not support domain addr")),
+        };
 
-                    let meta = MkcpConnMetadata {
-                        way: MkcpConnWay::Outgoing,
-                        local_addr,
-                        remote_addr: addr.clone(),
-                        conversation: self.next_conv.fetch_add(1, Ordering::SeqCst),
-                    };
+        let socket = UdpSocket::connect_with_opts(addr, connect_opts).await?;
+        let local_addr = socket.local_addr()?;
+        let r = Arc::new(socket);
+        let w = r.clone();
 
-                    Ok(Connection::Stream(MkcpConnectorConnection::new(
-                        self.config.clone(),
-                        meta,
-                        r,
-                        w,
-                        self.statistic.clone(),
-                    )))
-                }
-            },
-            Destination::Udp(..) => return Err(new_error("not support connect Udp connection")),
-            #[cfg(unix)]
-            Destination::Unix(..) => return Err(new_error("not support connect Unix stream")),
-        }
+        let meta = MkcpConnMetadata {
+            way: MkcpConnWay::Outgoing,
+            local_addr,
+            remote_addr: ServerAddr::SocketAddr(addr.clone()),
+            conversation: self.next_conv.fetch_add(1, Ordering::SeqCst),
+        };
+
+        Ok(MkcpConnectorConnection::new(
+            self.config.clone(),
+            meta,
+            r,
+            w,
+            self.statistic.clone(),
+        ))
     }
 }
 
-pub struct MkcpConnectorConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
-    inner: Arc<MkcpConnection<PW>>,
+pub struct MkcpConnectorConnection {
+    inner: Arc<MkcpConnection>,
     _recv_task: Arc<JoinHandle<()>>,
 }
 
-impl<PW> MkcpConnectorConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
-    fn new<PR>(
+impl MkcpConnectorConnection {
+    fn new(
         config: Arc<MkcpConfig>,
         meta: MkcpConnMetadata,
-        r: PR,
-        w: PW,
+        r: Arc<UdpSocket>,
+        w: Arc<UdpSocket>,
         statistic: Option<Arc<StatisticStat>>,
-    ) -> Self
-    where
-        PR: PacketRead + 'static,
-    {
+    ) -> Self {
         let header = match config.create_header() {
             Some(header) => Some(Arc::new(header)),
             None => None,
@@ -192,13 +136,11 @@ where
         self.inner.close()
     }
 
-    async fn handle_incoming<PR>(
-        mut reader: MkcpPacketReader<PR>,
+    async fn handle_incoming(
+        mut reader: MkcpPacketReader,
         mut remove_conn_rx: mpsc::Receiver<u16>,
-        connection: Arc<MkcpConnection<PW>>,
-    ) where
-        PR: PacketRead,
-    {
+        connection: Arc<MkcpConnection>,
+    ) {
         loop {
             tokio::select! {
                 r = reader.read() => {
@@ -228,10 +170,7 @@ where
     }
 }
 
-impl<PW> Drop for MkcpConnectorConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
+impl Drop for MkcpConnectorConnection {
     fn drop(&mut self) {
         match self.inner.close() {
             Ok(()) => tracing::trace!("#{}: close: success", self.inner.meta()),
@@ -241,10 +180,7 @@ where
 }
 
 #[async_trait]
-impl<PW> StreamConnection for MkcpConnectorConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
+impl StreamConnection for MkcpConnectorConnection {
     #[inline]
     fn check_connected(&self) -> bool {
         true
@@ -264,20 +200,14 @@ where
     }
 }
 
-impl<PW> AsyncRead for MkcpConnectorConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
+impl AsyncRead for MkcpConnectorConnection {
     #[inline]
     fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         self.inner.poll_read(cx, buf)
     }
 }
 
-impl<PW> AsyncWrite for MkcpConnectorConnection<PW>
-where
-    PW: PacketWrite + 'static,
-{
+impl AsyncWrite for MkcpConnectorConnection {
     #[inline]
     fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         self.inner.poll_write(cx, buf)

@@ -1,12 +1,13 @@
 use std::{
     io::{self, Cursor},
+    net::SocketAddr,
     sync::Arc,
 };
 
 use bytes::BufMut;
 use rand::RngCore;
 
-use crate::{relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE, ServerAddr};
+use crate::{net::UdpSocket, relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE, ServerAddr};
 
 use super::{
     super::{HeaderPolicy, PacketRead, PacketWrite, Security},
@@ -14,14 +15,14 @@ use super::{
     segment::Segment,
 };
 
-pub struct MkcpPacketReader<PR: PacketRead> {
+pub struct MkcpPacketReader {
     header: Option<Arc<HeaderPolicy>>,
     security: Option<Arc<Security>>,
-    inner: PR,
+    inner: Arc<UdpSocket>,
 }
 
-impl<PR: PacketRead> MkcpPacketReader<PR> {
-    pub fn new(inner: PR, header: Option<Arc<HeaderPolicy>>, security: Option<Arc<Security>>) -> Self {
+impl MkcpPacketReader {
+    pub fn new(inner: Arc<UdpSocket>, header: Option<Arc<HeaderPolicy>>, security: Option<Arc<Security>>) -> Self {
         Self {
             header,
             security,
@@ -29,7 +30,7 @@ impl<PR: PacketRead> MkcpPacketReader<PR> {
         }
     }
 
-    pub async fn read(&mut self) -> io::Result<(Vec<Segment>, ServerAddr)> {
+    pub async fn read(&mut self) -> io::Result<(Vec<Segment>, SocketAddr)> {
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         let (size, addr) = self.inner.read_from(&mut buffer).await?;
 
@@ -70,14 +71,14 @@ impl<PR: PacketRead> MkcpPacketReader<PR> {
     }
 }
 
-pub struct MkcpPacketWriter<PW: PacketWrite> {
+pub struct MkcpPacketWriter {
     header: Option<Arc<HeaderPolicy>>,
     security: Option<Arc<Security>>,
-    inner: PW,
+    inner: Arc<UdpSocket>,
 }
 
-impl<PW: PacketWrite> MkcpPacketWriter<PW> {
-    pub fn new(inner: PW, header: Option<Arc<HeaderPolicy>>, security: Option<Arc<Security>>) -> Self {
+impl MkcpPacketWriter {
+    pub fn new(inner: Arc<UdpSocket>, header: Option<Arc<HeaderPolicy>>, security: Option<Arc<Security>>) -> Self {
         Self {
             header,
             inner,

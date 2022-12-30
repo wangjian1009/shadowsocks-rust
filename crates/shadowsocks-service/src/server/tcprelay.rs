@@ -11,11 +11,11 @@ use std::{
 use shadowsocks::{
     config::ServerProtocol,
     crypto::CipherKind,
-    net::{AcceptOpts, Destination},
+    net::AcceptOpts,
     relay::tcprelay::{utils::copy_encrypted_bidirectional, ProxyServerStream},
     transport::{
         direct::{TcpAcceptor, TcpConnector},
-        Acceptor, Connection, Connector, StreamConnection,
+        Acceptor, Connector, StreamConnection,
     },
     ServerAddr, ServerConfig,
 };
@@ -231,17 +231,8 @@ impl TcpServer {
             #[cfg(feature = "rate-limit")]
             let mut rate_limiter = None;
 
-            let (local_stream, peer_addr) = match listener.accept().await.map(|(s, addr)| {
-                #[allow(unused_mut)]
-                let mut s = match s {
-                    Connection::Stream(s) => s,
-                    Connection::Packet { .. } => unreachable!(),
-                };
-
-                let addr = match addr.unwrap() {
-                    ServerAddr::SocketAddr(addr) => addr,
-                    ServerAddr::DomainName(..) => unreachable!(),
-                };
+            let (local_stream, peer_addr) = match listener.accept().await.map(|(mut s, addr)| {
+                let addr = addr.unwrap();
 
                 #[cfg(feature = "rate-limit")]
                 if let Some(connection_bound_width) = connection_bound_width {
@@ -563,8 +554,6 @@ impl TcpServerClient {
             None => {}
         }
 
-        let destination = Destination::Tcp(target_addr.clone().into());
-
         #[cfg(feature = "statistics")]
         let _out_conn_guard = shadowsocks::statistics::ConnGuard::new_with_target(
             bu_context.clone(),
@@ -575,14 +564,11 @@ impl TcpServerClient {
 
         let mut remote_stream = match timeout_fut(
             self.timeout,
-            self.connector.connect(&destination, self.context.connect_opts_ref()),
+            self.connector.connect(&target_addr, self.context.connect_opts_ref()),
         )
         .await
         {
-            Ok(s) => match s {
-                Connection::Stream(s) => s,
-                Connection::Packet { .. } => unreachable!(),
-            },
+            Ok(s) => s,
             Err(err) => {
                 #[cfg(feature = "statistics")]
                 if err.kind() == io::ErrorKind::TimedOut {
@@ -603,7 +589,12 @@ impl TcpServerClient {
         remote_stream.set_rate_limit(self.rate_limiter.clone());
 
         // let mut remote_stream = OutboundTcpStream::from_stream(remote_stream, self.rate_limiter);
-        let _out_guard = connection_stat.add_out_connection();
+        let _out_guard = connection_stat.add_out_connection(
+            Some(&self.peer_addr),
+            &target_addr,
+            #[cfg(feature = "statistics")]
+            bu_context.clone(),
+        );
 
         // https://github.com/shadowsocks/shadowsocks-rust/issues/232
         //

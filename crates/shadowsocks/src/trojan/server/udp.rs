@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use super::*;
 
 use bytes::Bytes;
@@ -9,7 +11,7 @@ use crate::{
     policy::{PacketAction, UdpSocket},
     relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE,
     timeout::{TimeoutTicker, TimeoutWaiter},
-    transport::{PacketMutWrite, PacketRead, StreamConnection},
+    transport::StreamConnection,
 };
 
 use super::super::{new_trojan_packet_connection, TrojanUdpReader, TrojanUdpWriter};
@@ -20,7 +22,7 @@ pub type PacketReceiver = Receiver<(Bytes, ServerAddr)>;
 pub(super) async fn serve_udp(
     cancel_waiter: &CancelWaiter,
     incoming: impl StreamConnection + 'static,
-    peer_addr: Option<ServerAddr>,
+    peer_addr: Option<SocketAddr>,
     idle_timeout: Duration,
     server_policy: Arc<Box<dyn ServerPolicy>>,
 ) -> CloseReason {
@@ -88,7 +90,7 @@ async fn serve_udp_incoming(
     outgoing_pkt_tx: PacketSender,
     incoming_pkt_rx: PacketReceiver,
     incoming: impl StreamConnection + 'static,
-    peer_addr: Option<ServerAddr>,
+    peer_addr: Option<SocketAddr>,
     server_policy: Arc<Box<dyn ServerPolicy>>,
     timeout_ticker: TimeoutTicker,
 ) -> CloseReason {
@@ -104,7 +106,7 @@ async fn serve_udp_incoming(
 async fn dispatch_incoming_to_outgoing<S>(
     mut incoming_reader: TrojanUdpReader<S>,
     outgoing_pkt_tx: PacketSender,
-    peer_addr: Option<ServerAddr>,
+    peer_addr: Option<SocketAddr>,
     server_policy: Arc<Box<dyn ServerPolicy>>,
     flow_state: Option<Arc<FlowStat>>,
     timeout_ticker: TimeoutTicker,

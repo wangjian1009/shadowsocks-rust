@@ -1,13 +1,13 @@
 use super::{PacketMutWrite, PacketRead};
 use crate::ServerAddr;
 use async_trait::async_trait;
-use std::io;
+use std::{io, net::SocketAddr};
 
 pub struct DummyPacket {}
 
 #[async_trait]
 impl PacketRead for DummyPacket {
-    async fn read_from(&mut self, _: &mut [u8]) -> io::Result<(usize, ServerAddr)> {
+    async fn read_from(&mut self, _: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         unimplemented!()
     }
 }

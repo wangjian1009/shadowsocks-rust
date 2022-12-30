@@ -7,7 +7,6 @@ use std::{
     },
 };
 
-use crate::transport::PacketWrite;
 use bytes::Bytes;
 use spin::Mutex;
 use tracing::trace;
@@ -136,8 +135,8 @@ impl AckList {
     }
 }
 
-pub struct ReceivingWorker<PW: PacketWrite> {
-    context: Arc<MkcpConnectionContext<PW>>,
+pub struct ReceivingWorker {
+    context: Arc<MkcpConnectionContext>,
     left_over: Mutex<Option<Bytes>>,
     window: Mutex<ReceivingWindow>,
     ack_list: Mutex<AckList>,
@@ -145,8 +144,8 @@ pub struct ReceivingWorker<PW: PacketWrite> {
     window_size: u32,
 }
 
-impl<PW: PacketWrite> ReceivingWorker<PW> {
-    pub fn new(context: Arc<MkcpConnectionContext<PW>>) -> Self {
+impl ReceivingWorker {
+    pub fn new(context: Arc<MkcpConnectionContext>) -> Self {
         let window_size = context.config().receiving_in_flight_size();
         Self {
             context,

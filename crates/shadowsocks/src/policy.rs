@@ -54,6 +54,7 @@ pub trait ServerPolicy: Sync + Send {
     fn create_connection_flow_state(&self) -> Option<Arc<FlowStat>>;
     async fn create_out_connection(
         &self,
+        src_addr: Option<&SocketAddr>,
         target_addr: ServerAddr,
         #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
     ) -> io::Result<(TcpStream, Box<dyn ConnectionGuard>)>;
@@ -61,10 +62,10 @@ pub trait ServerPolicy: Sync + Send {
 
     async fn stream_check(
         &self,
-        src_addr: Option<&ServerAddr>,
+        src_addr: Option<&SocketAddr>,
         target_addr: &ServerAddr,
         #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
     ) -> io::Result<StreamAction>;
 
-    async fn packet_check(&self, src_addr: Option<&ServerAddr>, target_addr: &ServerAddr) -> io::Result<PacketAction>;
+    async fn packet_check(&self, src_addr: Option<&SocketAddr>, target_addr: &ServerAddr) -> io::Result<PacketAction>;
 }

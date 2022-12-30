@@ -13,7 +13,7 @@ use crate::{
     net::{AcceptOpts, ConnectOpts},
     transport::{
         direct::{TcpAcceptor, TcpConnector},
-        Acceptor, Connection, Connector, StreamConnection,
+        Acceptor, Connector, StreamConnection,
     },
 };
 
@@ -132,11 +132,7 @@ async fn start_server(
     let handler = tokio::spawn(async move {
         let inbound = Arc::new(inbound);
         loop {
-            let (connection, peer_addr) = acceptor.accept().await?;
-            let stream = match connection {
-                Connection::Stream(stream) => stream,
-                _ => unreachable!(),
-            };
+            let (stream, peer_addr) = acceptor.accept().await?;
 
             let peer_addr = peer_addr.unwrap();
             let peer_addr = match peer_addr {

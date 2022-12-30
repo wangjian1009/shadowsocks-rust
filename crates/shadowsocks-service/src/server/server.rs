@@ -365,7 +365,7 @@ impl Server {
 
     pub async fn tuic_run_shadow_tcp(&self) -> io::Result<()> {
         use bytes::BytesMut;
-        use shadowsocks::transport::{direct::TcpAcceptor, Acceptor, Connection};
+        use shadowsocks::transport::{direct::TcpAcceptor, Acceptor};
 
         info!("tuic shadow server listening on {}", self.svr_cfg.external_addr());
 
@@ -378,7 +378,7 @@ impl Server {
 
         let cancel_waiter = self.context.cancel_waiter();
         loop {
-            let (s, peer_addr) = tokio::select! {
+            let (mut s, peer_addr) = tokio::select! {
                 r = listener.accept() => r?,
                 _ = cancel_waiter.wait() => {
                     trace!("canceled");
@@ -386,15 +386,7 @@ impl Server {
                 }
             };
 
-            let mut s = match s {
-                Connection::Stream(s) => s,
-                Connection::Packet { .. } => unreachable!(),
-            };
-
-            let peer_addr = match peer_addr.unwrap() {
-                ServerAddr::SocketAddr(addr) => addr,
-                ServerAddr::DomainName(..) => unreachable!(),
-            };
+            let peer_addr = peer_addr.unwrap();
 
             let span = debug_span!("incoming", peer.addr = peer_addr.to_string());
             tokio::spawn(
