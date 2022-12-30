@@ -166,6 +166,29 @@ impl BuContext {
         }
     }
 
+    pub fn count_traffic_bps(&self, key: &'static str, bps: f64, net: TrafficNet, way: TrafficWay) {
+        let protocol = self.protocol.name();
+        let trans = self.transport.as_ref().map(|t| t.name()).unwrap_or("none");
+
+        match self.protocol {
+            ProtocolInfo::SS { ref method } => {
+                gauge!(key, bps, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans, "ss_method" => method.clone())
+            }
+            #[cfg(feature = "trojan")]
+            ProtocolInfo::Trojan => {
+                gauge!(key, bps, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans)
+            }
+            #[cfg(feature = "vless")]
+            ProtocolInfo::Vless => {
+                gauge!(key, bps, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans)
+            }
+            #[cfg(feature = "tuic")]
+            ProtocolInfo::Tuic { cc } => {
+                gauge!(key, bps, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans, "tuic_cc" => cc)
+            }
+        }
+    }
+
     pub fn count_traffic(&self, key: &'static str, count: u64, net: TrafficNet, way: TrafficWay) {
         let protocol = self.protocol.name();
         let trans = self.transport.as_ref().map(|t| t.name()).unwrap_or("none");

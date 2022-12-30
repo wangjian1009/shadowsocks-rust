@@ -149,7 +149,7 @@ impl UdpServer {
             svr_cfg.acceptor_transport().map(|t| t.tpe()),
         );
 
-        let socket = MonProxySocket::from_socket(socket, self.context.flow_stat());
+        let socket = MonProxySocket::from_socket(socket, self.context.flow_stat_udp());
         let listener = Arc::new(socket);
 
         let mut cleanup_timer = time::interval(self.time_to_live);

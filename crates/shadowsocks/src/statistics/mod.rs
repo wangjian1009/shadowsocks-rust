@@ -17,5 +17,6 @@ pub const METRIC_UDP_SESSION: &str = "miner_udp_session_count";
 pub const METRIC_UDP_SESSION_TOTAL: &str = "miner_udp_session_count_total";
 
 pub const METRIC_TRAFFIC_BU_TOTAL: &str = "miner_traffic_bu_bytes_total";
+pub const METRIC_TRAFFIC_BU_BPS: &str = "miner_traffic_bu_byte_per_sec";
 
 pub const METRIC_BU_CLIENT: &str = "miner_client_bu_count";

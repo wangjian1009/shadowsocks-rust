@@ -95,7 +95,7 @@ async fn serve_udp_incoming(
     timeout_ticker: TimeoutTicker,
 ) -> CloseReason {
     let (incoming_reader, incoming_writer) = new_trojan_packet_connection(incoming);
-    let flow_state = server_policy.create_connection_flow_state();
+    let flow_state = server_policy.create_connection_flow_state_udp();
     let flow_state_2 = flow_state.clone();
     tokio::select! {
         r = dispatch_incoming_to_outgoing(incoming_reader, outgoing_pkt_tx, peer_addr, server_policy, flow_state, timeout_ticker) => { r }

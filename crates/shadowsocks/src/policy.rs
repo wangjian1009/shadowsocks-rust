@@ -51,7 +51,8 @@ pub trait UdpSocket: Sync + Send {
 
 #[async_trait]
 pub trait ServerPolicy: Sync + Send {
-    fn create_connection_flow_state(&self) -> Option<Arc<FlowStat>>;
+    fn create_connection_flow_state_tcp(&self) -> Option<Arc<FlowStat>>;
+    fn create_connection_flow_state_udp(&self) -> Option<Arc<FlowStat>>;
     async fn create_out_connection(
         &self,
         src_addr: Option<&SocketAddr>,

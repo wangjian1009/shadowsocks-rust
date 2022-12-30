@@ -82,13 +82,23 @@ impl Server {
     }
 
     /// Get flow statistic
-    pub fn flow_stat(&self) -> Arc<FlowStat> {
-        self.context.flow_stat()
+    pub fn flow_stat_tcp(&self) -> Arc<FlowStat> {
+        self.context.flow_stat_tcp()
     }
 
     /// Get flow statistic reference
-    pub fn flow_stat_ref(&self) -> &FlowStat {
-        self.context.flow_stat_ref()
+    pub fn flow_stat_tcp_ref(&self) -> &FlowStat {
+        self.context.flow_stat_tcp_ref()
+    }
+
+    /// Get flow statistic
+    pub fn flow_stat_udp(&self) -> Arc<FlowStat> {
+        self.context.flow_stat_udp()
+    }
+
+    /// Get flow statistic reference
+    pub fn flow_stat_udp_ref(&self) -> &FlowStat {
+        self.context.flow_stat_udp_ref()
     }
 
     /// Set `ConnectOpts`
@@ -266,6 +276,10 @@ impl Server {
             vfut.push(manager_fut);
         }
 
+        // 上报速率测算
+        #[cfg(feature = "statistics")]
+        vfut.push(self.run_speed_reporter().boxed());
+
         loop {
             let (res, _, vfut_left) = futures::future::select_all(vfut).await;
             if let Err(err) = res {
@@ -295,7 +309,91 @@ impl Server {
             self.accept_opts.clone(),
         );
         server.set_worker_count(self.worker_count);
+
         server.run(&self.svr_cfg, cfg).await
+    }
+
+    #[cfg(feature = "statistics")]
+    async fn run_speed_reporter(&self) -> io::Result<()> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        const SPEED_DURATION: usize = 30;
+        let mut tcp_tx_slots = vec![0u64; SPEED_DURATION];
+        let mut tcp_rx_slots = vec![0u64; SPEED_DURATION];
+        let mut udp_tx_slots = vec![0u64; SPEED_DURATION];
+        let mut udp_rx_slots = vec![0u64; SPEED_DURATION];
+
+        let mut pre_slot: usize = 0;
+        let mut pre_tcp_tx: u64 = 0;
+        let mut pre_tcp_rx: u64 = 0;
+        let mut pre_udp_tx: u64 = 0;
+        let mut pre_udp_rx: u64 = 0;
+
+        let bu_context = shadowsocks::statistics::BuContext::new(
+            shadowsocks::statistics::ProtocolInfo::from(self.svr_cfg.protocol()),
+            self.svr_cfg.acceptor_transport().map(|t| t.tpe()),
+        );
+
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            let now = SystemTime::now();
+            let since_the_epoch = now.duration_since(UNIX_EPOCH).expect("Time went backwards");
+            let slot = since_the_epoch.as_secs() as usize % SPEED_DURATION;
+
+            if slot != pre_slot {
+                tcp_tx_slots[slot] = 0;
+                tcp_rx_slots[slot] = 0;
+                udp_tx_slots[slot] = 0;
+                udp_rx_slots[slot] = 0;
+                pre_slot = slot;
+            }
+
+            let tcp_tx = self.context.flow_stat_tcp_ref().tx();
+            let tcp_rx = self.context.flow_stat_tcp_ref().rx();
+            let udp_tx = self.context.flow_stat_udp_ref().tx();
+            let udp_rx = self.context.flow_stat_udp_ref().rx();
+
+            tcp_tx_slots[slot] = tcp_tx_slots[slot] + (tcp_tx - pre_tcp_tx);
+            tcp_rx_slots[slot] = tcp_rx_slots[slot] + (tcp_rx - pre_tcp_rx);
+            udp_tx_slots[slot] = udp_tx_slots[slot] + (udp_tx - pre_udp_tx);
+            udp_rx_slots[slot] = udp_rx_slots[slot] + (udp_rx - pre_udp_rx);
+
+            pre_tcp_tx = tcp_tx;
+            pre_tcp_rx = tcp_rx;
+            pre_udp_tx = udp_tx;
+            pre_udp_rx = udp_rx;
+
+            let total_tcp_tx: u64 = tcp_tx_slots.iter().sum();
+            let total_tcp_rx: u64 = tcp_rx_slots.iter().sum();
+            let total_udp_tx: u64 = udp_tx_slots.iter().sum();
+            let total_udp_rx: u64 = udp_rx_slots.iter().sum();
+
+            bu_context.count_traffic_bps(
+                shadowsocks::statistics::METRIC_TRAFFIC_BU_BPS,
+                total_tcp_tx as f64 / SPEED_DURATION as f64,
+                shadowsocks::statistics::TrafficNet::Tcp,
+                shadowsocks::statistics::TrafficWay::Send,
+            );
+            bu_context.count_traffic_bps(
+                shadowsocks::statistics::METRIC_TRAFFIC_BU_BPS,
+                total_tcp_rx as f64 / SPEED_DURATION as f64,
+                shadowsocks::statistics::TrafficNet::Tcp,
+                shadowsocks::statistics::TrafficWay::Recv,
+            );
+            bu_context.count_traffic_bps(
+                shadowsocks::statistics::METRIC_TRAFFIC_BU_BPS,
+                total_udp_tx as f64 / SPEED_DURATION as f64,
+                shadowsocks::statistics::TrafficNet::Udp,
+                shadowsocks::statistics::TrafficWay::Send,
+            );
+            bu_context.count_traffic_bps(
+                shadowsocks::statistics::METRIC_TRAFFIC_BU_BPS,
+                total_udp_rx as f64 / SPEED_DURATION as f64,
+                shadowsocks::statistics::TrafficNet::Udp,
+                shadowsocks::statistics::TrafficWay::Recv,
+            );
+        }
     }
 
     async fn run_manager_report(&self) -> io::Result<()> {
@@ -314,7 +412,8 @@ impl Server {
                 Ok(mut client) => {
                     use super::manager::{ServerStat, StatRequest};
 
-                    let flow = self.flow_stat_ref();
+                    let flow_tcp = self.flow_stat_tcp_ref();
+                    let flow_udp = self.flow_stat_udp_ref();
                     let connection = self.connection_stat_ref();
 
                     let addr = match self.svr_cfg.addr() {
@@ -335,8 +434,8 @@ impl Server {
                     req.stats.insert(
                         addr,
                         ServerStat {
-                            tx: flow.tx(),
-                            rx: flow.rx(),
+                            tx: flow_tcp.tx() + flow_udp.tx(),
+                            rx: flow_tcp.rx() + flow_udp.rx(),
                             cin: connection.cin(),
                             cout: connection.count(),
                             cin_by_ip: connection.cin_by_ip().await,

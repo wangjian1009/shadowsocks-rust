@@ -40,7 +40,7 @@ impl Connection {
 
                     let pkt = Bytes::from(buf);
 
-                    if let Some(f) = self.flow_state.as_ref() {
+                    if let Some(f) = self.flow_state_udp.as_ref() {
                         f.incr_rx(pkt.len() as u64);
                     }
 
@@ -122,7 +122,7 @@ impl Connection {
                                 send,
                                 recv,
                                 addr,
-                                self.flow_state.clone(),
+                                self.flow_state_tcp.clone(),
                                 self.idle_timeout,
                                 #[cfg(feature = "statistics")] self.bu_context.clone(),
                             ) => {}
@@ -159,7 +159,7 @@ impl Connection {
                     let addr = ServerAddr::from(addr);
                     let pkt = datagram.slice(cmd_len..);
 
-                    if let Some(f) = self.flow_state.as_ref() {
+                    if let Some(f) = self.flow_state_udp.as_ref() {
                         f.incr_rx(pkt.len() as u64);
                     }
 
@@ -239,7 +239,7 @@ impl Connection {
                         return Ok(());
                     }
 
-                    if let Some(f) = self.flow_state.as_ref() {
+                    if let Some(f) = self.flow_state_udp.as_ref() {
                         f.incr_tx(pkt.len() as u64);
                     }
 
@@ -266,7 +266,7 @@ impl Connection {
                         return Ok(());
                     }
 
-                    if let Some(f) = self.flow_state.as_ref() {
+                    if let Some(f) = self.flow_state_udp.as_ref() {
                         f.incr_tx(len as u64);
                     }
 

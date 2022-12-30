@@ -61,7 +61,8 @@ pub struct ServiceContext {
     connection_stat: Arc<ConnectionStat>,
 
     // Flow statistic report
-    flow_stat: Arc<FlowStat>,
+    flow_stat_tcp: Arc<FlowStat>,
+    flow_stat_udp: Arc<FlowStat>,
 
     // cancel
     cancel_waiter: CancelWaiter,
@@ -87,7 +88,8 @@ impl Default for ServiceContext {
             cancel_waiter: CancelWaiter::none(),
             acl: None,
             connection_stat: Arc::new(ConnectionStat::new()),
-            flow_stat: Arc::new(FlowStat::new()),
+            flow_stat_tcp: Arc::new(FlowStat::new()),
+            flow_stat_udp: Arc::new(FlowStat::new()),
             #[cfg(feature = "rate-limit")]
             connection_bound_width: None,
             #[cfg(feature = "server-limit")]
@@ -204,13 +206,23 @@ impl ServiceContext {
     }
 
     /// Get cloned flow statistic
-    pub fn flow_stat(&self) -> Arc<FlowStat> {
-        self.flow_stat.clone()
+    pub fn flow_stat_tcp(&self) -> Arc<FlowStat> {
+        self.flow_stat_tcp.clone()
     }
 
     /// Get flow statistic reference
-    pub fn flow_stat_ref(&self) -> &FlowStat {
-        self.flow_stat.as_ref()
+    pub fn flow_stat_tcp_ref(&self) -> &FlowStat {
+        self.flow_stat_tcp.as_ref()
+    }
+
+    /// Get cloned flow statistic
+    pub fn flow_stat_udp(&self) -> Arc<FlowStat> {
+        self.flow_stat_udp.clone()
+    }
+
+    /// Get flow statistic reference
+    pub fn flow_stat_udp_ref(&self) -> &FlowStat {
+        self.flow_stat_udp.as_ref()
     }
 
     /// Set customized DNS resolver

@@ -73,7 +73,7 @@ pub(super) async fn serve_tcp(
             #[cfg(feature = "rate-limit")]
             let mut target = RateLimitedStream::from_stream(target, rate_limit);
 
-            let mut incoming = MonTraffic::new(incoming, server_policy.create_connection_flow_state());
+            let mut incoming = MonTraffic::new(incoming, server_policy.create_connection_flow_state_tcp());
 
             let (down, up, r) = copy_bidirectional(&mut target, &mut incoming, Some(idle_timeout)).await;
             match r {
@@ -96,8 +96,10 @@ pub(super) async fn serve_tcp(
             }
         }
         Ok(StreamAction::Local { processor }) => {
-            let (recv, send) =
-                tokio::io::split(MonTraffic::new(incoming, server_policy.create_connection_flow_state()));
+            let (recv, send) = tokio::io::split(MonTraffic::new(
+                incoming,
+                server_policy.create_connection_flow_state_tcp(),
+            ));
             let recv = Box::new(recv) as Box<dyn AsyncRead + Send + Unpin>;
             let send = Box::new(send) as Box<dyn AsyncWrite + Send + Unpin>;
 

@@ -29,7 +29,8 @@ use crate::{
 
 enum ServerInstanceMode {
     Builtin {
-        flow_stat: Arc<FlowStat>,
+        flow_stat_tcp: Arc<FlowStat>,
+        flow_stat_udp: Arc<FlowStat>,
         abortable: JoinHandle<io::Result<()>>,
     },
 
@@ -54,7 +55,11 @@ impl Drop for ServerInstance {
 impl ServerInstance {
     fn flow_stat(&self) -> u64 {
         match self.mode {
-            ServerInstanceMode::Builtin { ref flow_stat, .. } => flow_stat.tx() + flow_stat.rx(),
+            ServerInstanceMode::Builtin {
+                ref flow_stat_tcp,
+                ref flow_stat_udp,
+                ..
+            } => flow_stat_tcp.tx() + flow_stat_tcp.rx() + flow_stat_udp.tx() + flow_stat_udp.rx(),
             #[cfg(unix)]
             ServerInstanceMode::Standalone { flow_stat } => flow_stat,
         }
@@ -250,14 +255,19 @@ impl Manager {
             );
         }
 
-        let flow_stat = server.flow_stat();
+        let flow_stat_tcp = server.flow_stat_tcp();
+        let flow_stat_udp = server.flow_stat_udp();
 
         let abortable = tokio::spawn(server.run());
 
         servers.insert(
             server_port,
             ServerInstance {
-                mode: ServerInstanceMode::Builtin { flow_stat, abortable },
+                mode: ServerInstanceMode::Builtin {
+                    flow_stat_tcp,
+                    flow_stat_udp,
+                    abortable,
+                },
                 svr_cfg,
             },
         );

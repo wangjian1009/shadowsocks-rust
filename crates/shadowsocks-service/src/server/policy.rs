@@ -131,8 +131,12 @@ impl ServerPolicy {
 
 #[async_trait]
 impl policy::ServerPolicy for ServerPolicy {
-    fn create_connection_flow_state(&self) -> Option<Arc<FlowStat>> {
-        Some(self.context.flow_stat())
+    fn create_connection_flow_state_tcp(&self) -> Option<Arc<FlowStat>> {
+        Some(self.context.flow_stat_tcp())
+    }
+
+    fn create_connection_flow_state_udp(&self) -> Option<Arc<FlowStat>> {
+        Some(self.context.flow_stat_udp())
     }
 
     async fn create_out_connection(

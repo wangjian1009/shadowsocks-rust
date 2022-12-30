@@ -223,7 +223,7 @@ impl TcpServer {
         }
 
         loop {
-            let flow_stat = self.context.flow_stat();
+            let flow_stat = self.context.flow_stat_tcp();
             let connection_stat = self.context.connection_stat();
             #[cfg(feature = "rate-limit")]
             let connection_bound_width = self.context.connection_bound_width();

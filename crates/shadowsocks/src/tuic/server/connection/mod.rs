@@ -39,7 +39,8 @@ pub struct Connection {
     token: Arc<HashSet<[u8; 32]>>,
     is_authenticated: IsAuthenticated,
     server_policy: Arc<Box<dyn ServerPolicy>>,
-    flow_state: Option<Arc<FlowStat>>,
+    flow_state_tcp: Option<Arc<FlowStat>>,
+    flow_state_udp: Option<Arc<FlowStat>>,
     idle_timeout: Duration,
     #[cfg(feature = "statistics")]
     bu_context: crate::statistics::BuContext,
@@ -81,14 +82,16 @@ impl Connection {
         let is_closed = IsClosed::new();
         let is_authed = IsAuthenticated::new(is_closed.clone());
 
-        let flow_state = server_policy.create_connection_flow_state();
+        let flow_state_tcp = server_policy.create_connection_flow_state_tcp();
+        let flow_state_udp = server_policy.create_connection_flow_state_udp();
         let conn = Self {
             controller: connection,
             udp_sessions: Arc::new(udp_sessions),
             token,
             is_authenticated: is_authed,
             server_policy,
-            flow_state,
+            flow_state_tcp,
+            flow_state_udp,
             idle_timeout,
             #[cfg(feature = "statistics")]
             bu_context,

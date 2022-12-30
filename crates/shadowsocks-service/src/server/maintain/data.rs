@@ -19,9 +19,10 @@ impl Serialize for ServerInfo {
         s.serialize_entry("addr", &addr)?;
 
         let context = self.context.as_ref();
-        let flow_stat = context.flow_stat_ref();
-        s.serialize_entry("tx", &flow_stat.tx())?;
-        s.serialize_entry("rx", &flow_stat.rx())?;
+        let flow_stat_tcp = context.flow_stat_tcp_ref();
+        let flow_stat_udp = context.flow_stat_udp_ref();
+        s.serialize_entry("tx", &(flow_stat_tcp.tx() + flow_stat_udp.tx()))?;
+        s.serialize_entry("rx", &(flow_stat_tcp.rx() + flow_stat_udp.rx()))?;
 
         s.end()
     }
