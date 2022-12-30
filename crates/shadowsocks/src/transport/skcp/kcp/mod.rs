@@ -3,6 +3,7 @@
 //! A Fast and Reliable ARQ Protocol
 
 mod error;
+#[allow(clippy::module_inception)]
 mod kcp;
 
 /// The `KCP` prelude

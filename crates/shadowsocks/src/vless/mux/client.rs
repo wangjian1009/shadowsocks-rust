@@ -86,7 +86,7 @@ impl ClientWorker {
 
     pub fn connect(&self, target_addr: Destination) -> io::Result<MuxStream> {
         let (session, read_cmd_r) = self.context.lock().new_session(target_addr);
-        Ok(MuxStream::connect(session, read_cmd_r)?)
+        MuxStream::connect(session, read_cmd_r)
     }
 
     #[inline]
@@ -99,7 +99,7 @@ impl ClientWorker {
         if self.strategy.max_connection > 0 && count >= self.strategy.max_connection {
             return true;
         }
-        return false;
+        false
     }
 
     pub fn is_full(&self) -> bool {
@@ -112,7 +112,7 @@ impl ClientWorker {
             return true;
         }
 
-        return false;
+        false
     }
 
     pub fn closed(&self) -> bool {
@@ -271,6 +271,12 @@ impl WorkerPicker {
                 i += 1;
             }
         }
+    }
+}
+
+impl Default for WorkerPicker {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

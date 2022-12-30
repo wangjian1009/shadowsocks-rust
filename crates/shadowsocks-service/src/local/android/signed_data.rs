@@ -8,7 +8,7 @@ pub fn load_signed_data(_data: &[u8]) -> io::Result<SignedData> {
 }
 
 pub fn get_signed_data_sha1_fingerprint(signed_data: &SignedData) -> Option<Vec<u8>> {
-    for cert in signed_data.certificates() {
+    if let Some(cert) = signed_data.certificates().next() {
         let digest = super::sha1::sha1(cert.constructed_data());
         let mut buf = Vec::new();
         buf.extend_from_slice(&digest);

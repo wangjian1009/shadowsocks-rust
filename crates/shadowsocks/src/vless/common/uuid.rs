@@ -60,7 +60,7 @@ impl FromStr for UUID {
         let mut b: &mut [u8] = &mut uuid;
 
         for byte_group in BYTE_GROUPS {
-            if text[0] == b'-' as u8 {
+            if text[0] == b'-' {
                 text = &text[1..];
             }
 
@@ -79,8 +79,8 @@ impl fmt::Display for UUID {
         let bytes = &self.data[..];
         f.write_str(hex::encode(&bytes[0..BYTE_GROUPS[0] / 2]).as_str())?;
         let mut start = BYTE_GROUPS[0] / 2;
-        for i in 1..BYTE_GROUPS.len() {
-            let n_bytes = BYTE_GROUPS[i] / 2;
+        for v in BYTE_GROUPS.iter().skip(1) {
+            let n_bytes = v / 2;
             f.write_char('-')?;
             f.write_str(hex::encode(&bytes[start..start + n_bytes]).as_str())?;
             start += n_bytes;

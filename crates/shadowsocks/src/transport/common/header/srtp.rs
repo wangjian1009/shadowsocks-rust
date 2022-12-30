@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 
 use super::Header;
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct SRTP {
     header: u16,
     number: AtomicU16,

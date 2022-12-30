@@ -179,6 +179,7 @@ impl InputDecorate {
         }
 
         if let Some(security) = self.security.as_ref() {
+            #[allow(clippy::uninit_vec)]
             let decode_buf = if self.decode_buf.is_none() {
                 let mut new_buf = Vec::<u8>::with_capacity(self.mtu);
                 unsafe { new_buf.set_len(self.mtu) };

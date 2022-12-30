@@ -72,12 +72,12 @@ impl Connection {
         let canceler = Canceler::new();
         let auth_timeout_waiter = TimeoutWaiter::new(auth_timeout);
         tokio::pin!(auth_timeout_waiter);
-        let idle_timeout_waiter = TimeoutWaiter::new(idle_timeout.clone());
+        let idle_timeout_waiter = TimeoutWaiter::new(idle_timeout);
         tokio::pin!(idle_timeout_waiter);
 
         info!("establish");
 
-        let (udp_sessions, mut recv_pkt_rx, mut session_close_rx) = UdpSessionMap::new(idle_timeout.clone());
+        let (udp_sessions, mut recv_pkt_rx, mut session_close_rx) = UdpSessionMap::new(idle_timeout);
         let is_closed = IsClosed::new();
         let is_authed = IsAuthenticated::new(is_closed.clone());
 

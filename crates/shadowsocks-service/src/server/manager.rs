@@ -61,7 +61,7 @@ impl ManagerClient {
         let req_serialized = serde_json::to_string(&req)?;
         let req_serialized = format!("stat: {}", req_serialized);
         let buf = req_serialized.as_bytes();
-        let n = self.socket.send(&buf).await?;
+        let n = self.socket.send(buf).await?;
         if n != buf.len() {
             warn!("manager send {} bytes != buffer {} bytes", n, buf.len());
         }

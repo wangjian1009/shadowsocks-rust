@@ -142,7 +142,7 @@ impl policy::ServerPolicy for ServerPolicy {
         #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<(TcpStream, Box<dyn policy::ConnectionGuard>)> {
         let stream = timeout_fut(
-            self.connect_timeout.clone(),
+            self.connect_timeout,
             shadowsocks::net::TcpStream::connect_remote_with_opts(
                 self.context.context_ref(),
                 target_addr.clone(),
@@ -232,11 +232,11 @@ impl policy::ServerPolicy for ServerPolicy {
 
         cfg_if! {
             if #[cfg(feature = "server-mock")] {
-                if let Some(protocol) = self.context.mock_server_protocol(&target_addr) {
+                if let Some(protocol) = self.context.mock_server_protocol(target_addr) {
                     return Ok(policy::StreamAction::Local {
                         processor: Box::new(LocalProcessor::new(
                             self.context.clone(),
-                            protocol.clone(),
+                            protocol,
                             remote_guard,
                             #[cfg(feature = "statistics")]
                             shadowsocks::statistics::ConnGuard::new_with_target(
@@ -264,13 +264,10 @@ impl policy::ServerPolicy for ServerPolicy {
         target_addr: &ServerAddr,
     ) -> io::Result<policy::PacketAction> {
         // 后续支持不同地址的处理
-        match src_addr {
-            Some(src_addr) => {
-                if self.context.check_client_blocked(src_addr) {
-                    return Ok(policy::PacketAction::ClientBlocked);
-                }
+        if let Some(src_addr) = src_addr {
+            if self.context.check_client_blocked(src_addr) {
+                return Ok(policy::PacketAction::ClientBlocked);
             }
-            None => {}
         };
 
         if self.context.check_outbound_blocked(target_addr).await {

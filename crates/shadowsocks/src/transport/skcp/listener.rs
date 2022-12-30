@@ -68,8 +68,8 @@ impl KcpListener {
         let udp = Arc::new(udp);
         let server_udp = udp.clone();
 
-        let header = config.create_header().map(|e| Arc::new(e));
-        let security = config.create_security().map(|e| Arc::new(e));
+        let header = config.create_header().map(Arc::new);
+        let security = config.create_security().map(Arc::new);
 
         let overhead = header.as_ref().map_or(0, |e| e.size()) + security.as_ref().map_or(0, |e| e.overhead());
         if overhead > config.mtu {}

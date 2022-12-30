@@ -44,13 +44,13 @@ impl KcpStream {
         let udp = Arc::new(udp);
         let conv = rand::random();
 
-        let header = config.create_header().map(|e| Arc::new(e));
-        let security = config.create_security().map(|e| Arc::new(e));
+        let header = config.create_header().map(Arc::new);
+        let security = config.create_security().map(Arc::new);
         let socket = KcpSocket::new(
             config,
             conv,
             udp,
-            addr.clone(),
+            *addr,
             config.stream,
             header.clone(),
             security.clone(),

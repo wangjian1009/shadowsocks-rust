@@ -10,6 +10,12 @@ impl SnifferUtp {
     }
 }
 
+impl Default for SnifferUtp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // 0       4       8               16              24              32
 // +-------+-------+---------------+---------------+---------------+
 // | type  | ver   | extension     | connection_id                 |
@@ -40,7 +46,7 @@ impl Sniffer for SnifferUtp {
 
         // extension
         loop {
-            if data.len() < 1 {
+            if data.is_empty() {
                 return Err(SnifferCheckError::NoClue);
             }
             let extension = data[0];
@@ -54,7 +60,7 @@ impl Sniffer for SnifferUtp {
                 return Err(SnifferCheckError::Reject);
             }
 
-            if data.len() < 1 {
+            if data.is_empty() {
                 return Err(SnifferCheckError::NoClue);
             }
             let length = data[0] as usize;

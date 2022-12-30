@@ -87,7 +87,7 @@ impl<S: StreamConnection> DelayConnectStream<S> {
         DelayConnectStream {
             stream,
             state: ClientStreamWriteState::Connect(RequestHeader::TcpConnect(
-                svr_trojan_cfg.hash().clone(),
+                svr_trojan_cfg.hash(),
                 Address::from(addr),
             )),
         }

@@ -19,11 +19,11 @@ pub struct SessionMetadata {
 
 impl fmt::Display for SessionMetadata {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.way {
-            &SessionWay::Incoming => {
+        match self.way {
+            SessionWay::Incoming => {
                 write!(f, "S #{} [{}]", self.id, self.target_addr)
             }
-            &SessionWay::Outgoing => {
+            SessionWay::Outgoing => {
                 write!(f, "C #{} [{}]", self.id, self.target_addr)
             }
         }
@@ -149,6 +149,6 @@ impl SessionManager {
 
     #[inline]
     pub fn get(&self, session_id: u16) -> Option<Arc<Session>> {
-        self.sessions.get(&session_id).map(|e| e.clone())
+        self.sessions.get(&session_id).cloned()
     }
 }

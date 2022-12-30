@@ -207,7 +207,7 @@ where
             match self.limiter_ctx.as_ref().unwrap().state.clone() {
                 State::ReadInner => {
                     let max_once_size = self.limiter_ctx.as_ref().unwrap().limiter.max_receive_once();
-                    let buf_capacity = std::cmp::min(max_once_size.unwrap_or(buf.capacity()), buf.capacity());
+                    let buf_capacity = std::cmp::min(max_once_size.unwrap_or_else(|| buf.capacity()), buf.capacity());
                     let mut recv_buf = buf.take(buf_capacity);
                     let stream = Pin::new(&mut self.stream);
                     match stream.poll_read(cx, &mut recv_buf) {

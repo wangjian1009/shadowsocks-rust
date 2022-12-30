@@ -25,8 +25,8 @@ impl<T: AsyncWrite + Unpin + Send + Sync> TrojanUdpWriter<T> {
     pub async fn write_to_mut(&mut self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         let header = protocol::UdpHeader::new(
             match addr {
-                ServerAddr::SocketAddr(addr) => Address::SocketAddress(addr.clone()),
-                ServerAddr::DomainName(path, port) => Address::DomainNameAddress(path.clone(), port.clone()),
+                ServerAddr::SocketAddr(addr) => Address::SocketAddress(*addr),
+                ServerAddr::DomainName(path, port) => Address::DomainNameAddress(path.clone(), *port),
             },
             buf.len(),
         );

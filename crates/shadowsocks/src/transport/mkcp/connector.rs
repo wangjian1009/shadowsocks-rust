@@ -62,7 +62,7 @@ impl Connector for MkcpConnector {
         let meta = MkcpConnMetadata {
             way: MkcpConnWay::Outgoing,
             local_addr,
-            remote_addr: ServerAddr::SocketAddr(addr.clone()),
+            remote_addr: ServerAddr::SocketAddr(*addr),
             conversation: self.next_conv.fetch_add(1, Ordering::SeqCst),
         };
 

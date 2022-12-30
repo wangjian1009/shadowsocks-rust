@@ -54,7 +54,7 @@ impl Config {
             config
         };
 
-        let token_digest = *blake3::hash(&raw.token.as_bytes()).as_bytes();
+        let token_digest = *blake3::hash(raw.token.as_bytes()).as_bytes();
         let udp_relay_mode = raw.udp_relay_mode;
         let heartbeat_interval = raw.heartbeat_interval;
         let reduce_rtt = raw.reduce_rtt;

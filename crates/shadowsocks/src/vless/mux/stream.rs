@@ -147,10 +147,7 @@ impl AsyncRead for MuxStream {
                 }
                 MuxStreamReadState::Closed => {
                     tracing::error!("#{}: read aflter closed", self.session.meta());
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        format!("read in closed"),
-                    )));
+                    return Poll::Ready(Err(io::Error::new(io::ErrorKind::UnexpectedEof, "read in closed")));
                 }
             }
         }

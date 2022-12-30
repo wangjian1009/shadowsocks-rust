@@ -42,7 +42,7 @@ pub fn get_cipher_suite(cipher: Option<Vec<&str>>) -> io::Result<Vec<SupportedCi
         let mut found = false;
         for i in ALL_CIPHER_SUITES {
             if name == get_cipher_name(i) {
-                result.push(i.clone());
+                result.push(*i);
                 found = true;
                 tracing::debug!("cipher: {} applied", name);
                 break;

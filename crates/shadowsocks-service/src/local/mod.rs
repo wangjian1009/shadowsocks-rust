@@ -108,7 +108,7 @@ impl Server {
     pub async fn run(mut self) -> io::Result<()> {
         loop {
             let (res, _, vfut_left) = future::select_all(self.vfut).await;
-            let _ = res?;
+            res?;
 
             if vfut_left.is_empty() {
                 return Ok(());

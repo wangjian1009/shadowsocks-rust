@@ -484,11 +484,10 @@ impl TcpServerClient {
                 if method.is_aead_2022() {
                     // Set SO_LINGER(0) for misbehave clients, which will eventually receive RST. (ECONNRESET)
                     // This will also prevent the socket entering TIME_WAIT state.
-                    stream.into_inner().physical_device().apply(|stream| match stream {
-                        shadowsocks::transport::Device::Tcp(stream) => {
+                    stream.into_inner().physical_device().apply(|stream| {
+                        if let shadowsocks::transport::Device::Tcp(stream) = stream {
                             let _ = stream.set_linger(Some(Duration::ZERO));
                         }
-                        _ => {}
                     });
 
                     return Ok(());
@@ -532,26 +531,23 @@ impl TcpServerClient {
         );
 
         #[cfg(feature = "server-mock")]
-        match self.context.mock_server_protocol(&target_addr) {
-            Some(protocol) => {
-                #[cfg(feature = "statistics")]
-                let _out_conn_guard = shadowsocks::statistics::ConnGuard::new_with_target(
-                    bu_context,
-                    shadowsocks::statistics::Target::Inapp(protocol.name()),
-                    shadowsocks::statistics::METRIC_TCP_CONN_OUT,
-                    Some(shadowsocks::statistics::METRIC_TCP_CONN_OUT_TOTAL),
-                );
+        if let Some(protocol) = self.context.mock_server_protocol(&target_addr) {
+            #[cfg(feature = "statistics")]
+            let _out_conn_guard = shadowsocks::statistics::ConnGuard::new_with_target(
+                bu_context,
+                shadowsocks::statistics::Target::Inapp(protocol.name()),
+                shadowsocks::statistics::METRIC_TCP_CONN_OUT,
+                Some(shadowsocks::statistics::METRIC_TCP_CONN_OUT_TOTAL),
+            );
 
-                match protocol {
-                    ServerMockProtocol::DNS => {
-                        let (mut r, mut w) = tokio::io::split(stream);
-                        run_dns_tcp_stream(self.context.dns_resolver(), &mut r, &mut w, None).await?;
-                    }
+            match protocol {
+                ServerMockProtocol::DNS => {
+                    let (mut r, mut w) = tokio::io::split(stream);
+                    run_dns_tcp_stream(self.context.dns_resolver(), &mut r, &mut w, None).await?;
                 }
-
-                return Ok(());
             }
-            None => {}
+
+            return Ok(());
         }
 
         #[cfg(feature = "statistics")]

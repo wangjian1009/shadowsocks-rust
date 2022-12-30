@@ -280,7 +280,7 @@ impl ServiceContext {
     #[cfg(feature = "sniffer")]
     pub fn protocol_action(&self, protocol: &Option<SnifferProtocol>) -> Option<ProtocolAction> {
         match protocol {
-            Some(ref protocol) => match self.protocol_action.get(protocol) {
+            Some(protocol) => match self.protocol_action.get(protocol) {
                 Some(action) => Some(action.clone()),
                 None => None,
             },

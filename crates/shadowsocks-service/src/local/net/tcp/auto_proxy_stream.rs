@@ -158,7 +158,7 @@ impl AutoProxyClientStream {
             Ok(s) => Ok(s),
             Err(err) => {
                 server.tcp_score().report_failure().await;
-                return Err(err);
+                Err(err)
             }
         }
     }
@@ -354,10 +354,7 @@ impl AutoProxyClientStream {
 
 impl AutoProxyIo for AutoProxyClientStream {
     fn is_proxied(&self) -> bool {
-        match self.s {
-            AutoProxyClientStreamStream::Bypassed(..) => false,
-            _ => true,
-        }
+        !matches!(self.s, AutoProxyClientStreamStream::Bypassed(..))
     }
 }
 

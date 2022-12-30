@@ -86,7 +86,7 @@ impl AEAD for AEADAESGCMBasedOnSeed {
         let nonce = Nonce::from_slice(nonce);
         let output = self
             .block
-            .decrypt(nonce, &cipher_in[..])
+            .decrypt(nonce, cipher_in)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
         if output.len() > plain_out.len() {
             return Err(io::Error::new(

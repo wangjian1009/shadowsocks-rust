@@ -21,6 +21,7 @@ impl SecurityConfig {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 pub trait AEAD {
     // NonceSize returns the size of the nonce that must be passed to Seal
     // and Open.

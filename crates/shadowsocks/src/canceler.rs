@@ -40,6 +40,12 @@ impl Canceler {
     }
 }
 
+impl Default for Canceler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone)]
 pub struct CancelWaiter {
     inner: Option<Arc<Inner>>,

@@ -30,7 +30,7 @@ fn isv(i: usize) -> u32 {
 
 #[inline(never)]
 fn build_is(data: &[u32; 5]) -> [u32; 5] {
-    let mut data = data.clone();
+    let mut data = *data;
 
     for i in 1..5 {
         data[5 - i] ^= data[5 - i - 1];
@@ -82,7 +82,7 @@ impl Sha1 {
     const BLOCK_LEN_BITS: u64 = Self::BLOCK_LEN as u64 * 8;
     const MLEN_SIZE: usize = core::mem::size_of::<u64>();
     const MLEN_SIZE_BITS: u64 = Self::MLEN_SIZE as u64 * 8;
-    const MAX_PAD_LEN: usize = Self::BLOCK_LEN + Self::MLEN_SIZE as usize;
+    const MAX_PAD_LEN: usize = Self::BLOCK_LEN + Self::MLEN_SIZE;
 
     pub fn new() -> Self {
         Self {

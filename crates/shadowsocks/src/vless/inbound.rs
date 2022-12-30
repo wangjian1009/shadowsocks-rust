@@ -42,9 +42,9 @@ impl InboundHandler {
             }
 
             let tmp_fb_key = "".to_owned();
-            if let Some(tmp_fb) = handler_fallbacks.get(&tmp_fb_key).map(|e| e.clone()) {
+            if let Some(tmp_fb) = handler_fallbacks.get(&tmp_fb_key).cloned() {
                 for (alpn, pfb) in handler_fallbacks.iter_mut() {
-                    if alpn != "" {
+                    if !alpn.is_empty() {
                         for (path, fb) in tmp_fb.iter() {
                             if !pfb.contains_key(path) {
                                 pfb.insert(path.clone(), fb.clone());

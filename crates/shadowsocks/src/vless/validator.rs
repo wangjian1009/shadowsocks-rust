@@ -50,6 +50,6 @@ impl Validator {
     // Get a VLESS user with UUID, nil if user doesn't exist.
     #[inline]
     pub fn get(&self, id: &UUID) -> Option<Arc<User>> {
-        self.users.get(id).map(|e| e.clone())
+        self.users.get(id).cloned()
     }
 }

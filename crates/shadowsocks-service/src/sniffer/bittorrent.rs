@@ -10,6 +10,12 @@ impl SnifferBittorrent {
     }
 }
 
+impl Default for SnifferBittorrent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Sniffer for SnifferBittorrent {
     fn check(&mut self, data: &[u8]) -> Result<SnifferProtocol, SnifferCheckError> {
         check_block(data, BITTORRENT_PROTOCOL_INDICATE)?;

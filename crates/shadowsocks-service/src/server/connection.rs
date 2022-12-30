@@ -99,7 +99,7 @@ impl ConnectionStat {
                             None => {},
                             Some(count) => {
                                 assert!(*count > 0u32);
-                                *count = *count - 1u32;
+                                *count -= 1u32;
                                 if *count == 0 {
                                     in_conns_count_by_source_ip.remove(&ip);
                                 }
@@ -129,7 +129,7 @@ impl ConnectionStat {
                     }
                     Some(count) => {
                         if *count < count_per_ip_limit {
-                            *count = *count + 1u32;
+                            *count += 1u32;
                             Ok(())
                         }
                         else {
@@ -205,7 +205,7 @@ impl ConnectionStat {
                 bu_context.increment_bu_client();
             }
             Some(count) => {
-                *count = *count + 1u32;
+                *count += 1u32;
             }
         }
     }
@@ -224,7 +224,7 @@ impl ConnectionStat {
             }
             Some(count) => {
                 assert!(*count > 0u32);
-                *count = *count - 1u32;
+                *count -= 1u32;
                 if *count == 0 {
                     in_conns.remove(&ip);
 
@@ -272,7 +272,7 @@ impl ConnectionStat {
 
         let in_conns = self.in_conns.lock().await;
 
-        for (_, value) in in_conns.deref() {
+        for value in in_conns.deref().values() {
             result.push(value.clone());
         }
 
@@ -287,7 +287,7 @@ impl ConnectionStat {
     ) -> OutConnectionGuard {
         let mut bu_addr = None;
         if source_addr.is_some() && Self::is_bu_conn(target_addr) {
-            bu_addr = source_addr.clone();
+            bu_addr = source_addr;
         }
 
         OutConnectionGuard::new(
@@ -305,10 +305,7 @@ impl ConnectionStat {
 
     fn is_bu_conn(target_addr: &ServerAddr) -> bool {
         let category = AddrCategory::from(target_addr);
-        match category {
-            AddrCategory::Public => true,
-            _ => false,
-        }
+        matches!(category, AddrCategory::Public)
     }
 }
 
@@ -339,7 +336,7 @@ impl OutConnectionGuard {
         let mut source_ip = None;
         if let Some(source_addr) = is_bu {
             stat.inc_bu_connection(source_addr, _out_conn_guard.bu_context());
-            source_ip = Some(source_addr.clone());
+            source_ip = Some(*source_addr);
         }
 
         OutConnectionGuard {
@@ -379,8 +376,8 @@ pub mod tests {
         let conn_stat = Arc::new(ConnectionStat::default());
         {
             let _guard = conn_stat.clone().add_out_connection(
-                &"127.0.0.1:8081".parse().unwrap(),
-                &"www.google.com".parse().unwrap(),
+                Some(&"127.0.0.1:8081".parse().unwrap()),
+                &"www.google.com:80".parse().unwrap(),
                 #[cfg(feature = "statistics")]
                 shadowsocks::statistics::BuContext::new(
                     shadowsocks::statistics::ProtocolInfo::SS {

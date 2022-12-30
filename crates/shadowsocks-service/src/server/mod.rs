@@ -134,10 +134,10 @@ pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> 
         server.set_connection_bound_width(config.rate_limit.clone());
 
         #[cfg(feature = "server-limit")]
-        server.set_limit_connection_per_ip(config.limit_connection_per_ip.clone());
+        server.set_limit_connection_per_ip(config.limit_connection_per_ip);
 
         #[cfg(feature = "server-limit")]
-        server.set_limit_connection_close_delay(config.limit_connection_close_delay.clone());
+        server.set_limit_connection_close_delay(config.limit_connection_close_delay);
 
         #[cfg(feature = "server-mock")]
         for mock_dns in &config.mock_dns {
@@ -182,7 +182,7 @@ pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> 
     #[cfg(feature = "server-maintain")]
     if config.maintain_addr.is_some() {
         let mut server_infos = Vec::new();
-        for ref server in &servers {
+        for server in &servers {
             server_infos.push(maintain::ServerInfo {
                 addr: server.config().addr().clone(),
                 context: server.get_context(),
@@ -224,7 +224,7 @@ pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> 
 
     loop {
         let (res, _, vfut_left) = future::select_all(vfut).await;
-        let _ = res?;
+        res?;
 
         if vfut_left.is_empty() {
             return Ok(());

@@ -20,14 +20,14 @@ pub fn decrypt(enc_password: &str) -> Result<String, String> {
     let enc_password = match base64::decode(enc_password) {
         Ok(r) => r,
         Err(code) => {
-            return Err(String::from(format!("{:?}", code)));
+            return Err(format!("{:?}", code));
         }
     };
     let decrypt_password = aes256_cbc_decrypt(enc_password.as_ref(), &key, &iv)?;
 
     return match String::from_utf8(decrypt_password) {
         Ok(result) => Ok(result),
-        Err(code) => Err(String::from(format!("{:?}", code))),
+        Err(code) => Err(format!("{:?}", code)),
     };
 }
 
@@ -62,7 +62,7 @@ fn getkey() -> Result<Vec<u8>, String> {
 
 fn aes256_cbc_decrypt(encrypted_data: &[u8], key: &[u8], iv: &[u8; 16]) -> Result<Vec<u8>, String> {
     let cipher =
-        Aes256Cbc::new_from_slices(&key, iv).map_err(|e| format!("aes256_cbc_decrypt: cipher create iv fail {}", e))?;
+        Aes256Cbc::new_from_slices(key, iv).map_err(|e| format!("aes256_cbc_decrypt: cipher create iv fail {}", e))?;
 
     let plaintext = cipher
         .decrypt_vec(encrypted_data)

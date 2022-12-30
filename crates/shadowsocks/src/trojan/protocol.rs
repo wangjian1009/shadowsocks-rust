@@ -167,7 +167,7 @@ impl UdpHeader {
         self.address.write_to_buf(cursor);
         cursor.put_u16(self.payload_len);
         cursor.put_slice(b"\r\n");
-        w.write(&buf).await?;
+        let _ = w.write(&buf).await?;
         Ok(())
     }
 }

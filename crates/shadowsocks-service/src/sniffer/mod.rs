@@ -57,11 +57,9 @@ fn check_block(data: &[u8], check: &[u8]) -> Result<(), SnifferCheckError> {
         } else {
             Err(SnifferCheckError::Reject)
         }
+    } else if &data[..check.len()] == check {
+        Ok(())
     } else {
-        if &data[..check.len()] == check {
-            Ok(())
-        } else {
-            Err(SnifferCheckError::Reject)
-        }
+        Err(SnifferCheckError::Reject)
     }
 }

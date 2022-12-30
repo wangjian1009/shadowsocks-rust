@@ -124,7 +124,7 @@ impl VlessUdpContext {
         );
 
         let packet_sender = self.packet_sender.clone();
-        let peer_addr = peer_addr.clone();
+        let peer_addr = *peer_addr;
         let r2l_task = {
             let target_addr = target_addr.clone();
             tokio::spawn(

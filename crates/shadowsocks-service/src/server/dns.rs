@@ -24,7 +24,9 @@ pub async fn run_dns_tcp_stream<'a, I: AsyncRead + Unpin, O: AsyncWrite + Unpin>
     loop {
         match input.read_exact(&mut length_buf).await {
             Ok(..) => {
-                timeout_ticker.as_ref().map(|o| o.tick());
+                if let Some(o) = timeout_ticker.as_ref() {
+                    o.tick();
+                }
             }
             Err(ref err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(err) => {
@@ -132,7 +134,7 @@ async fn resolve(dns_resolver: &DnsResolver, request: Message) -> Message {
                                         continue;
                                     }
                                     let mut record = Record::with(query.name().clone(), RecordType::A, DEFAULT_TTL);
-                                    record.set_data(Some(RData::A(addr.ip().clone())));
+                                    record.set_data(Some(RData::A(*addr.ip())));
                                     record
                                 }
                                 SocketAddr::V6(addr) => {
@@ -140,12 +142,12 @@ async fn resolve(dns_resolver: &DnsResolver, request: Message) -> Message {
                                         continue;
                                     }
                                     let mut record = Record::with(query.name().clone(), RecordType::AAAA, DEFAULT_TTL);
-                                    record.set_data(Some(RData::AAAA(addr.ip().clone())));
+                                    record.set_data(Some(RData::AAAA(*addr.ip())));
                                     record
                                 }
                             };
 
-                            count = count + 1;
+                            count += 1;
                             trace!(answer = ?record.data().unwrap());
                             response.add_answer(record);
                         }

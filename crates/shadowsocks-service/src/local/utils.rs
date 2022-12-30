@@ -70,16 +70,13 @@ where
             Ok(Ok(n)) => {
                 cfg_if! {
                     if #[cfg(feature = "sniffer")] {
-                        match context.protocol_action(plain.protocol()) {
-                            Some(ProtocolAction::Reject) => {
-                                error!(
-                                    "reject for protocol {:?} len={}",
-                                    plain.protocol().as_ref().unwrap(),
-                                    n,
-                                );
-                                return Ok(());
-                            }
-                            None =>{}
+                        if let Some(ProtocolAction::Reject) = context.protocol_action(plain.protocol()) {
+                            error!(
+                                "reject for protocol {:?} len={}",
+                                plain.protocol().as_ref().unwrap(),
+                                n,
+                            );
+                            return Ok(());
                         }
 
                         // tracing::error!(

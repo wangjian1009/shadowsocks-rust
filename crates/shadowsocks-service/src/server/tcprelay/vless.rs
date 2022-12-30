@@ -76,15 +76,14 @@ impl TcpServerClient {
         );
 
         #[cfg(feature = "server-mock")]
-        match self.context.mock_server_protocol(&target_addr) {
-            Some(protocol) => match protocol {
+        if let Some(protocol) = self.context.mock_server_protocol(&target_addr) {
+            match protocol {
                 ServerMockProtocol::DNS => {
                     let (mut r, mut w) = tokio::io::split(stream);
                     run_dns_tcp_stream(self.context.dns_resolver(), &mut r, &mut w, None).await?;
                     return Ok(());
                 }
-            },
-            None => {}
+            }
         }
 
         if self.context.check_outbound_blocked(&target_addr).await {
@@ -159,7 +158,7 @@ impl TcpServerClient {
             self.context.connect_opts_ref()
         );
 
-        let (rn, wn, r) = copy_bidirectional(&mut stream, &mut remote_stream, Some(self.idle_timeout.clone())).await;
+        let (rn, wn, r) = copy_bidirectional(&mut stream, &mut remote_stream, Some(self.idle_timeout)).await;
         match r {
             Ok(()) => {
                 trace!(

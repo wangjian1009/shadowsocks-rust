@@ -87,9 +87,9 @@ where
         }
 
         if self.sniffer.is_none() && self.chain.is_none() {
-            return Err(SnifferCheckError::Reject);
+            Err(SnifferCheckError::Reject)
         } else {
-            return Err(SnifferCheckError::NoClue);
+            Err(SnifferCheckError::NoClue)
         }
     }
 }
@@ -118,6 +118,12 @@ impl SnifferChainHead {
     #[inline]
     pub fn join<T2: Sniffer>(self, sniffer: T2) -> SnifferChainNode<T2, ()> {
         SnifferChainNode::new(sniffer)
+    }
+}
+
+impl Default for SnifferChainHead {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

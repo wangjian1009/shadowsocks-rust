@@ -2,6 +2,7 @@ use bytes::BufMut;
 
 use super::Header;
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct UTP {
     header: u8,
     extension: u8,

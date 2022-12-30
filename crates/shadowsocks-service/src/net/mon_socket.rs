@@ -169,12 +169,8 @@ impl Deref for MonProxyWriter {
 impl PacketMutWrite for MonProxyWriter {
     async fn write_to_mut(&mut self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         match self.bind_addr.as_ref() {
-            Some(bind_addr) => {
-                self.inner
-                    .send_to(bind_addr, &ServerAddr::from(addr.clone()), buf)
-                    .await
-            }
-            None => self.inner.send(&ServerAddr::from(addr.clone()), buf).await,
+            Some(bind_addr) => self.inner.send_to(bind_addr, addr, buf).await,
+            None => self.inner.send(addr, buf).await,
         }
     }
 }
@@ -183,12 +179,8 @@ impl PacketMutWrite for MonProxyWriter {
 impl PacketWrite for MonProxyWriter {
     async fn write_to(&self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         match self.bind_addr.as_ref() {
-            Some(bind_addr) => {
-                self.inner
-                    .send_to(bind_addr, &ServerAddr::from(addr.clone()), buf)
-                    .await
-            }
-            None => self.inner.send(&ServerAddr::from(addr.clone()), buf).await,
+            Some(bind_addr) => self.inner.send_to(bind_addr, addr, buf).await,
+            None => self.inner.send(addr, buf).await,
         }
     }
 }

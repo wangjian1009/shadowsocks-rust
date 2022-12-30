@@ -527,6 +527,7 @@ impl ProxySocket {
     }
 
     /// poll family functions
+    #[allow(clippy::type_complexity)]
     pub fn poll_recv_with_ctrl(
         &self,
         cx: &mut Context<'_>,
@@ -551,6 +552,7 @@ impl ProxySocket {
             .map(|r| r.map(|(n, sa, a, rn, _)| (n, sa, a, rn)))
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn poll_recv_from_with_ctrl(
         &self,
         cx: &mut Context<'_>,

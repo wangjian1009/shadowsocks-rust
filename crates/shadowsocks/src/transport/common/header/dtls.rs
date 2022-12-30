@@ -4,6 +4,7 @@ use bytes::BufMut;
 
 use super::Header;
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct DTLS {
     epoch: u16,
     length: AtomicU16,

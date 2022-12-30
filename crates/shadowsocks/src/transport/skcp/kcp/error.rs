@@ -4,6 +4,7 @@ use std::io::{self, ErrorKind};
 
 /// KCP protocol errors
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum Error {
     ConvInconsistent(u32, u32),
     InvalidMtu(usize),
@@ -36,11 +37,7 @@ impl fmt::Display for Error {
             Error::InvalidMtu(ref e) => write!(f, "invalid mtu {}", *e),
             Error::InvalidSegmentSize(ref e) => write!(f, "invalid segment size of {}", *e),
             Error::InvalidSegmentDataSize(ref s, ref o) => {
-                write!(
-                    f,
-                    "invalid segment data size, expected {}, found {}",
-                    *s, *o
-                )
+                write!(f, "invalid segment data size, expected {}, found {}", *s, *o)
             }
             Error::IoError(ref e) => e.fmt(f),
             Error::UnsupportedCmd(ref e) => write!(f, "cmd {} is not supported", *e),

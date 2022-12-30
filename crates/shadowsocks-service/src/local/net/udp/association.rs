@@ -148,7 +148,7 @@ where
         if assoc.is_none() {
             let new_assoc = UdpAssociation::new(
                 self.context.clone(),
-                peer_addr.clone(),
+                peer_addr,
                 self.close_tx.clone(),
                 self.balancer.clone(),
                 self.respond_writer.clone(),
@@ -190,14 +190,13 @@ where
                 };
 
                 let action = self.context.protocol_action(&protocol);
-                match action {
-                    Some(action) => match action {
+                if let Some(action) = action {
+                    match action {
                         ProtocolAction::Reject => {
                             trace!(protocol = format!("{:?}", protocol.unwrap()), "reject");
                             return Ok(());
                         }
                     }
-                    None => {}
                 }
             }
         }
@@ -266,7 +265,7 @@ where
             assoc_handle,
             sender,
             writer: PhantomData,
-            span: span.clone(),
+            span,
         }
     }
 }
@@ -661,18 +660,16 @@ where
 
         if bypassed {
             let _sended = self.dispatch_received_bypassed_packet(target_addr, data).await;
+        } else if *check_rate_limit_size > 0 {
+            debug!(
+                target = target_addr.to_string(),
+                pkt.len = data.len(),
+                "==> discard for rate-limited"
+            );
         } else {
-            if *check_rate_limit_size > 0 {
-                debug!(
-                    target = target_addr.to_string(),
-                    pkt.len = data.len(),
-                    "==> discard for rate-limited"
-                );
-            } else {
-                let sended = self.dispatch_received_proxied_packet(target_addr, data).await?;
-                if sended {
-                    *check_rate_limit_size += data.len();
-                }
+            let sended = self.dispatch_received_proxied_packet(target_addr, data).await?;
+            if sended {
+                *check_rate_limit_size += data.len();
             }
         }
         Ok(())
@@ -699,7 +696,7 @@ where
     #[inline]
     async fn dispatch_received_bypassed_packet_domain_name(
         &mut self,
-        target_dname: &String,
+        target_dname: &str,
         target_port: u16,
         data: &[u8],
     ) -> io::Result<bool> {
@@ -896,12 +893,7 @@ where
                         }
 
                         let context = match self
-                            .trojan_create_context(
-                                svr_cfg,
-                                effect_trojan_cfg,
-                                self.peer_addr.clone(),
-                                self.close_tx.clone(),
-                            )
+                            .trojan_create_context(svr_cfg, effect_trojan_cfg, self.peer_addr, self.close_tx.clone())
                             .await
                         {
                             Ok(context) => context,
@@ -918,7 +910,7 @@ where
                             .vless_create_context(
                                 self.context.clone(),
                                 server.clone(),
-                                self.server_session_expire_duration.clone(),
+                                self.server_session_expire_duration,
                             )
                             .await
                         {

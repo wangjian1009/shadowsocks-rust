@@ -39,9 +39,9 @@ impl MaintainServerContext {
         let wtr = BufWriter::new(vec![]);
         let mut wtr = csv::Writer::from_writer(wtr);
 
-        wtr.write_record(&["source", "remote", "conn-ms", "idle-ms", "tx", "rx"])?;
+        wtr.write_record(["source", "remote", "conn-ms", "idle-ms", "tx", "rx"])?;
 
-        for ref server in &self.servers {
+        for server in &self.servers {
             let server_context = server.context.as_ref();
             let connection_stat = server_context.connection_stat_ref();
 
@@ -55,7 +55,7 @@ impl MaintainServerContext {
                     Some(ref addr) => addr.to_string(),
                 };
 
-                wtr.write_record(&[
+                wtr.write_record([
                     connection.source_addr.to_string().as_str(),
                     remote_addr.as_str(),
                     connection.creation_time.elapsed().as_micros().to_string().as_str(),

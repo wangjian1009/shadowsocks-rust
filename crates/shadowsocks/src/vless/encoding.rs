@@ -51,7 +51,7 @@ where
     w.put_slice(request.user.bytes());
     writed += request.user.bytes().len();
 
-    writed += encode_header_addons(w, &request_addons)?;
+    writed += encode_header_addons(w, request_addons)?;
 
     w.put_u8(request.command as u8);
     writed += 1;
@@ -127,7 +127,7 @@ where
     w.put_u8(request_version);
     writed += 1;
 
-    writed += encode_header_addons(w, &request_addons)?;
+    writed += encode_header_addons(w, request_addons)?;
     
     Ok(writed)
 }
@@ -223,7 +223,7 @@ where
             }
         },
         Address::DomainNameAddress(host, port) => {
-            w.put_u16(port.clone());
+            w.put_u16(*port);
             w.put_u8(AddressType::Domain as u8);
             w.put_u8(host.len() as u8);
             w.put_slice(host.as_bytes());

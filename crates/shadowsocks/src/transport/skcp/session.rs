@@ -259,7 +259,7 @@ impl Deref for KcpSessionUniq {
     type Target = KcpSession;
 
     fn deref(&self) -> &KcpSession {
-        &*self.0
+        &self.0
     }
 }
 
@@ -283,6 +283,7 @@ impl KcpSessionManager {
         self.sessions.remove(&peer_addr);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn get_or_create(
         &mut self,
         config: &KcpConfig,

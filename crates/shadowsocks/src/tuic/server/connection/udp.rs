@@ -91,7 +91,7 @@ impl UdpSessionMap {
         src_addr: SocketAddr,
         server_policy: Arc<Box<dyn ServerPolicy>>,
         #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
-    ) -> Result<usize, IoError> {
+    ) -> std::io::Result<usize> {
         let mut send_pkt_tx = self
             .map
             .lock()
@@ -254,7 +254,7 @@ impl UdpSession {
             }
         }
 
-        return UdpSessionCloseReason::ChannelBroken;
+        UdpSessionCloseReason::ChannelBroken
     }
 
     async fn listen_receive_packet(

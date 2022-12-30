@@ -20,7 +20,7 @@ pub async fn serve_vless_udp(
     let sender = UdpAssociation::new_association(
         context,
         MultiProtocolSocket::Vless(writer),
-        peer_addr.clone(),
+        *peer_addr,
         keepalive_tx,
         #[cfg(feature = "statistics")]
         bu_context,
@@ -41,7 +41,7 @@ pub async fn serve_vless_udp(
 
                 let data = &buffer[..n];
 
-                if let Err(..) = sender.try_send((peer_addr.clone(), target_address.clone(), Bytes::copy_from_slice(data), None)) {
+                if let Err(..) = sender.try_send((*peer_addr, target_address.clone(), Bytes::copy_from_slice(data), None)) {
                     let err = io::Error::new(ErrorKind::Other, "udp relay channel full");
                     return Err(err);
                 }

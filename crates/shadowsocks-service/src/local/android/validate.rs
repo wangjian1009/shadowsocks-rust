@@ -234,47 +234,47 @@ fn validate_sign_apk_path(result: &mut ValidateResult) {
 const S_SEED: [u8; 8] = [0x33, 0x34, 0x52, 0x58, 0x11, 0x73, 0x94, 0x38];
 const fn const_string_encode<const N: usize>(mut input: [u8; N]) -> [u8; N] {
     if 0 < N {
-        input[0] = input[0] ^ S_SEED[0 % S_SEED.len()];
+        input[0] ^= S_SEED[0 % S_SEED.len()];
     }
 
     if 1 < N {
-        input[1] = input[1] ^ S_SEED[1 % S_SEED.len()];
+        input[1] ^= S_SEED[1 % S_SEED.len()];
     }
 
     if 2 < N {
-        input[2] = input[2] ^ S_SEED[2 % S_SEED.len()];
+        input[2] ^= S_SEED[2 % S_SEED.len()];
     }
 
     if 3 < N {
-        input[3] = input[3] ^ S_SEED[3 % S_SEED.len()];
+        input[3] ^= S_SEED[3 % S_SEED.len()];
     }
 
     if 4 < N {
-        input[4] = input[4] ^ S_SEED[4 % S_SEED.len()];
+        input[4] ^= S_SEED[4 % S_SEED.len()];
     }
 
     if 5 < N {
-        input[5] = input[5] ^ S_SEED[5 % S_SEED.len()];
+        input[5] ^= S_SEED[5 % S_SEED.len()];
     }
 
     if 6 < N {
-        input[6] = input[6] ^ S_SEED[6 % S_SEED.len()];
+        input[6] ^= S_SEED[6 % S_SEED.len()];
     }
 
     if 7 < N {
-        input[7] = input[7] ^ S_SEED[7 % S_SEED.len()];
+        input[7] ^= S_SEED[7 % S_SEED.len()];
     }
 
     if 8 < N {
-        input[8] = input[8] ^ S_SEED[8 % S_SEED.len()];
+        input[8] ^= S_SEED[8 % S_SEED.len()];
     }
 
     if 9 < N {
-        input[9] = input[9] ^ S_SEED[9 % S_SEED.len()];
+        input[9] ^= S_SEED[9 % S_SEED.len()];
     }
 
     if 10 < N {
-        input[10] = input[10] ^ S_SEED[10 % S_SEED.len()];
+        input[10] ^= S_SEED[10 % S_SEED.len()];
     }
 
     assert!(N < 10);
@@ -479,7 +479,7 @@ pub fn check_apk_path_match_expects(
         if path_infos.index(pos) != &expect[pos] {
             let all_path = std::path::Path::new(all_path);
 
-            let mut left_path: Option<&std::path::Path> = Some(&all_path);
+            let mut left_path: Option<&std::path::Path> = Some(all_path);
             for _j in 0..(path_infos.len() - pos - 1) {
                 left_path = left_path.unwrap().parent();
             }
@@ -526,7 +526,7 @@ fn check_sha1_fingerprint(fingerprint: &[u8]) -> bool {
         }
     }
 
-    return false;
+    false
 }
 
 #[cfg(test)]

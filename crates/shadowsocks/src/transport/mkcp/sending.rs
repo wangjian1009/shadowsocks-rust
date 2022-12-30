@@ -126,20 +126,23 @@ impl SendingWindow {
 
         for i in 0..cache.len() {
             let node = cache.get(i).unwrap();
-            if node.number > number {
-                return false;
-            } else if node.number == number {
-                self.total_in_flight_size.fetch_sub(1, Ordering::SeqCst);
-                assert!(self.total_in_flight_size() < 0x7FFFFFFF);
-                cache.remove(i);
-                tracing::trace!(
-                    "#{}: sending: remove data segment {}, total-in-flight={}, cache={}",
-                    conn_meta,
-                    number,
-                    self.total_in_flight_size(),
-                    cache.len(),
-                );
-                return true;
+
+            match node.number.cmp(&number) {
+                std::cmp::Ordering::Greater => return false,
+                std::cmp::Ordering::Equal => {
+                    self.total_in_flight_size.fetch_sub(1, Ordering::SeqCst);
+                    assert!(self.total_in_flight_size() < 0x7FFFFFFF);
+                    cache.remove(i);
+                    tracing::trace!(
+                        "#{}: sending: remove data segment {}, total-in-flight={}, cache={}",
+                        conn_meta,
+                        number,
+                        self.total_in_flight_size(),
+                        cache.len(),
+                    );
+                    return true;
+                }
+                std::cmp::Ordering::Less => {}
             }
         }
 

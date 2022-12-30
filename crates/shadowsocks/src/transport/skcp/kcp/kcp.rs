@@ -908,7 +908,7 @@ impl<Output: Write> Kcp<Output> {
 
                 let need = KCP_OVERHEAD + snd_segment.data.len();
 
-                if self.buf.len() + need > self.mtu as usize {
+                if self.buf.len() + need > self.mtu {
                     self.output.write_all(&self.buf)?;
                     self.buf.clear();
                 }
@@ -968,7 +968,8 @@ impl<Output: Write> Kcp<Output> {
 
         let mut slap = timediff(self.current, self.ts_flush);
 
-        if slap >= 10000 || slap < -10000 {
+        // if slap >= 10000 || slap < -10000 {
+        if !(-10000..10000).contains(&slap) {
             self.ts_flush = self.current;
             slap = 0;
         }
@@ -1083,11 +1084,11 @@ impl<Output: Write> Kcp<Output> {
     /// set maximum window size: `sndwnd=32`, `rcvwnd=32` by default
     pub fn set_wndsize(&mut self, sndwnd: u16, rcvwnd: u16) {
         if sndwnd > 0 {
-            self.snd_wnd = sndwnd as u16;
+            self.snd_wnd = sndwnd;
         }
 
         if rcvwnd > 0 {
-            self.rcv_wnd = cmp::max(rcvwnd, KCP_WND_RCV) as u16;
+            self.rcv_wnd = cmp::max(rcvwnd, KCP_WND_RCV);
         }
     }
 
@@ -1118,7 +1119,7 @@ impl<Output: Write> Kcp<Output> {
 
     /// KCP header size
     pub fn header_len() -> usize {
-        KCP_OVERHEAD as usize
+        KCP_OVERHEAD
     }
 
     /// Enabled stream or not

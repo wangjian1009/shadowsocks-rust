@@ -82,7 +82,7 @@ pub fn load_path_infos(path: &str) -> std::result::Result<Vec<PathEntryInfo>, (S
 
     let path = Path::new(path);
 
-    let mut cur_path: Option<&Path> = Some(&path);
+    let mut cur_path: Option<&Path> = Some(path);
     while cur_path.is_some() {
         let path_state_info = match cur_path.unwrap().metadata() {
             #[cfg(unix)]

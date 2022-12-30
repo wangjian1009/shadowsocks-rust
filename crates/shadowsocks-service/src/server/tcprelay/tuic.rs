@@ -48,7 +48,7 @@ impl TcpServer {
         };
 
         let tokens = tuic_cfg.build_tokens();
-        let server_cfg = tuic_cfg.build_server_config(idle_timeout.clone())?;
+        let server_cfg = tuic_cfg.build_server_config(idle_timeout)?;
 
         let server = tuic::server::Server::init(
             server_cfg,

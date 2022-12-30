@@ -532,7 +532,7 @@ impl MkcpConnectionContext {
                 sending_worker,
                 &current,
                 segment::Command::Ping,
-                &"tick",
+                "tick",
             )
             .await?;
         }

@@ -115,7 +115,7 @@ impl Connection {
         connect_opts: &ConnectOpts,
     ) -> Result<(Self, Datagrams, IncomingUniStreams)> {
         let (addr, name) = match &config.server_addr {
-            ServerAddrWithName::SocketAddr { addr, name } => (addr.clone(), name),
+            ServerAddrWithName::SocketAddr { addr, name } => (*addr, name),
             ServerAddrWithName::DomainAddr { domain, port } => {
                 let remote_addr = lookup_then!(context, domain.as_str(), *port, |remote_addr| {
                     Result::Ok(remote_addr)
@@ -145,7 +145,7 @@ impl Connection {
             SocketAddr::V6(_) => create_outbound_udp_socket(AddrFamily::Ipv6, connect_opts).await?,
         };
 
-        let socket: tokio::net::UdpSocket = socket.into();
+        let socket: tokio::net::UdpSocket = socket;
 
         endpoint.rebind(socket.into_std()?)?;
 

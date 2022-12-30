@@ -71,10 +71,7 @@ pub async fn serve(
         let server_policy = server_policy.clone();
 
         let str_addr = peer_addr.as_ref().map(|d| d.to_string());
-        let span = info_span!(
-            "trojan.client",
-            peer.addr = str_addr.as_ref().map(|d| d.as_str()).unwrap_or("unknown")
-        );
+        let span = info_span!("trojan.client", peer.addr = str_addr.as_deref().unwrap_or("unknown"));
         tokio::task::spawn(
             process_incoming(
                 cancel_waiter,
@@ -92,6 +89,7 @@ pub async fn serve(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_incoming(
     cancel_waiter: CancelWaiter,
     mut incoming: impl StreamConnection + 'static,

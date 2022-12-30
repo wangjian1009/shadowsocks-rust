@@ -160,6 +160,6 @@ impl Dispatcher {
             )
         })?;
 
-        return Ok(None);
+        Ok(None)
     }
 }

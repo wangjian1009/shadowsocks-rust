@@ -29,11 +29,11 @@ impl ReceivingWindow {
 
     #[inline]
     fn set(&mut self, id: u32, value: segment::DataSegment) -> bool {
-        if self.cache.contains_key(&id) {
-            false
-        } else {
-            self.cache.insert(id, value);
+        if let std::collections::btree_map::Entry::Vacant(e) = self.cache.entry(id) {
+            e.insert(value);
             true
+        } else {
+            false
         }
     }
 

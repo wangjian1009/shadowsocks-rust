@@ -76,7 +76,7 @@ where
                         },
                     }
 
-                    if buf.filled().len() == 0 {
+                    if buf.filled().is_empty() {
                         // 没有开始检测，没有任何底层数据，直接返回
                         self.state = State::Checked;
                         self.checker = None;
@@ -119,7 +119,7 @@ where
                         },
                     }
 
-                    if buf.filled().len() == 0 {
+                    if buf.filled().is_empty() {
                         // 检测过程中，底层流数据已经取完，则将缓冲数据返回
                         self.state = State::Checked;
                         self.checker = None;
@@ -162,14 +162,14 @@ where
                 }
                 State::Checked => {
                     // 有缓冲数据则首先返回缓冲数据
-                    if let Some(mut combine_buf) = self.buf.as_mut() {
+                    if let Some(combine_buf) = self.buf.as_mut() {
                         if combine_buf.len() <= buf.capacity() {
                             buf.put_slice(&combine_buf[..]);
                             self.buf = None;
                             return Poll::Ready(Ok(()));
                         } else {
                             buf.put_slice(&combine_buf[..buf.capacity()]);
-                            Arc::get_mut(&mut combine_buf).unwrap().remove(buf.filled().len());
+                            Arc::get_mut(combine_buf).unwrap().remove(buf.filled().len());
                             return Poll::Ready(Ok(()));
                         }
                     }

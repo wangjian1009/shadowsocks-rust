@@ -25,8 +25,8 @@ impl fmt::Display for TargetNetwork {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            &Self::TCP => write!(f, "tcp"),
-            &Self::UDP => write!(f, "udp"),
+            Self::TCP => write!(f, "tcp"),
+            Self::UDP => write!(f, "udp"),
         }
     }
 }

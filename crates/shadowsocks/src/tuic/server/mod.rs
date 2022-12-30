@@ -1,6 +1,6 @@
 mod config;
 mod connection;
-mod server;
+mod svr;
 
 pub use config::RawConfig;
-pub use server::Server;
+pub use svr::Server;

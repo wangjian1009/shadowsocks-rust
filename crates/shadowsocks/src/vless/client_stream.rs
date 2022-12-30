@@ -101,7 +101,7 @@ impl<S: StreamConnection> ClientStream<S> {
             version: 0,
             user: Self::pick_user(svr_vless_cfg)?.account.id.clone(),
             command,
-            address: target_address.map(|o| protocol::Address::from(o)),
+            address: target_address.map(protocol::Address::from),
         };
 
         Ok(ClientStream::new(map_fn(stream), request))
@@ -119,7 +119,7 @@ impl<S: StreamConnection> ClientStream<S> {
     #[inline]
     fn pick_user<'a>(cfg: &'a Config) -> io::Result<&'a protocol::User> {
         match cfg.clients.len() {
-            0 => return Err(io::Error::new(io::ErrorKind::Other, "no user configured")),
+            0 => Err(io::Error::new(io::ErrorKind::Other, "no user configured")),
             1 => Ok(&cfg.clients[0]),
             _ => {
                 let idx: u16 = rand::random();
@@ -136,7 +136,7 @@ impl<S: StreamConnection> ClientStream<S> {
 impl<S> ClientStream<S> {
     fn process_response(&mut self, addon: Option<protocol::Addons>) -> io::Result<()> {
         if addon.is_some() {
-            return Err(new_error(format!("decode rquest: not support addon")));
+            return Err(new_error("decode rquest: not support addon"));
         }
         Ok(())
     }
@@ -160,7 +160,7 @@ where
                     };
 
                     // 连接已经关闭，则返回
-                    if buf.filled().len() == 0 {
+                    if buf.filled().is_empty() {
                         return Poll::Ready(Ok(()));
                     }
 
@@ -214,7 +214,7 @@ where
                     }
 
                     // 连接已经关闭，则返回
-                    if buf.filled().len() == 0 {
+                    if buf.filled().is_empty() {
                         return Poll::Ready(Ok(()));
                     }
 

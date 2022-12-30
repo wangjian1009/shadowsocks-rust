@@ -132,13 +132,15 @@ where
 
         timeout_ticker.tick();
         let data = Bytes::copy_from_slice(&buffer[..n]);
-        flow_state.as_ref().map(|o| o.incr_rx(data.len() as u64));
+        if let Some(o) = flow_state.as_ref() {
+            o.incr_rx(data.len() as u64);
+        }
 
         let check_peer_addr = if client_validated {
             None
         } else {
             client_validated = true;
-            peer_addr.clone()
+            peer_addr
         };
 
         match server_policy.packet_check(check_peer_addr.as_ref(), &addr).await {
@@ -186,7 +188,9 @@ where
 
         match incoming_writer.write_to_mut(&data[..], &addr).await {
             Ok(()) => {
-                flow_state.as_ref().map(|o| o.incr_rx(data.len() as u64));
+                if let Some(o) = flow_state.as_ref() {
+                    o.incr_rx(data.len() as u64);
+                }
             }
             Err(err) => {
                 error!(error = ?err, "incoming send error");
