@@ -4,7 +4,7 @@ pub struct Wireguard {}
 
 impl Header for Wireguard {
     fn size(&self) -> usize {
-        return 4;
+        4
     }
 
     // Serialize implements PacketHeader.
@@ -18,6 +18,6 @@ impl Header for Wireguard {
 
 impl Wireguard {
     pub fn new() -> Self {
-        return Self {};
+        Self {}
     }
 }

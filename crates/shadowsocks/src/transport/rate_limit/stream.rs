@@ -83,10 +83,7 @@ impl RateLimiter {
 
     pub fn rate_limit(&self) -> Option<BoundWidth> {
         let data = self.data.lock();
-        match data.as_ref() {
-            Some(data) => Some(data.rate_limit.clone()),
-            None => None,
-        }
+        data.as_ref().map(|data| data.rate_limit.clone())
     }
 
     pub fn check_n(&self, n: NonZeroU32) -> Result<(), NegativeMultiDecision> {
@@ -113,7 +110,7 @@ impl RateLimiter {
         match data.as_ref() {
             Some(data) => {
                 let bytes_per_10ms = data.rate_limit.as_bps() as usize / 8 / 100;
-                Some(std::cmp::max(1024, std::cmp::min(bytes_per_10ms, 1024 * 1024 * 64)))
+                Some(bytes_per_10ms.clamp(1024, 1024 * 1024 * 64))
             }
             None => None,
         }
@@ -155,16 +152,13 @@ impl<S> RateLimitedStream<S> {
     pub fn from_stream(stream: S, limiter: Option<Arc<RateLimiter>>) -> RateLimitedStream<S> {
         RateLimitedStream {
             stream,
-            limiter_ctx: match limiter {
-                Some(limiter) => Some(RateLimitedContext {
-                    limiter,
-                    delay: Delay::new(Duration::new(0, 0)),
-                    jitter: Jitter::new(Duration::new(0, 0), Duration::new(0, 0)),
-                    state: State::ReadInner,
-                    readed: None,
-                }),
-                None => None,
-            },
+            limiter_ctx: limiter.map(|limiter| RateLimitedContext {
+                limiter,
+                delay: Delay::new(Duration::new(0, 0)),
+                jitter: Jitter::new(Duration::new(0, 0), Duration::new(0, 0)),
+                state: State::ReadInner,
+                readed: None,
+            }),
         }
     }
 }
@@ -255,7 +249,7 @@ where
                                     Poll::Pending => {
                                         // 定时器启动，进入等待状态，此时如果有数据，返回数据，等待只影响下一次读取
                                         limiter_ctx.state = State::Wait;
-                                        if buf.filled().len() > 0 {
+                                        if !buf.filled().is_empty() {
                                             // tracing::error!(
                                             //     "xxxxxxx: limit: sleep begin, duration={:?}, return {}",
                                             //     duration,
@@ -286,7 +280,7 @@ where
                             limiter_ctx.state = State::ReadInner;
                             limiter_ctx.readed = None;
 
-                            if buf.filled().len() > 0 {
+                            if !buf.filled().is_empty() {
                                 // 从State::ReadInner进入检测状态时，已经可能读取过数据，直接返回上层
                                 // tracing::error!("xxxxxxx: limit: check passed, return {}", buf.filled().len());
                                 return Poll::Ready(Ok(()));

@@ -78,7 +78,7 @@ impl ServerConfig {
     }
 
     pub(crate) fn from_url_transport_connector(
-        query: &Vec<(String, String)>,
+        query: &[(String, String)],
     ) -> Result<Option<TransportConnectorConfig>, UrlParseError> {
         let transport_type = match Self::from_url_get_arg(query, "type") {
             Some(transport_type) => transport_type,
@@ -158,7 +158,7 @@ impl ServerConfig {
     }
 
     #[cfg(feature = "transport-ws")]
-    fn from_url_ws(params: &Vec<(String, String)>) -> Result<WebSocketConnectorConfig, UrlParseError> {
+    fn from_url_ws(params: &[(String, String)]) -> Result<WebSocketConnectorConfig, UrlParseError> {
         Ok(WebSocketConnectorConfig {
             path: match Self::from_url_get_arg(params, "path") {
                 None => "/".to_owned(),
@@ -172,7 +172,7 @@ impl ServerConfig {
     }
 
     #[cfg(feature = "transport-mkcp")]
-    fn from_url_mkcp(params: &Vec<(String, String)>) -> Result<MkcpConfig, UrlParseError> {
+    fn from_url_mkcp(params: &[(String, String)]) -> Result<MkcpConfig, UrlParseError> {
         let mut mkcp_config = MkcpConfig::default();
 
         if let Some(header_type) = Self::from_url_get_arg(params, "headerType") {
@@ -190,7 +190,7 @@ impl ServerConfig {
     }
 
     #[cfg(feature = "transport-skcp")]
-    fn from_url_skcp(params: &Vec<(String, String)>) -> Result<SkcpConfig, UrlParseError> {
+    fn from_url_skcp(params: &[(String, String)]) -> Result<SkcpConfig, UrlParseError> {
         let params = params.iter().map(|e| (e.0.as_str(), e.1.as_str())).collect();
         match transport::build_skcp_config(&Some(params)) {
             Ok(c) => Ok(c),
@@ -202,7 +202,7 @@ impl ServerConfig {
     }
 
     #[cfg(feature = "transport-tls")]
-    fn from_url_tls(params: &Vec<(String, String)>) -> Result<TlsConnectorConfig, UrlParseError> {
+    fn from_url_tls(params: &[(String, String)]) -> Result<TlsConnectorConfig, UrlParseError> {
         let tls_config = TlsConnectorConfig {
             sni: match Self::from_url_get_arg(params, "sni") {
                 None => {
@@ -617,10 +617,10 @@ impl TransportAcceptorConfig {
     fn build_tls_config(args: &Option<Vec<(&str, &str)>>) -> Result<TlsAcceptorConfig, String> {
         let mut config = TlsAcceptorConfig {
             cert: find_arg(args, "cert")
-                .ok_or_else(|| "transport tls cert not configured")?
+                .ok_or("transport tls cert not configured")?
                 .to_owned(),
             key: find_arg(args, "key")
-                .ok_or_else(|| "transport tls key not configured")?
+                .ok_or("transport tls key not configured")?
                 .to_owned(),
             cipher: None,
         };

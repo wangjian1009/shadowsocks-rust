@@ -124,7 +124,7 @@ impl AckSegment {
 
     #[inline]
     pub fn is_full(&self) -> bool {
-        self.number_list.len() == ACK_NUMBER_LIMIT as usize
+        self.number_list.len() == ACK_NUMBER_LIMIT
     }
 
     #[inline]
@@ -134,7 +134,7 @@ impl AckSegment {
 
     #[inline]
     pub fn byte_size(&self) -> usize {
-        return 4 + 4 + 4 + 1 + (self.number_list.len() * 4);
+        4 + 4 + 4 + 1 + (self.number_list.len() * 4)
     }
 
     #[inline]
@@ -144,7 +144,7 @@ impl AckSegment {
         cursor.put_u32(self.timestamp);
         cursor.put_u8(self.number_list.len() as u8);
         for number in self.number_list.iter() {
-            cursor.put_u32(number.clone());
+            cursor.put_u32(*number);
         }
     }
 
@@ -334,7 +334,7 @@ impl Segment {
         let mut buf = Vec::with_capacity(self.byte_size());
         let cursor = &mut buf;
         self.write_to_buf(cursor);
-        w.write(&buf).await?;
+        let _ = w.write(&buf).await?;
         Ok(())
     }
 }

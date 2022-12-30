@@ -127,7 +127,7 @@ impl AckList {
                 if seg.is_full() {
                     break;
                 }
-                seg.put_number(number.clone());
+                seg.put_number(*number);
             }
             to_send_segments.push_back(seg);
             self.dirty = false;
@@ -292,7 +292,7 @@ impl ReceivingWorker {
 
         let mut option: u8 = 0;
         if self.context.state() == MkcpState::ReadyToClose {
-            option = option & segment::SegmentOption::Close.flag();
+            option &= segment::SegmentOption::Close.flag();
         }
 
         let next_number = self.next_number();

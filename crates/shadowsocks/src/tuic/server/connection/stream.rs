@@ -52,7 +52,6 @@ pub async fn connect(
 
             warn!(error = ?err, "ack check error");
             let _ = write_response(send, false).await;
-            return;
         }
         Ok(StreamAction::ClientBlocked) => {
             #[cfg(feature = "statistics")]
@@ -60,7 +59,6 @@ pub async fn connect(
 
             warn!("client blocked by ACL rules");
             let _ = write_response(send, false).await;
-            return;
         }
         Ok(StreamAction::OutboundBlocked) => {
             #[cfg(feature = "statistics")]
@@ -68,7 +66,6 @@ pub async fn connect(
 
             warn!("outbound blocked by ACL rules");
             let _ = write_response(send, false).await;
-            return;
         }
         Ok(StreamAction::ConnectionLimited) => {
             #[cfg(feature = "statistics")]
@@ -76,7 +73,6 @@ pub async fn connect(
 
             warn!("connection limited");
             let _ = write_response(send, false).await;
-            return;
         }
         Ok(StreamAction::Remote {
             connection_guard: _,

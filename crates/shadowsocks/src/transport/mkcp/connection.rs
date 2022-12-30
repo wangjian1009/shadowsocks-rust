@@ -155,17 +155,11 @@ pub enum MkcpState {
 
 impl MkcpState {
     pub fn is_terminating(&self) -> bool {
-        match self {
-            MkcpState::Terminating | MkcpState::Terminated => true,
-            _ => false,
-        }
+        matches!(self, MkcpState::Terminating | MkcpState::Terminated)
     }
 
     pub fn is_terminated(&self) -> bool {
-        match self {
-            MkcpState::Terminated => true,
-            _ => false,
-        }
+        matches!(self, MkcpState::Terminated)
     }
 }
 
@@ -196,9 +190,9 @@ pub struct MkcpConnMetadata {
 
 impl Display for MkcpConnMetadata {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.way {
-            &MkcpConnWay::Incoming => write!(f, "S {} #{}", self.remote_addr, self.conversation),
-            &MkcpConnWay::Outgoing => {
+        match self.way {
+            MkcpConnWay::Incoming => write!(f, "S {} #{}", self.remote_addr, self.conversation),
+            MkcpConnWay::Outgoing => {
                 if self.local_addr.ip().is_unspecified() {
                     write!(f, "C #{}", self.conversation)
                 } else {
@@ -482,7 +476,7 @@ impl MkcpConnectionContext {
                 sending_worker,
                 &current,
                 segment::Command::Terminate,
-                &"flush",
+                "flush",
             )
             .await?;
 
@@ -523,7 +517,7 @@ impl MkcpConnectionContext {
                     sending_worker,
                     &current,
                     segment::Command::Ping,
-                    &"sending updated",
+                    "sending updated",
                 )
                 .await
             {
@@ -613,7 +607,7 @@ impl MkcpConnectionContext {
         self.output.write(&self.meta().remote_addr, &seg).await?;
         let state = self.state();
         tracing::trace!("#{}: ({}): --> {:?} (ping for {})", self.meta(), state, seg, reason);
-        self.set_last_ping_time(current.clone());
+        self.set_last_ping_time(*current);
 
         Ok(())
     }
@@ -830,13 +824,10 @@ impl MkcpConnection {
         loop {
             loop {
                 if self.context.state() != MkcpState::Active {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        format!("connection not active"),
-                    )));
+                    return Poll::Ready(Err(io::Error::new(io::ErrorKind::BrokenPipe, "connection not active")));
                 }
 
-                if buf.len() == 0 {
+                if buf.is_empty() {
                     break;
                 }
 
@@ -862,7 +853,7 @@ impl MkcpConnection {
                 update_pending = false;
             }
 
-            if buf.len() == 0 || writed_size > 0 {
+            if buf.is_empty() || writed_size > 0 {
                 break;
             }
 

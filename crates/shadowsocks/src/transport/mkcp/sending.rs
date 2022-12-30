@@ -214,7 +214,7 @@ impl SendingWorker {
         let mut maxack_removed = None;
 
         for number in seg.number_list.iter() {
-            let number = number.clone();
+            let number = *number;
             let removed = self.process_ack(number);
             if maxack.is_none() || maxack.unwrap() < number {
                 maxack = Some(number);
@@ -250,7 +250,7 @@ impl SendingWorker {
 
         let number = self.next_number.fetch_add(1, Ordering::SeqCst);
         self.window.push(number, b);
-        return true;
+        true
     }
 
     #[inline]
@@ -335,12 +335,12 @@ impl SendingWorker {
                     let rto = self.context.round_trip().rto();
                     data.timeout = current.wrapping_add(rto);
 
-                    data.seg.timestamp = current.clone();
+                    data.seg.timestamp = *current;
                     data.transmit += 1;
 
                     let mut option: u8 = 0;
                     if self.context.state() == MkcpState::ReadyToClose {
-                        option = option & segment::SegmentOption::Close.flag()
+                        option &= segment::SegmentOption::Close.flag()
                     }
 
                     data.seg.sending_next = self.first_unacknowledged();
@@ -389,7 +389,7 @@ impl SendingWorker {
             }
 
             let total_in_flight_size = self.window.total_in_flight_size();
-            if to_send_segments.len() > 0 && total_in_flight_size != 0 {
+            if !to_send_segments.is_empty() && total_in_flight_size != 0 {
                 let rate = lost * 100 / total_in_flight_size;
                 self.on_packet_loss(rate);
             }

@@ -89,10 +89,7 @@ impl MkcpConnectorConnection {
         w: Arc<UdpSocket>,
         statistic: Option<Arc<StatisticStat>>,
     ) -> Self {
-        let header = match config.create_header() {
-            Some(header) => Some(Arc::new(header)),
-            None => None,
-        };
+        let header = config.create_header().map(Arc::new);
         let security = Arc::new(config.create_security());
         let r = MkcpPacketReader::new(r, header.clone(), Some(security.clone()));
         let w = MkcpPacketWriter::new(w, header, Some(security));

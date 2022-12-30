@@ -10,7 +10,7 @@ pub struct UTP {
 
 impl Header for UTP {
     fn size(&self) -> usize {
-        return 4;
+        4
     }
 
     // Serialize implements PacketHeader.
@@ -24,10 +24,10 @@ impl Header for UTP {
 impl UTP {
     pub fn new() -> Self {
         let connection_id: u16 = rand::random();
-        return Self {
+        Self {
             header: 1,
             extension: 0,
             connection_id,
-        };
+        }
     }
 }

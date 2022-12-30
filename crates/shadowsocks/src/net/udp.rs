@@ -103,7 +103,7 @@ impl UdpSocket {
         let (remote_addr, socket) = match *addr {
             ServerAddr::SocketAddr(ref remote_addr) => {
                 let socket = create_outbound_udp_socket(From::from(remote_addr), opts).await?;
-                (remote_addr.clone(), socket)
+                (*remote_addr, socket)
             }
             ServerAddr::DomainName(ref dname, port) => lookup_then!(context, dname, port, |remote_addr| {
                 create_outbound_udp_socket(From::from(&remote_addr), opts).await

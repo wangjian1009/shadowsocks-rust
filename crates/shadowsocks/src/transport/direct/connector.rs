@@ -27,7 +27,7 @@ impl Connector for TcpConnector {
 
     async fn connect(&self, addr: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
         if let Some(context) = self.context.as_ref() {
-            let stream = crate::net::TcpStream::connect_server_with_opts(context, addr, &connect_opts).await?;
+            let stream = crate::net::TcpStream::connect_server_with_opts(context, addr, connect_opts).await?;
 
             #[cfg(feature = "rate-limit")]
             let stream = Self::TS::from_stream(stream, None);
@@ -36,7 +36,7 @@ impl Connector for TcpConnector {
         } else {
             match addr {
                 ServerAddr::SocketAddr(ref addr) => {
-                    let stream = crate::net::TcpStream::connect_with_opts(addr, &connect_opts).await?;
+                    let stream = crate::net::TcpStream::connect_with_opts(addr, connect_opts).await?;
 
                     #[cfg(feature = "rate-limit")]
                     let stream = Self::TS::from_stream(stream, None);
@@ -45,7 +45,7 @@ impl Connector for TcpConnector {
                 }
                 ServerAddr::DomainName(..) => Err(io::Error::new(
                     io::ErrorKind::Other,
-                    format!("TcpConnector not support tcp connect to domain address"),
+                    "TcpConnector not support tcp connect to domain address",
                 )),
             }
         }

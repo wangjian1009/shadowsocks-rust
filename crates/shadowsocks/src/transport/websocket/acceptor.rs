@@ -51,7 +51,7 @@ impl<T: Acceptor> Acceptor for WebSocketAcceptor<T> {
             None,
         )
         .await
-        .map_err(|e| cvt_error(e))?;
+        .map_err(cvt_error)?;
         let stream = BinaryWsStream::new(stream);
         Ok((stream, addr))
     }

@@ -26,7 +26,7 @@ impl<T: Connector> Connector for WebSocketConnector<T> {
 
     async fn connect(&self, destination: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
         let stream = self.inner.connect(destination, connect_opts).await?;
-        let (stream, resp) = client_async(&self.uri, stream).await.map_err(|e| cvt_error(e))?;
+        let (stream, resp) = client_async(&self.uri, stream).await.map_err(cvt_error)?;
         if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
             return Err(cvt_error(format!("bad status: {}", resp.status())));
         }

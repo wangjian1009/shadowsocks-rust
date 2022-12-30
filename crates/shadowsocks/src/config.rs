@@ -287,7 +287,7 @@ impl ServerUserManager {
 
     /// Iterate users
     pub fn users_iter(&self) -> impl Iterator<Item = &ServerUser> {
-        self.users.iter().map(|(_, v)| v.as_ref())
+        self.users.values().map(|v| v.as_ref())
     }
 }
 
@@ -554,19 +554,19 @@ impl ServerConfig {
             #[cfg(feature = "vless")]
             ServerProtocol::Vless(_config) => {
                 // TODO: Loki
-                let param = format!("");
-                return format!("vless://{}", encode_config(&param, URL_SAFE_NO_PAD));
+                let param = "".to_string();
+                return format!("vless://{}", encode_config(param, URL_SAFE_NO_PAD));
             }
             #[cfg(feature = "tuic")]
             ServerProtocol::Tuic(_config) => {
                 // TODO: Loki
-                let param = format!("");
-                return format!("tuic://{}", encode_config(&param, URL_SAFE_NO_PAD));
+                let param = "".to_string();
+                return format!("tuic://{}", encode_config(param, URL_SAFE_NO_PAD));
             }
         };
 
         let param = format!("{}:{}@{}", config.method(), config.password(), self.addr());
-        format!("ss://{}", encode_config(&param, URL_SAFE_NO_PAD))
+        format!("ss://{}", encode_config(param, URL_SAFE_NO_PAD))
     }
 
     /// Get [SIP002](https://github.com/shadowsocks/shadowsocks-org/issues/27) URL
@@ -575,8 +575,8 @@ impl ServerConfig {
             ServerProtocol::SS(config) => config,
             #[cfg(feature = "trojan")]
             ServerProtocol::Trojan(config) => {
-                let user_info = format!("{}", config.password());
-                let encoded_user_info = encode_config(&user_info, URL_SAFE_NO_PAD);
+                let user_info = config.password().to_string();
+                let encoded_user_info = encode_config(user_info, URL_SAFE_NO_PAD);
                 return format!("trojan://{}@{}", encoded_user_info, self.addr());
             }
             #[cfg(feature = "vless")]
@@ -589,7 +589,7 @@ impl ServerConfig {
             if #[cfg(feature = "aead-cipher-2022")] {
                 let user_info = if !config.method().is_aead_2022() {
                     let user_info = format!("{}:{}", config.method(), config.password());
-                    encode_config(&user_info, URL_SAFE_NO_PAD)
+                    encode_config(user_info, URL_SAFE_NO_PAD)
                 } else {
                     format!("{}:{}", config.method(), percent_encoding::utf8_percent_encode(config.password(), percent_encoding::NON_ALPHANUMERIC))
                 };
@@ -805,7 +805,7 @@ impl ServerConfig {
     }
 
     #[allow(dead_code)]
-    fn from_url_get_arg<'a>(params: &'a Vec<(String, String)>, k: &str) -> Option<&'a String> {
+    fn from_url_get_arg<'a>(params: &'a [(String, String)], k: &str) -> Option<&'a String> {
         for item in params.iter() {
             if item.0 == k {
                 return Some(&item.1);
@@ -816,7 +816,7 @@ impl ServerConfig {
     }
 
     #[allow(dead_code)]
-    fn from_url_get_arg_as<T: FromStr>(params: &Vec<(String, String)>, k: &str) -> Result<Option<T>, UrlParseError> {
+    fn from_url_get_arg_as<T: FromStr>(params: &[(String, String)], k: &str) -> Result<Option<T>, UrlParseError> {
         match Self::from_url_get_arg(params, k) {
             Some(v) => match v.parse::<T>() {
                 Ok(v) => Ok(Some(v)),

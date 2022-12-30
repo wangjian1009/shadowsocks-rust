@@ -38,11 +38,11 @@ impl Header for DTLS {
 impl DTLS {
     pub fn new() -> Self {
         let epoch: u16 = rand::random();
-        return Self {
+        Self {
             epoch,
             sequence: AtomicU32::new(0),
             length: AtomicU16::new(17),
-        };
+        }
     }
 }
 

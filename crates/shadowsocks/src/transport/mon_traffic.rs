@@ -50,7 +50,9 @@ impl<T> MonTraffic<T> {
 impl<T: PacketMutWrite> PacketMutWrite for MonTraffic<T> {
     async fn write_to_mut(&mut self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         self.s.write_to_mut(buf, addr).await?;
-        self.tx.as_ref().map(|tx| tx.incr_tx(buf.len() as u64));
+        if let Some(tx) = self.tx.as_ref() {
+            tx.incr_tx(buf.len() as u64);
+        }
         Ok(())
     }
 }
@@ -59,7 +61,9 @@ impl<T: PacketMutWrite> PacketMutWrite for MonTraffic<T> {
 impl<T: PacketWrite> PacketWrite for MonTraffic<T> {
     async fn write_to(&self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
         self.s.write_to(buf, addr).await?;
-        self.tx.as_ref().map(|tx| tx.incr_tx(buf.len() as u64));
+        if let Some(tx) = self.tx.as_ref() {
+            tx.incr_tx(buf.len() as u64);
+        }
         Ok(())
     }
 }
@@ -68,7 +72,9 @@ impl<T: PacketWrite> PacketWrite for MonTraffic<T> {
 impl<T: PacketRead> PacketRead for MonTraffic<T> {
     async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         let r = self.s.read_from(buf).await?;
-        self.rx.as_ref().map(|rx| rx.incr_rx(buf.len() as u64));
+        if let Some(rx) = self.rx.as_ref() {
+            rx.incr_rx(buf.len() as u64);
+        }
         Ok(r)
     }
 }
@@ -95,7 +101,9 @@ impl<T: AsyncRead> AsyncRead for MonTraffic<T> {
         let this = self.project();
         let r = ready!(this.s.poll_read(cx, buf));
         if r.is_ok() {
-            this.rx.as_ref().map(|rx| rx.incr_rx(buf.filled().len() as u64));
+            if let Some(rx) = this.rx.as_ref() {
+                rx.incr_rx(buf.filled().len() as u64);
+            }
         }
         Poll::Ready(Ok(()))
     }
@@ -106,7 +114,9 @@ impl<T: AsyncWrite> AsyncWrite for MonTraffic<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write(cx, buf));
         if let Ok(n) = r {
-            this.tx.as_ref().map(|tx| tx.incr_tx(n as u64));
+            if let Some(tx) = this.tx.as_ref() {
+                tx.incr_tx(n as u64);
+            }
         }
         Poll::Ready(r)
     }
@@ -129,7 +139,9 @@ impl<T: AsyncWrite> AsyncWrite for MonTraffic<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write_vectored(cx, bufs));
         if let Ok(n) = r {
-            this.tx.as_ref().map(|tx| tx.incr_tx(n as u64));
+            if let Some(tx) = this.tx.as_ref() {
+                tx.incr_tx(n as u64);
+            }
         }
         Poll::Ready(r)
     }
@@ -158,7 +170,9 @@ impl<T: AsyncRead> AsyncRead for MonTrafficRead<T> {
         let this = self.project();
         let r = ready!(this.s.poll_read(cx, buf));
         if r.is_ok() {
-            this.rx.as_ref().map(|rx| rx.incr_rx(buf.filled().len() as u64));
+            if let Some(rx) = this.rx.as_ref() {
+                rx.incr_rx(buf.filled().len() as u64);
+            }
         }
         Poll::Ready(Ok(()))
     }
@@ -183,7 +197,9 @@ impl<T: AsyncWrite> AsyncWrite for MonTrafficWrite<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write(cx, buf));
         if let Ok(n) = r {
-            this.tx.as_ref().map(|tx| tx.incr_tx(n as u64));
+            if let Some(tx) = this.tx.as_ref() {
+                tx.incr_tx(n as u64);
+            }
         }
         Poll::Ready(r)
     }
@@ -206,7 +222,9 @@ impl<T: AsyncWrite> AsyncWrite for MonTrafficWrite<T> {
         let this = self.project();
         let r = ready!(this.s.poll_write_vectored(cx, bufs));
         if let Ok(n) = r {
-            this.tx.as_ref().map(|tx| tx.incr_tx(n as u64));
+            if let Some(tx) = this.tx.as_ref() {
+                tx.incr_tx(n as u64);
+            }
         }
         Poll::Ready(r)
     }

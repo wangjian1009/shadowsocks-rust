@@ -58,7 +58,7 @@ pub struct SimpleAuthenticator {}
 // NewSimpleAuthenticator creates a new SimpleAuthenticator
 impl SimpleAuthenticator {
     pub fn new() -> Self {
-        return Self {};
+        Self {}
     }
 }
 
@@ -108,7 +108,7 @@ impl AEAD for SimpleAuthenticator {
         if hash != fnv_32_hash(&cipher_in[4..clen]) {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
-                format!("simple authenticator: invalid auth(hash)"),
+                "simple authenticator: invalid auth(hash)",
             ));
         }
 
@@ -116,7 +116,7 @@ impl AEAD for SimpleAuthenticator {
         if length + 6 != clen {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
-                format!("simple authenticator: invalid auth(len)"),
+                "simple authenticator: invalid auth(len)",
             ));
         }
 
@@ -132,7 +132,7 @@ pub fn fnv_32_hash(src: &[u8]) -> u32 {
 
     let mut hash = OFFSET_BASIS;
     for b in src {
-        hash ^= b.clone() as u32;
+        hash ^= *b as u32;
         hash = ((hash as u64) * PRIME as u64) as u32;
     }
 

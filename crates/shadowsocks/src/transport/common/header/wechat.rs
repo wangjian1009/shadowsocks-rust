@@ -9,7 +9,7 @@ pub struct VideoChat {
 
 impl Header for VideoChat {
     fn size(&self) -> usize {
-        return 13;
+        13
     }
 
     // Serialize implements PacketHeader.
@@ -24,9 +24,9 @@ impl Header for VideoChat {
 impl VideoChat {
     pub fn new() -> Self {
         let sn: u32 = rand::random();
-        return Self {
+        Self {
             sn: AtomicU32::new(sn), // uint32(dice.RollUint16()),
-        };
+        }
     }
 }
 

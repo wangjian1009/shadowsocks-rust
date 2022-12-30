@@ -10,7 +10,7 @@ pub struct SRTP {
 
 impl Header for SRTP {
     fn size(&self) -> usize {
-        return 4;
+        4
     }
 
     // Serialize implements PacketHeader.
@@ -24,9 +24,9 @@ impl Header for SRTP {
 impl SRTP {
     pub fn new() -> Self {
         let number: u16 = rand::random();
-        return Self {
+        Self {
             header: 0xB5E8,
             number: AtomicU16::new(number),
-        };
+        }
     }
 }

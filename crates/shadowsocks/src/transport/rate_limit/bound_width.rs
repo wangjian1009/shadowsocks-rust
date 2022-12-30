@@ -62,11 +62,11 @@ impl FromStr for BoundWidth {
                 };
 
                 if &values[2] == "k" || &values[2] == "K" {
-                    num = num * 1024.0;
+                    num *= 1024.0;
                 } else if &values[2] == "m" || &values[2] == "M" {
-                    num = num * 1024.0 * 1024.0;
+                    num *= 1024.0 * 1024.0;
                 } else if &values[2] == "g" || &values[2] == "G" {
-                    num = num * 1024.0 * 1024.0 * 1024.0;
+                    num *= 1024.0 * 1024.0 * 1024.0;
                 }
 
                 Ok(BoundWidth {

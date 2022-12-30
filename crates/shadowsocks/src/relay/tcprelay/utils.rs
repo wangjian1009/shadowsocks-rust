@@ -68,7 +68,9 @@ impl CopyBuffer {
                 } else {
                     self.pos = 0;
                     self.cap = n;
-                    self.idle_timeout.as_ref().map(|o| o.tick());
+                    if let Some(o) = self.idle_timeout.as_ref() {
+                        o.tick();
+                    }
                 }
             }
 
@@ -84,7 +86,9 @@ impl CopyBuffer {
                 } else {
                     self.pos += i;
                     self.amt += i as u64;
-                    self.idle_timeout.as_ref().map(|o| o.tick());
+                    if let Some(o) = self.idle_timeout.as_ref() {
+                        o.tick();
+                    }
                 }
             }
 
@@ -205,8 +209,8 @@ impl TransferState {
     fn count(&self) -> u64 {
         match self {
             Self::Running(b) => b.amt,
-            Self::ShuttingDown(c) => c.clone(),
-            Self::Done(c) => c.clone(),
+            Self::ShuttingDown(c) => *c,
+            Self::Done(c) => *c,
         }
     }
 }
@@ -328,7 +332,7 @@ where
     E: AsyncRead + AsyncWrite + Unpin + ?Sized,
     P: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
-    let timeout_waiter = idle_timeout.map(|c| TimeoutWaiter::new(c));
+    let timeout_waiter = idle_timeout.map(TimeoutWaiter::new);
     let timeout_ticker_a = timeout_waiter.as_ref().map(|o| o.ticker());
     let timeout_ticker_b = timeout_ticker_a.clone();
 

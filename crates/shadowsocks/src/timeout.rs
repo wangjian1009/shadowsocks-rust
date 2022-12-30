@@ -11,7 +11,7 @@ struct Inner {
 impl Inner {
     #[inline]
     fn deadline(&self) -> Instant {
-        self.deadline.lock().clone()
+        *self.deadline.lock()
     }
 
     #[inline]

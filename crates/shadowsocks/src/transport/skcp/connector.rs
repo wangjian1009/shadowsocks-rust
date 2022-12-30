@@ -27,12 +27,11 @@ impl Connector for SkcpConnector {
 
     async fn connect(&self, addr: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
         let (remote_addr, udp) = match self.context.as_ref() {
-            Some(context) => UdpSocket::create_for_connect_to(context, addr, &connect_opts).await?,
+            Some(context) => UdpSocket::create_for_connect_to(context, addr, connect_opts).await?,
             None => match addr {
-                ServerAddr::SocketAddr(ref addr) => (
-                    addr.clone(),
-                    UdpSocket::connect_any_with_opts(addr, &connect_opts).await?,
-                ),
+                ServerAddr::SocketAddr(ref addr) => {
+                    (*addr, UdpSocket::connect_any_with_opts(addr, connect_opts).await?)
+                }
                 ServerAddr::DomainName(..) => {
                     return Err(new_error("not support tcp connect to domain address(no context)"))
                 }
@@ -41,8 +40,8 @@ impl Connector for SkcpConnector {
 
         let udp = Arc::new(udp);
         let conv = rand::random();
-        let header = self.config.create_header().map(|e| Arc::new(e));
-        let security = self.config.create_security().map(|e| Arc::new(e));
+        let header = self.config.create_header().map(Arc::new);
+        let security = self.config.create_security().map(Arc::new);
         let socket = KcpSocket::new(
             self.config.as_ref(),
             conv,

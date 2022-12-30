@@ -23,9 +23,9 @@ pub struct ConnGuard {
 
 impl ConnGuard {
     pub fn new(context: BuContext, count: &'static str, total: Option<&'static str>) -> Self {
-        total.map(|total| {
+        if let Some(total) = total {
             increment_counter!(total,  "proto" => context.protocol().name(), "trans" => context.transport().as_ref().map(|t| t.name()).unwrap_or("none"));
-        });
+        };
         increment_gauge!(count, 1.0, "proto" => context.protocol().name(), "trans" => context.transport().as_ref().map(|t| t.name()).unwrap_or("none"));
         Self {
             context,

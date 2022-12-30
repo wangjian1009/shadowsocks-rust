@@ -60,10 +60,7 @@ impl MkcpAcceptor {
         pw: Arc<UdpSocket>,
         statistic: Option<Arc<StatisticStat>>,
     ) -> Self {
-        let header = match config.create_header() {
-            Some(header) => Some(Arc::new(header)),
-            None => None,
-        };
+        let header = config.create_header().map(Arc::new);
         let security = Arc::new(config.create_security());
 
         let (tx, rx) = mpsc::channel(1);
@@ -146,7 +143,7 @@ impl MkcpAcceptor {
         segments: Vec<Segment>,
         src: SocketAddr,
     ) -> io::Result<()> {
-        if segments.len() == 0 {
+        if segments.is_empty() {
             return Err(new_error(format!("discarding invalid payload from {}", src)));
         }
 
@@ -180,8 +177,8 @@ impl MkcpAcceptor {
                             context.config.clone(),
                             MkcpConnMetadata {
                                 way: MkcpConnWay::Incoming,
-                                local_addr: context.local_addr.clone(),
-                                remote_addr: ServerAddr::SocketAddr(id.remote.clone()),
+                                local_addr: context.local_addr,
+                                remote_addr: ServerAddr::SocketAddr(id.remote),
                                 conversation: conv,
                             },
                             Some(Box::new(remove_fn)),
@@ -239,7 +236,7 @@ impl Acceptor for MkcpAcceptor {
                 None => continue,
             };
 
-            let remote_addr = id.remote.clone();
+            let remote_addr = id.remote;
 
             let connection = Self::TS {
                 context: self.context.clone(),
@@ -252,7 +249,7 @@ impl Acceptor for MkcpAcceptor {
     }
 
     fn local_addr(&self) -> io::Result<SocketAddr> {
-        Ok(self.context.local_addr.clone())
+        Ok(self.context.local_addr)
     }
 }
 
@@ -266,15 +263,14 @@ impl Drop for MkcpAcceptorConnection {
     fn drop(&mut self) {
         let connection = {
             let connections = self.context.connections.lock();
-            connections.get(&self.id).map(|e| e.clone())
+            connections.get(&self.id).cloned()
         };
 
-        match connection {
-            Some(connection) => match connection.close() {
+        if let Some(connection) = connection {
+            match connection.close() {
                 Ok(()) => tracing::trace!("#{}: close: success", connection.meta()),
                 Err(err) => tracing::debug!("#{}: close: {:?}", connection.meta(), err),
-            },
-            None => {}
+            }
         }
     }
 }

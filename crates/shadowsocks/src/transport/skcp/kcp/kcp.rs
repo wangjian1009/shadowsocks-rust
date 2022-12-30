@@ -581,7 +581,7 @@ impl<Output: Write> Kcp<Output> {
         let old_una = self.snd_una;
 
         let mut buf = Cursor::new(buf);
-        while buf.remaining() >= KCP_OVERHEAD as usize {
+        while buf.remaining() >= KCP_OVERHEAD {
             let conv = buf.get_u32_le();
             if conv != self.conv {
                 // This allows getting conv from this call, which allows us to allocate
@@ -604,7 +604,7 @@ impl<Output: Write> Kcp<Output> {
             let una = buf.get_u32_le();
             let len = buf.get_u32_le() as usize;
 
-            if buf.remaining() < len as usize {
+            if buf.remaining() < len {
                 debug!(
                     "input bufsize={} payload length={} remaining={} not match",
                     input_size,
@@ -658,9 +658,9 @@ impl<Output: Write> Kcp<Output> {
                     if timediff(sn, self.rcv_nxt + self.rcv_wnd as u32) < 0 {
                         self.ack_push(sn, ts);
                         if timediff(sn, self.rcv_nxt) >= 0 {
-                            let mut sbuf = BytesMut::with_capacity(len as usize);
+                            let mut sbuf = BytesMut::with_capacity(len);
                             unsafe {
-                                sbuf.set_len(len as usize);
+                                sbuf.set_len(len);
                             }
                             buf.read_exact(&mut sbuf).unwrap();
                             has_read_data = true;
@@ -736,7 +736,7 @@ impl<Output: Write> Kcp<Output> {
         // flush acknowledges
         // while let Some((sn, ts)) = self.acklist.pop_front() {
         for &(sn, ts) in &self.acklist {
-            if self.buf.len() + KCP_OVERHEAD > self.mtu as usize {
+            if self.buf.len() + KCP_OVERHEAD > self.mtu {
                 self.output.write_all(&self.buf)?;
                 self.buf.clear();
             }
@@ -774,7 +774,7 @@ impl<Output: Write> Kcp<Output> {
 
     fn _flush_probe_commands(&mut self, cmd: u8, segment: &mut KcpSegment) -> KcpResult<()> {
         segment.cmd = cmd;
-        if self.buf.len() + KCP_OVERHEAD > self.mtu as usize {
+        if self.buf.len() + KCP_OVERHEAD > self.mtu {
             self.output.write_all(&self.buf)?;
             self.buf.clear();
         }
@@ -1045,13 +1045,8 @@ impl<Output: Write> Kcp<Output> {
     }
 
     /// Set check interval
-    pub fn set_interval(&mut self, mut interval: u32) {
-        if interval > 5000 {
-            interval = 5000;
-        } else if interval < 10 {
-            interval = 10;
-        }
-        self.interval = interval;
+    pub fn set_interval(&mut self, interval: u32) {
+        self.interval = interval.clamp(10, 5000);
     }
 
     /// Set nodelay

@@ -108,20 +108,20 @@ impl<T: StreamConnection> AsyncWrite for BinaryWsStream<T> {
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        ready!(Pin::new(&mut self.inner).poll_ready(cx)).map_err(|e| cvt_error(e))?;
+        ready!(Pin::new(&mut self.inner).poll_ready(cx)).map_err(cvt_error)?;
         let message = Message::Close(None);
         let _ = Pin::new(&mut self.inner).start_send(message);
 
         let inner = Pin::new(&mut self.inner);
-        inner.poll_close(cx).map_err(|e| cvt_error(e))
+        inner.poll_close(cx).map_err(cvt_error)
     }
 }
 
 impl<T: StreamConnection> BinaryWsStream<T> {
     pub fn new(inner: WebSocketStream<T>) -> Self {
-        return Self {
+        Self {
             inner,
             read_buffer: None,
-        };
+        }
     }
 }

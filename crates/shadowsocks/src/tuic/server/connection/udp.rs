@@ -104,8 +104,8 @@ impl UdpSessionMap {
                 source,
                 self.recv_pkt_tx_for_clone.clone(),
                 self.session_close_tx.clone(),
-                server_policy.as_ref(),
-                self.idle_timeout.clone(),
+                server_policy.as_ref().as_ref(),
+                self.idle_timeout,
                 #[cfg(feature = "statistics")]
                 bu_context,
             )
@@ -126,11 +126,11 @@ impl UdpSessionMap {
             match server_policy.packet_check(Some(&src_addr), &addr).await? {
                 PacketAction::ClientBlocked => {
                     warn!(target = addr_for_log, "client blocked by ACL rules");
-                    return Ok(0);
+                    Ok(0)
                 }
                 PacketAction::OutboundBlocked => {
                     warn!(target = addr_for_log, "outbound blocked by ACL rules");
-                    return Ok(0);
+                    Ok(0)
                 }
                 PacketAction::Remote => match sender.send((pkt, addr, Span::current())).await {
                     Ok(()) => Ok(len),
@@ -147,10 +147,7 @@ impl UdpSessionMap {
     }
 
     pub fn find_session(&self, assoc_id: u32) -> Option<(UdpSessionSource, Span)> {
-        self.map
-            .lock()
-            .get(&assoc_id)
-            .map(|s| (s.source.clone(), s.span.clone()))
+        self.map.lock().get(&assoc_id).map(|s| (s.source, s.span.clone()))
     }
 
     pub fn session_ids(&self) -> Vec<u32> {
@@ -161,9 +158,9 @@ impl UdpSessionMap {
         let session = self.map.lock().remove(&assoc_id);
         if let Some(session) = session {
             session.close(reason).await;
-            return true;
+            true
         } else {
-            return false;
+            false
         }
     }
 }
@@ -184,7 +181,7 @@ impl UdpSession {
         source: UdpSessionSource,
         recv_pkt_tx: RecvPacketSender,
         session_close_tx: SessionCloseSender,
-        server_policy: &Box<dyn ServerPolicy>,
+        server_policy: &dyn ServerPolicy,
         idle_timeout: Duration,
         #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
     ) -> Result<Self, IoError> {
