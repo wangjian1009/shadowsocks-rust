@@ -26,7 +26,7 @@ impl Config {
 
             let crypto = ssl::client::build_config(
                 Some(certs),
-                None,
+                ssl::get_cipher_suite(None).unwrap().as_slice(),
                 Some(raw.alpn.iter().map(|alpn| alpn.clone().into_bytes()).collect()),
             )?;
 

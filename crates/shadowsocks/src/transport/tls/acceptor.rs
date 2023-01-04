@@ -10,7 +10,7 @@ use super::super::{Acceptor, DeviceOrGuard, StreamConnection};
 pub struct TlsAcceptorConfig {
     pub cert: String,
     pub key: String,
-    pub cipher: Option<Vec<String>>,
+    pub cipher: Vec<ssl::SupportedCipherSuite>,
 }
 
 pub struct TlsAcceptor<T: Acceptor> {
@@ -65,10 +65,10 @@ impl<T: Acceptor> TlsAcceptor<T> {
         let certs = ssl::server::load_certificates(&config.cert)?;
         let priv_key = ssl::server::load_private_key(&config.key)?;
 
-        let cipher_suites =
-            ssl::get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
+        // let cipher_suites =
+        //     ssl::get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
 
-        let tls_config = ssl::server::build_config(certs, priv_key, Some(cipher_suites.as_slice()), None)?;
+        let tls_config = ssl::server::build_config(certs, priv_key, config.cipher.as_slice(), None)?;
 
         let tls_acceptor = TokioTlsAcceptor::from(Arc::new(tls_config));
         Ok(Self { inner, tls_acceptor })

@@ -334,13 +334,13 @@ async fn socks5_tcp_relay_ss_tls() {
         Some(TransportAcceptorConfig::Tls(tls::TlsAcceptorConfig {
             cert: "tests/cert/server.crt".to_owned(),
             key: "tests/cert/server.key".to_owned(),
-            cipher: None,
+            cipher: shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
         })),
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportConnectorConfig::Tls(tls::TlsConnectorConfig {
             sni: "coolvpn.cc".to_owned(),
             cert: None,
-            cipher: None,
+            cipher: shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
         })),
     )
     .await
@@ -357,7 +357,7 @@ async fn socks5_tcp_relay_ss_wss() {
             tls::TlsAcceptorConfig {
                 cert: "tests/cert/server.crt".to_owned(),
                 key: "tests/cert/server.key".to_owned(),
-                cipher: None,
+                cipher: shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
             },
         )),
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
@@ -369,7 +369,7 @@ async fn socks5_tcp_relay_ss_wss() {
             tls::TlsConnectorConfig {
                 sni: "coolvpn.cc".to_owned(),
                 cert: None,
-                cipher: None,
+                cipher: shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
             },
         )),
     )

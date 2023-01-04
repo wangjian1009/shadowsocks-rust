@@ -914,6 +914,7 @@ pub enum UrlParseError {
     InvalidAuthInfo,
     InvalidServerAddr,
     InvalidQueryString,
+    InvalidSuite,
 }
 
 impl From<url::ParseError> for UrlParseError {
@@ -932,6 +933,7 @@ impl fmt::Display for UrlParseError {
             UrlParseError::InvalidAuthInfo => write!(f, "invalid authentication info"),
             UrlParseError::InvalidServerAddr => write!(f, "invalid server address"),
             UrlParseError::InvalidQueryString => write!(f, "invalid query string"),
+            UrlParseError::InvalidSuite => write!(f, "invalid suite"),
         }
     }
 }
@@ -946,6 +948,7 @@ impl error::Error for UrlParseError {
             UrlParseError::InvalidAuthInfo => None,
             UrlParseError::InvalidServerAddr => None,
             UrlParseError::InvalidQueryString => None,
+            UrlParseError::InvalidSuite => None,
         }
     }
 }

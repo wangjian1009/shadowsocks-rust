@@ -39,16 +39,12 @@ pub fn load_private_key(path: &str) -> Result<PrivateKey, IoError> {
 pub fn build_config(
     certs: Vec<Certificate>,
     priv_key: PrivateKey,
-    cipher_suites: Option<&[SupportedCipherSuite]>,
+    cipher_suites: &[SupportedCipherSuite],
     alpn: Option<Vec<Vec<u8>>>,
 ) -> io::Result<ServerConfig> {
     let crypto = ServerConfig::builder();
 
-    let crypto = if let Some(suites) = cipher_suites {
-        crypto.with_cipher_suites(suites)
-    } else {
-        crypto.with_safe_default_cipher_suites()
-    };
+    let crypto = crypto.with_cipher_suites(cipher_suites);
 
     let mut crypto = crypto
         .with_safe_default_kx_groups()

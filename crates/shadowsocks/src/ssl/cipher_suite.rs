@@ -48,6 +48,7 @@ pub fn get_cipher_suite(cipher: Option<Vec<&str>>) -> io::Result<Vec<SupportedCi
                 break;
             }
         }
+
         if !found {
             return Err(io::Error::new(io::ErrorKind::Other, format!("bad cipher: {}", name)));
         }

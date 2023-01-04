@@ -44,7 +44,7 @@ impl RawConfig {
         let crypto = ssl::server::build_config(
             certs,
             priv_key,
-            None,
+            ssl::get_cipher_suite(None).unwrap().as_slice(),
             Some(self.alpn.iter().map(|alpn| alpn.clone().into_bytes()).collect()),
         )?;
 

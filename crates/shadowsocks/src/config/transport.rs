@@ -203,6 +203,26 @@ impl ServerConfig {
 
     #[cfg(feature = "transport-tls")]
     fn from_url_tls(params: &[(String, String)]) -> Result<TlsConnectorConfig, UrlParseError> {
+        let mut cipher_names = None;
+        for item in params.iter() {
+            if item.0 != "cipher" {
+                continue;
+            }
+
+            // match item.1 {}
+
+            println!("xxxxxxx {}", item.1);
+            if cipher_names.as_ref().is_none() {
+                cipher_names = Some(Vec::new())
+            }
+
+            cipher_names.as_mut().unwrap().push(item.1.clone());
+        }
+
+        let ciphers =
+            crate::ssl::get_cipher_suite(cipher_names.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))
+                .map_err(|_e| UrlParseError::InvalidAuthInfo)?;
+
         let tls_config = TlsConnectorConfig {
             sni: match Self::from_url_get_arg(params, "sni") {
                 None => {
@@ -211,7 +231,7 @@ impl ServerConfig {
                 }
                 Some(sni) => sni.clone(),
             },
-            cipher: None,
+            cipher: ciphers,
             cert: None,
         };
 
@@ -351,18 +371,27 @@ impl TransportConnectorConfig {
     #[cfg(feature = "transport-tls")]
     #[inline]
     fn build_tls_config(host: &Option<&str>, args: &Option<Vec<(&str, &str)>>) -> Result<TlsConnectorConfig, String> {
+        let mut cipher_names = None;
+        if let Some(ciphers) = find_all_arg(args, "cipher") {
+            cipher_names = Some(Vec::new());
+
+            for cipher in ciphers {
+                cipher_names.as_mut().unwrap().push(cipher.to_string());
+            }
+        }
+
+        let ciphers =
+            crate::ssl::get_cipher_suite(cipher_names.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))
+                .map_err(|e| format!("{:?}", e))?;
+
         let mut config = TlsConnectorConfig {
             sni: host.unwrap_or(DEFAULT_SNI).to_owned(),
-            cipher: None,
+            cipher: ciphers,
             cert: None,
         };
 
         if let Some(v) = find_arg(args, "cert") {
             config.cert = Some(v.to_owned());
-        }
-
-        if let Some(cipher) = find_all_arg(args, "cipher") {
-            config.cipher = Some(cipher.iter().map(|c| c.to_string()).collect());
         }
 
         Ok(config)
@@ -615,19 +644,28 @@ impl TransportAcceptorConfig {
 
     #[cfg(feature = "transport-tls")]
     fn build_tls_config(args: &Option<Vec<(&str, &str)>>) -> Result<TlsAcceptorConfig, String> {
-        let mut config = TlsAcceptorConfig {
+        let mut cipher_names = None;
+        if let Some(ciphers) = find_all_arg(args, "cipher") {
+            cipher_names = Some(Vec::new());
+
+            for cipher in ciphers {
+                cipher_names.as_mut().unwrap().push(cipher.to_string());
+            }
+        }
+
+        let ciphers =
+            crate::ssl::get_cipher_suite(cipher_names.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))
+                .map_err(|e| format!("{:?}", e))?;
+
+        let config = TlsAcceptorConfig {
             cert: find_arg(args, "cert")
                 .ok_or("transport tls cert not configured")?
                 .to_owned(),
             key: find_arg(args, "key")
                 .ok_or("transport tls key not configured")?
                 .to_owned(),
-            cipher: None,
+            cipher: ciphers,
         };
-
-        if let Some(cipher) = find_all_arg(args, "cipher") {
-            config.cipher = Some(cipher.iter().map(|c| c.to_string()).collect());
-        }
 
         Ok(config)
     }

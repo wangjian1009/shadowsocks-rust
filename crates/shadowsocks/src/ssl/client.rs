@@ -41,16 +41,12 @@ pub fn load_certificates(files: &Vec<String>) -> io::Result<RootCertStore> {
 
 pub fn build_config(
     certs: Option<RootCertStore>,
-    cipher_suites: Option<&[SupportedCipherSuite]>,
+    cipher_suites: &[SupportedCipherSuite],
     alpn: Option<Vec<Vec<u8>>>,
 ) -> io::Result<ClientConfig> {
     let crypto = rustls::ClientConfig::builder();
 
-    let crypto = if let Some(suites) = cipher_suites {
-        crypto.with_cipher_suites(suites)
-    } else {
-        crypto.with_safe_default_cipher_suites()
-    };
+    let crypto = crypto.with_cipher_suites(cipher_suites);
 
     let mut crypto = crypto
         .with_safe_default_kx_groups()

@@ -13,7 +13,7 @@ use super::super::{Connector, DeviceOrGuard, StreamConnection};
 #[derive(Clone, Debug, PartialEq)]
 pub struct TlsConnectorConfig {
     pub sni: String,
-    pub cipher: Option<Vec<String>>,
+    pub cipher: Vec<ssl::SupportedCipherSuite>,
     pub cert: Option<String>,
 }
 
@@ -40,15 +40,15 @@ impl<S: StreamConnection> StreamConnection for TokioTlsStream<S> {
 
 impl<C: Connector> TlsConnector<C> {
     pub fn new(config: &TlsConnectorConfig, inner: C) -> io::Result<Self> {
-        let cipher_suites =
-            ssl::get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
+        // let cipher_suites =
+        //     ssl::get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
 
         let mut certs = None;
         if let Some(cert_file) = config.cert.as_ref() {
             certs = Some(ssl::client::load_certificates(&vec![cert_file.clone()])?);
         };
 
-        let tls_config = ssl::client::build_config(certs, Some(cipher_suites.as_slice()), None)?;
+        let tls_config = ssl::client::build_config(certs, config.cipher.as_slice(), None)?;
 
         Ok(Self {
             sni: config.sni.clone(),
