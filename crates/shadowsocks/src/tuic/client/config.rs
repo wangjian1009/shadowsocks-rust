@@ -26,7 +26,7 @@ impl Config {
 
             let crypto = ssl::client::build_config(
                 Some(certs),
-                ssl::get_cipher_suite(None).unwrap().as_slice(),
+                raw.ciphers.as_slice(),
                 Some(raw.alpn.iter().map(|alpn| alpn.clone().into_bytes()).collect()),
             )?;
 
@@ -78,6 +78,7 @@ pub struct RawConfig {
     pub sni: Option<String>,
     pub token: String,
     pub certificates: Vec<String>,
+    pub ciphers: Vec<ssl::SupportedCipherSuite>,
     pub udp_relay_mode: UdpRelayMode<(), ()>,
     pub congestion_controller: CongestionController,
     pub heartbeat_interval: u64,
@@ -89,13 +90,14 @@ pub struct RawConfig {
 }
 
 impl RawConfig {
-    pub fn new(token: String) -> Self {
+    pub fn new(token: String, ciphers: Vec<ssl::SupportedCipherSuite>) -> Self {
         Self {
             sni: None,
             token,
             certificates: Vec::new(),
             udp_relay_mode: UdpRelayMode::Native(()),
             congestion_controller: CongestionController::Cubic,
+            ciphers,
             heartbeat_interval: 10000,
             alpn: Vec::new(),
             disable_sni: false,

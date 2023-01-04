@@ -505,7 +505,10 @@ async fn socks5_udp_relay_vless_skcp() {
 async fn socks5_tcp_relay_tuic() {
     // tracing_subscriber::fmt().with_writer(std::io::stdout).finish().init();
 
-    let mut client_config = tuic::client::RawConfig::new("token1".to_owned());
+    let mut client_config = tuic::client::RawConfig::new(
+        "token1".to_owned(),
+        shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
+    );
     client_config.sni = Some("coolvpn.cc".to_owned());
     client_config.disable_sni = true;
 
@@ -528,7 +531,10 @@ async fn socks5_tcp_relay_tuic() {
 #[tokio::test]
 #[traced_test]
 async fn socks5_udp_relay_tuic() {
-    let mut client_config = tuic::client::RawConfig::new("token1".to_owned());
+    let mut client_config = tuic::client::RawConfig::new(
+        "token1".to_owned(),
+        shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
+    );
     client_config.sni = Some("coolvpn.cc".to_owned());
     client_config.disable_sni = true;
 

@@ -209,9 +209,6 @@ impl ServerConfig {
                 continue;
             }
 
-            // match item.1 {}
-
-            println!("xxxxxxx {}", item.1);
             if cipher_names.as_ref().is_none() {
                 cipher_names = Some(Vec::new())
             }

@@ -21,7 +21,26 @@ impl ServerConfig {
             };
         }
 
-        let mut tuic_config = client::RawConfig::new(token.to_owned());
+        let mut cipher_names = None;
+        if let Some(query) = query.as_ref() {
+            for item in query.iter() {
+                if item.0 != "cipher" {
+                    continue;
+                }
+
+                if cipher_names.as_ref().is_none() {
+                    cipher_names = Some(Vec::new())
+                }
+
+                cipher_names.as_mut().unwrap().push(item.1.clone());
+            }
+        }
+
+        let cipher =
+            crate::ssl::get_cipher_suite(cipher_names.as_ref().map(|vs| vs.iter().map(|s| s.as_str()).collect()))
+                .map_err(|_e| UrlParseError::InvalidSuite)?;
+
+        let mut tuic_config = client::RawConfig::new(token.to_owned(), cipher);
         if let Some(query) = query.as_ref() {
             if let Some(sni) = Self::from_url_get_arg(query, "sni") {
                 tuic_config.sni = Some(sni.clone());
