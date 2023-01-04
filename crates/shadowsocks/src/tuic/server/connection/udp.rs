@@ -81,7 +81,7 @@ impl UdpSessionMap {
         )
     }
 
-    #[allow(clippy::await_holding_lock)]
+    #[allow(clippy::await_holding_lock, clippy::too_many_arguments)]
     pub async fn send_to_outgoing(
         &self,
         assoc_id: u32,

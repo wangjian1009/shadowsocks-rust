@@ -100,10 +100,7 @@ impl ServiceContext {
     }
 
     pub fn set_fake_mode(&mut self, mode: FakeMode) {
-        let need_close = match self.fake_mode {
-            FakeMode::None => false,
-            _ => true,
-        };
+        let need_close = !matches!(self.fake_mode, FakeMode::None);
 
         self.fake_mode = mode;
 

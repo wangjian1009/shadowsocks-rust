@@ -25,6 +25,7 @@ pub(super) async fn serve_udp(
     peer_addr: Option<SocketAddr>,
     idle_timeout: Duration,
     server_policy: Arc<Box<dyn ServerPolicy>>,
+    #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
 ) -> CloseReason {
     let (outgoing_pkt_tx, outgoing_pkt_rx) = channel(1);
     let (incoming_pkt_tx, incoming_pkt_rx) = channel(1);
@@ -53,6 +54,13 @@ pub(super) async fn serve_udp(
             .in_current_span(),
         )
     };
+
+    #[cfg(feature = "statistics")]
+    let _udp_session_guard = crate::statistics::ConnGuard::new(
+        bu_context,
+        crate::statistics::METRIC_UDP_SESSION,
+        Some(crate::statistics::METRIC_UDP_SESSION_TOTAL),
+    );
 
     tokio::pin!(timeout_waiter);
 

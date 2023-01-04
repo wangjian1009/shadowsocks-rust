@@ -89,7 +89,7 @@ impl ServerIdent {
             let server_addr = match svr_cfg.addr() {
                 shadowsocks::ServerAddr::DomainName(domain, port) => tuic::ServerAddrWithName::DomainAddr {
                     domain: domain.clone(),
-                    port: port.clone(),
+                    port: *port,
                 },
                 shadowsocks::ServerAddr::SocketAddr(addr) => {
                     let tuic_config = match tuic_config {
@@ -107,7 +107,7 @@ impl ServerIdent {
                         }
                     };
                     tuic::ServerAddrWithName::SocketAddr {
-                        addr: addr.clone(),
+                        addr: *addr,
                         name: sni.clone(),
                     }
                 }

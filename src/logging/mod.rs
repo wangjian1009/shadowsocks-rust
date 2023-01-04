@@ -52,12 +52,10 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
 
         if is_self_module(metadata.target()) {
             metadata.level() <= &level
+        } else if let Some(other_level) = other_level {
+            metadata.level() <= &other_level
         } else {
-            if let Some(other_level) = other_level {
-                metadata.level() <= &other_level
-            } else {
-                false
-            }
+            false
         }
     })
     .with_max_level_hint(level);
@@ -123,7 +121,7 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
                 use std::path::Path;
 
                 let file_appender = tracing_appender::rolling::daily(
-                    log_template.parent().unwrap_or(Path::new(".")),
+                    log_template.parent().unwrap_or_else(|| Path::new(".")),
                     log_template.file_name().expect("logging"),
                 );
 

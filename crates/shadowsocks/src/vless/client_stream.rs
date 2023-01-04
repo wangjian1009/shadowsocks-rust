@@ -117,7 +117,7 @@ impl<S: StreamConnection> ClientStream<S> {
     }
 
     #[inline]
-    fn pick_user<'a>(cfg: &'a Config) -> io::Result<&'a protocol::User> {
+    fn pick_user(cfg: &Config) -> io::Result<&protocol::User> {
         match cfg.clients.len() {
             0 => Err(io::Error::new(io::ErrorKind::Other, "no user configured")),
             1 => Ok(&cfg.clients[0]),
@@ -151,12 +151,11 @@ where
         loop {
             match self.read_state.clone().as_ref() {
                 ClientStreamReadState::Init => {
-                    match {
+                    if let Err(err) = {
                         let stream = Pin::new(&mut self.stream);
                         ready!(stream.poll_read(cx, buf))
                     } {
-                        Err(err) => return Poll::Ready(Err(err)),
-                        Ok(()) => {}
+                        return Poll::Ready(Err(err));
                     };
 
                     // 连接已经关闭，则返回

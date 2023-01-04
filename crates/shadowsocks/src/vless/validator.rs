@@ -19,14 +19,11 @@ impl Validator {
     pub fn add(&mut self, user: User) -> io::Result<()> {
         let user = Arc::new(user);
         if let Some(email) = user.email.as_ref() {
-            match self.email.insert(email.to_lowercase(), user.clone()) {
-                Some(..) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("User {} already exists.", email),
-                    ))
-                }
-                None => {}
+            if let Some(..) = self.email.insert(email.to_lowercase(), user.clone()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("User {} already exists.", email),
+                ));
             }
         }
 

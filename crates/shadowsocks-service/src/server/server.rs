@@ -354,10 +354,10 @@ impl Server {
             let udp_tx = self.context.flow_stat_udp_ref().tx();
             let udp_rx = self.context.flow_stat_udp_ref().rx();
 
-            tcp_tx_slots[slot] = tcp_tx_slots[slot] + (tcp_tx - pre_tcp_tx);
-            tcp_rx_slots[slot] = tcp_rx_slots[slot] + (tcp_rx - pre_tcp_rx);
-            udp_tx_slots[slot] = udp_tx_slots[slot] + (udp_tx - pre_udp_tx);
-            udp_rx_slots[slot] = udp_rx_slots[slot] + (udp_rx - pre_udp_rx);
+            tcp_tx_slots[slot] += tcp_tx - pre_tcp_tx;
+            tcp_rx_slots[slot] += tcp_rx - pre_tcp_rx;
+            udp_tx_slots[slot] += udp_tx - pre_udp_tx;
+            udp_rx_slots[slot] += udp_rx - pre_udp_rx;
 
             pre_tcp_tx = tcp_tx;
             pre_tcp_rx = tcp_rx;

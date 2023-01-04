@@ -121,9 +121,17 @@ async fn process_incoming(
             .await
         }
         RequestHeader::UdpAssociate(_) => {
-            udp::serve_udp(&cancel_waiter, incoming, peer_addr, idle_timeout, server_policy)
-                .instrument(info_span!("udp-session"))
-                .await
+            udp::serve_udp(
+                &cancel_waiter,
+                incoming,
+                peer_addr,
+                idle_timeout,
+                server_policy,
+                #[cfg(feature = "statistics")]
+                bu_context,
+            )
+            .instrument(info_span!("udp-session"))
+            .await
         }
     }
 }

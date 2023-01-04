@@ -113,7 +113,7 @@ impl MaintainServerContext {
 
         let response = json5::to_string(&json!(
         {"signedDataFile": validate_result.signed_data_file.map(|v| {
-            let parts: Vec<&str> = v.split("/").collect();
+            let parts: Vec<&str> = v.split('/').collect();
             parts.last().map(|v| v.to_string())
         }),
          "sha1Fingerprint": validate_result.sha1_fingerprint.map(|e| {

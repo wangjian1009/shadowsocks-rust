@@ -237,13 +237,7 @@ impl WorkerPicker {
 
     #[inline]
     fn find_available(workers: &Vec<Arc<ClientWorker>>) -> Option<usize> {
-        for i in 0..workers.len() {
-            if !workers[i].is_full() {
-                return Some(i);
-            }
-        }
-
-        None
+        (0..workers.len()).find(|&i| !workers[i].is_full())
     }
 
     fn pick_internal(&self) -> Option<Arc<ClientWorker>> {

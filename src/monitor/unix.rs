@@ -45,7 +45,7 @@ pub async fn create_signal_monitor(canceler: Arc<Canceler>) -> io::Result<()> {
 
 async fn wait_timeout(expire_time: &Option<Instant>) {
     match expire_time {
-        Some(expire_time) => time::sleep_until(expire_time.clone()).await,
+        Some(expire_time) => time::sleep_until(*expire_time).await,
         None => future::pending().await,
     }
 }

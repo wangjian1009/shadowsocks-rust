@@ -791,15 +791,14 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             };
 
             let mut local_config = LocalConfig::new(protocol);
-            match matches.get_one::<ServerAddr>("LOCAL_ADDR").cloned() {
-                Some(local_addr) => local_config.addr = Some(local_addr),
-                None => {
-                    #[cfg(feature = "local-tun")]
-                    if protocol == ProtocolType::Tun {
-                        // `tun` protocol doesn't need --local-addr
-                    } else {
-                        panic!("`local-addr` is required for protocol {}", protocol.as_str());
-                    }
+            if let Some(local_addr) = matches.get_one::<ServerAddr>("LOCAL_ADDR").cloned() {
+                local_config.addr = Some(local_addr)
+            } else {
+                #[cfg(feature = "local-tun")]
+                if protocol == ProtocolType::Tun {
+                    // `tun` protocol doesn't need --local-addr
+                } else {
+                    panic!("`local-addr` is required for protocol {}", protocol.as_str());
                 }
             }
 

@@ -17,6 +17,7 @@ mod io;
 mod kcp;
 mod listener;
 mod session;
+#[allow(clippy::module_inception)]
 mod skcp;
 mod stream;
 mod utils;

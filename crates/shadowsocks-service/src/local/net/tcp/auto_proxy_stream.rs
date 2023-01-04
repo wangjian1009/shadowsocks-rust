@@ -91,7 +91,7 @@ impl AutoProxyClientStream {
                 .await;
         }
 
-        if context.check_target_bypassed(&addr).instrument(info_span!("acl")).await {
+        if context.check_target_bypassed(addr).instrument(info_span!("acl")).await {
             AutoProxyClientStream::connect_bypassed(context, addr)
                 .instrument(info_span!("bypass", reason = "acl"))
                 .await
@@ -163,6 +163,7 @@ impl AutoProxyClientStream {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn connect_proxied_no_score(
         context: SharedContext,
         connect_opts: &ConnectOpts,

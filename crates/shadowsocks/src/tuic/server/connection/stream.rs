@@ -27,6 +27,7 @@ use super::write_response;
 #[cfg(feature = "rate-limit")]
 use crate::transport::RateLimitedStream;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn connect(
     server_policy: Arc<Box<dyn ServerPolicy>>,
     peer_addr: &SocketAddr,

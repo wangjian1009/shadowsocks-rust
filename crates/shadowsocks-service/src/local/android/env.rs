@@ -28,7 +28,7 @@ const S_CMDLINE: [u8; 18] = [
 fn get_cmd() -> io::Result<String> {
     let content = fs::read_to_string(string_decode(&S_CMDLINE))?;
 
-    for s in content.split("\0") {
+    if let Some(s) = content.split('\0').next() {
         return Ok(s.to_owned());
     }
 
@@ -50,10 +50,8 @@ pub fn get_apk_path() -> io::Result<String> {
             apk.pop();
             apk.push(s_base_apk);
             return Ok(apk.to_str().unwrap().to_string());
-        } else {
-            if !apk.pop() {
-                return Err(io::Error::new(io::ErrorKind::Other, format!("c={}", cmd)));
-            }
+        } else if !apk.pop() {
+            return Err(io::Error::new(io::ErrorKind::Other, format!("c={}", cmd)));
         }
     }
 }

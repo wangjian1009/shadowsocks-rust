@@ -2199,7 +2199,7 @@ impl Config {
 
         #[cfg(feature = "env-crypt")]
         {
-            if c.network.is_some() && c.network.as_ref().unwrap().find("://").is_none() {
+            if c.network.is_some() && !c.network.as_ref().unwrap().contains("://") {
                 c.network = match crate::decrypt(c.network.as_ref().unwrap().as_str()) {
                     Ok(v) => {
                         // tracing::info!("env-crypt: network {} => {}", c.network.as_ref().unwrap(), v);
@@ -2606,7 +2606,7 @@ impl fmt::Display for Config {
                                 }
                             })
                             .unwrap_or(None),
-                        method: svr.if_ss(|c| c.method().to_string()).unwrap_or("".to_owned()),
+                        method: svr.if_ss(|c| c.method().to_string()).unwrap_or_else(|| "".to_owned()),
                         disabled: None,
                         plugin: svr.if_ss(|c| c.plugin().map(|p| p.plugin.to_string())).unwrap_or(None),
                         plugin_opts: svr

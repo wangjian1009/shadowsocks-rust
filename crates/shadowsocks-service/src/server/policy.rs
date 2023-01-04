@@ -190,7 +190,7 @@ impl policy::ServerPolicy for ServerPolicy {
         let connection_stat = self.context.connection_stat();
 
         let connection_ctx = match connection_stat
-            .check_add_in_connection(src_addr.clone(), self.context.limit_connection_per_ip())
+            .check_add_in_connection(*src_addr, self.context.limit_connection_per_ip())
             .await
         {
             Ok((c, b)) => (c.id, b),
