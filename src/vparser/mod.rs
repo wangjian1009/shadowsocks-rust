@@ -50,6 +50,17 @@ value_parser_type!(
 value_parser_type!(parse_cipher_kind, CipherKind, "invalid cipher");
 
 pub fn parse_server_url(v: &str) -> Result<ServerConfig, String> {
+    #[cfg(feature = "env-crypt")]
+    let mut _decrypt_buf = None;
+
+    #[cfg(feature = "env-crypt")]
+    let v = if v.contains("://") {
+        v
+    } else {
+        _decrypt_buf = Some(shadowsocks_service::decrypt(v)?);
+        _decrypt_buf.as_ref().unwrap().as_str()
+    };
+
     match ServerConfig::from_url(v) {
         Ok(t) => Ok(t),
         Err(..) => Err("should be SIP002 (https://shadowsocks.org/guide/sip002.html) format".to_owned()),
