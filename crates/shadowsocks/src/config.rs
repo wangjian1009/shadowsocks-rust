@@ -346,7 +346,7 @@ fn make_derived_key(method: CipherKind, password: &str, enc_key: &mut [u8]) {
                 enc_key.copy_from_slice(&v);
             }
             Err(err) => {
-                panic!("{} password {} is not base64 encoded, error: {}", method, password, err);
+                panic!("{method} password {password} is not base64 encoded, error: {err}");
             }
         }
     } else {
@@ -398,7 +398,7 @@ where
                     identity_keys.push(Bytes::from(v));
                 }
                 Err(err) => {
-                    panic!("iPSK {} is not base64 encoded, error: {}", ipsk, err);
+                    panic!("iPSK {ipsk} is not base64 encoded, error: {err}");
                 }
             }
         }
@@ -564,7 +564,6 @@ impl ServerConfig {
                 return format!("tuic://{}", encode_config(param, URL_SAFE_NO_PAD));
             }
         };
-
         let param = format!("{}:{}@{}", config.method(), config.password(), self.addr());
         format!("ss://{}", encode_config(param, URL_SAFE_NO_PAD))
     }
@@ -749,7 +748,7 @@ impl ServerConfig {
         };
 
         let port = parsed.port().unwrap_or(8388);
-        let addr = format!("{}:{}", host, port);
+        let addr = format!("{host}:{port}");
 
         let addr = match addr.parse::<ServerAddr>() {
             Ok(a) => a,
@@ -1033,8 +1032,8 @@ impl FromStr for ServerAddr {
 impl Display for ServerAddr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            ServerAddr::SocketAddr(ref a) => write!(f, "{}", a),
-            ServerAddr::DomainName(ref d, port) => write!(f, "{}:{}", d, port),
+            ServerAddr::SocketAddr(ref a) => write!(f, "{a}"),
+            ServerAddr::DomainName(ref d, port) => write!(f, "{d}:{port}"),
         }
     }
 }
@@ -1145,7 +1144,7 @@ impl Display for ManagerAddr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             ManagerAddr::SocketAddr(ref saddr) => fmt::Display::fmt(saddr, f),
-            ManagerAddr::DomainName(ref dname, port) => write!(f, "{}:{}", dname, port),
+            ManagerAddr::DomainName(ref dname, port) => write!(f, "{dname}:{port}"),
             #[cfg(unix)]
             ManagerAddr::UnixSocketAddr(ref path) => fmt::Display::fmt(&path.display(), f),
         }

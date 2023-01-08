@@ -531,7 +531,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 match crate::config::get_default_config_path() {
                     None => None,
                     Some(p) => {
-                        println!("loading default config {:?}", p);
+                        println!("loading default config {p:?}");
                         Some(p)
                     }
                 }
@@ -544,7 +544,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             Some(ref config_path) => match ServiceConfig::load_from_file(config_path) {
                 Ok(c) => c,
                 Err(err) => {
-                    eprintln!("loading config {:?}, {}", config_path, err);
+                    eprintln!("loading config {config_path:?}, {err}");
                     return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
                 }
             },
@@ -556,7 +556,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             Some(cpath) => match Config::load_from_file(&cpath, ConfigType::Server) {
                 Ok(cfg) => cfg,
                 Err(err) => {
-                    eprintln!("loading config {:?}, {}", cpath, err);
+                    eprintln!("loading config {cpath:?}, {err}");
                     return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
                 }
             },
@@ -591,7 +591,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                     // NOTE: svr_addr should have been checked by crate::validator
                     match crate::password::read_server_password(svr_addr) {
                         Ok(pwd) => pwd,
-                        Err(..) => panic!("`password` is required for server {}", svr_addr),
+                        Err(..) => panic!("`password` is required for server {svr_addr}"),
                     }
                 };
 
@@ -646,7 +646,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                         } else {
                             match crate::password::read_server_password(svr_addr) {
                                 Ok(pwd) => pwd,
-                                Err(..) => panic!("`password` is required for server {}", svr_addr),
+                                Err(..) => panic!("`password` is required for server {svr_addr}"),
                             }
                         }
                     }
@@ -806,7 +806,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             let acl = match AccessControl::load_from_file(acl_file) {
                 Ok(acl) => acl,
                 Err(err) => {
-                    eprintln!("loading ACL \"{}\", {}", acl_file, err);
+                    eprintln!("loading ACL \"{acl_file}\", {err}");
                     return crate::EXIT_CODE_LOAD_ACL_FAILURE.into();
                 }
             };
@@ -858,7 +858,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
         }
 
         if let Err(err) = config.check_integrity() {
-            eprintln!("config integrity check failed, {}", err);
+            eprintln!("config integrity check failed, {err}");
             return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
         }
 

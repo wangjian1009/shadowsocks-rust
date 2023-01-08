@@ -145,9 +145,9 @@ checksum = "2cb2f989d18dd141ab8ae82f64d1a8cdd37e0840f73a406896cf5e99502fab61"
 
 [[package]]
 name = "arc-swap"
-version = "1.5.1"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "983cd8b9d4b02a6dc6ffa557262eb5858a27a0038ffffe21a0f133eaa819a164"
+checksum = "bddcadddf5e9015d310179a59bb28c4d4b9920ad0f11e8e14dbadf654890c9a6"
 
 [[package]]
 name = "arrayref"
@@ -2214,9 +2214,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.16.0"
+version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86f0b0d4bf799edbc74508c1e8bf170ff5f41238e5f8225603ca7caaae2b7860"
+checksum = "6f61fba1741ea2b3d6a1e3178721804bb716a68a6aeba1149b5d52e3d464ea66"
 
 [[package]]
 name = "opaque-debug"
@@ -3281,7 +3281,7 @@ dependencies = [
 
 [[package]]
 name = "shadowsocks"
-version = "1.15.0"
+version = "1.15.2"
 dependencies = [
  "aes 0.8.2",
  "aes-gcm 0.9.4",
@@ -3367,7 +3367,7 @@ dependencies = [
 
 [[package]]
 name = "shadowsocks-rust"
-version = "1.15.1"
+version = "1.15.2"
 dependencies = [
  "base64",
  "build-time",
@@ -3424,7 +3424,7 @@ dependencies = [
 
 [[package]]
 name = "shadowsocks-service"
-version = "1.15.0"
+version = "1.15.2"
 dependencies = [
  "aes 0.7.5",
  "arc-swap",
@@ -3673,9 +3673,9 @@ dependencies = [
 
 [[package]]
 name = "sysexits"
-version = "0.3.4"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "913b6c9c3fdc55ec78e76e281706cecfe0cfb4ba07545cbce8342ed943dcfa72"
+checksum = "bcd4eff4cf271fec7d946fbe865aac5eb005e0d42d57db4cad420b6f5bcf743d"
 
 [[package]]
 name = "sysinfo"

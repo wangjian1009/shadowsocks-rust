@@ -298,7 +298,7 @@ impl ProxySocket {
 
         let n_send_buf = send_buf.len();
 
-        match self.socket.poll_send(cx, &send_buf.freeze()).map_err(|x| x.into()) {
+        match self.socket.poll_send(cx, &send_buf).map_err(|x| x.into()) {
             Poll::Ready(Ok(l)) => {
                 if l == n_send_buf {
                     Poll::Ready(Ok(payload.len()))
@@ -340,11 +340,7 @@ impl ProxySocket {
         );
 
         let n_send_buf = send_buf.len();
-        match self
-            .socket
-            .poll_send_to(cx, &send_buf.freeze(), target)
-            .map_err(|x| x.into())
-        {
+        match self.socket.poll_send_to(cx, &send_buf, target).map_err(|x| x.into()) {
             Poll::Ready(Ok(l)) => {
                 if l == n_send_buf {
                     Poll::Ready(Ok(payload.len()))

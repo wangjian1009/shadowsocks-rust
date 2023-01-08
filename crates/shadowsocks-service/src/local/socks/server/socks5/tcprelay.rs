@@ -112,7 +112,7 @@ impl Socks5TcpHandler {
 
                 return Err(Error::new(
                     ErrorKind::Other,
-                    format!("Username/Password Authentication Initial request failed: {}", err),
+                    format!("Username/Password Authentication Initial request failed: {err}"),
                 ));
             }
         };
@@ -165,10 +165,7 @@ impl Socks5TcpHandler {
 
             Err(Error::new(
                 ErrorKind::Other,
-                format!(
-                    "Username/Password Authentication failed, user: {}, password: {}",
-                    user_name, password
-                ),
+                format!("Username/Password Authentication failed, user: {user_name}, password: {password}"),
             ))
         }
     }

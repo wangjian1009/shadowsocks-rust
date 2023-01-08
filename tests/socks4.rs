@@ -13,7 +13,8 @@ use tokio::{
 use shadowsocks_service::{
     config::{Config, ConfigType, LocalConfig, LocalInstanceConfig, ProtocolType, ServerInstanceConfig},
     local::socks::client::Socks4TcpClient,
-    run_local, run_server,
+    run_local,
+    run_server,
     shadowsocks::{
         canceler::CancelWaiter,
         config::{ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},

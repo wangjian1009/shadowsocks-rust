@@ -20,7 +20,12 @@ use shadowsocks_service::config::RedirType;
 use shadowsocks_service::{
     acl::AccessControl,
     config::{
-        read_variable_field_value, Config, ConfigType, LocalConfig, LocalInstanceConfig, ProtocolType,
+        read_variable_field_value,
+        Config,
+        ConfigType,
+        LocalConfig,
+        LocalInstanceConfig,
+        ProtocolType,
         ServerInstanceConfig,
     },
     create_local,
@@ -51,7 +56,8 @@ use shadowsocks_service::shadowsocks::{config::VlessConfig, vless::UUID};
 
 use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
-    monitor, vparser,
+    monitor,
+    vparser,
 };
 
 #[cfg(feature = "local-dns")]
@@ -633,7 +639,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             Some(config) => match ServiceConfig::load_from_str(config) {
                 Ok(c) => c,
                 Err(err) => {
-                    eprintln!("loading config {:?}, {}", config_path_opt, err);
+                    eprintln!("loading config {config_path_opt:?}, {err}");
                     return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
                 }
             },
@@ -645,7 +651,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             Some(config) => match Config::load_from_str(&config, ConfigType::Local) {
                 Ok(cfg) => cfg,
                 Err(err) => {
-                    eprintln!("loading config {:?}, {}", config_path_opt, err);
+                    eprintln!("loading config {config_path_opt:?}, {err}");
                     return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
                 }
             },
@@ -786,7 +792,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 Some("dns") => ProtocolType::Dns,
                 #[cfg(feature = "local-tun")]
                 Some("tun") => ProtocolType::Tun,
-                Some(p) => panic!("not supported `protocol` \"{}\"", p),
+                Some(p) => panic!("not supported `protocol` \"{p}\""),
                 None => ProtocolType::Socks,
             };
 
@@ -973,7 +979,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             let acl = match AccessControl::load_from_file(acl_file) {
                 Ok(acl) => acl,
                 Err(err) => {
-                    eprintln!("loading ACL \"{}\", {}", acl_file, err);
+                    eprintln!("loading ACL \"{acl_file}\", {err}");
                     return crate::EXIT_CODE_LOAD_ACL_FAILURE.into();
                 }
             };
@@ -1034,7 +1040,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
         }
 
         if let Err(err) = config.check_integrity() {
-            eprintln!("config integrity check failed, {}", err);
+            eprintln!("config integrity check failed, {err}");
             return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
         }
 

@@ -196,8 +196,13 @@ impl HttpDispatcher {
 
             let mut res = match client.send(self.req).instrument(span.clone()).await {
                 Ok(res) => res,
-                Err(_err) => {
-                    let mut resp = Response::new(Body::from(format!("relay failed to {}", host)));
+                Err(err) => {
+                    error!(
+                        "HTTP {} {} <-> {} relay failed, error: {}",
+                        method, self.client_addr, host, err
+                    );
+
+                    let mut resp = Response::new(Body::from(format!("relay failed to {host}")));
                     *resp.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
 
                     {
