@@ -1,9 +1,10 @@
 use serde_json::{self, Map as JsonMap, Value};
 use std::{
-    ffi::CStr,
+    ffi::{CStr, CString},
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     os::raw::{c_char, c_ushort},
+    ptr,
     sync::Arc,
 };
 use tokio::net::UdpSocket;
@@ -345,4 +346,27 @@ async fn on_update_speed_limit(maintain_port: u16, args: Option<&Value>) -> io::
 
     info!("control: update speed limit: rsp={:?}", rsp);
     Ok(())
+}
+
+#[no_mangle]
+pub extern "C" fn lib_local_decrypt(c_input: *const c_char) -> *mut c_char {
+    let str_input = unsafe { CStr::from_ptr(c_input) };
+
+    match shadowsocks_service::decrypt(str_input.to_str().unwrap()) {
+        Ok(v) => {
+            let c_str_song = CString::new(v).unwrap();
+            c_str_song.into_raw()
+        }
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn lib_local_string_free(s: *mut c_char) {
+    unsafe {
+        if s.is_null() {
+            return;
+        }
+        CString::from_raw(s)
+    };
 }
