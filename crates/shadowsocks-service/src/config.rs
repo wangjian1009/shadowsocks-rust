@@ -41,6 +41,7 @@
 //!
 //! These defined server will be used with a load balancing algorithm.
 
+use base64::Engine as _;
 use std::{
     borrow::Cow,
     convert::{From, Infallible},
@@ -279,6 +280,9 @@ struct SSLocalExtConfig {
     #[cfg(feature = "local-tun")]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_interface_address: Option<String>,
+    #[cfg(feature = "local-tun")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tun_interface_destination: Option<String>,
     #[cfg(all(feature = "local-tun", unix))]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_device_fd_from_path: Option<String>,
@@ -871,6 +875,9 @@ pub struct LocalConfig {
     /// Tun interface's address and netmask
     #[cfg(feature = "local-tun")]
     pub tun_interface_address: Option<IpNet>,
+    /// Tun interface's destination address and netmask
+    #[cfg(feature = "local-tun")]
+    pub tun_interface_destination: Option<IpNet>,
     /// Tun interface's file descriptor
     #[cfg(all(feature = "local-tun", unix))]
     pub tun_device_fd: Option<std::os::unix::io::RawFd>,
@@ -914,6 +921,8 @@ impl LocalConfig {
             tun_interface_name: None,
             #[cfg(feature = "local-tun")]
             tun_interface_address: None,
+            #[cfg(feature = "local-tun")]
+            tun_interface_destination: None,
             #[cfg(all(feature = "local-tun", unix))]
             tun_device_fd: None,
             #[cfg(all(feature = "local-tun", unix))]
@@ -1801,7 +1810,7 @@ impl Config {
                     let mut user_manager = ServerUserManager::new();
 
                     for user in users {
-                        let key = match base64::decode_config(&user.password, base64::STANDARD) {
+                        let key = match base64::engine::general_purpose::STANDARD.decode(&user.password) {
                             Ok(k) => k,
                             Err(..) => {
                                 let err = Error::new(
@@ -2525,6 +2534,8 @@ impl fmt::Display for Config {
                         tun_interface_name: local.tun_interface_name.clone(),
                         #[cfg(feature = "local-tun")]
                         tun_interface_address: local.tun_interface_address.as_ref().map(ToString::to_string),
+                        #[cfg(feature = "local-tun")]
+                        tun_interface_destination: local.tun_interface_destination.as_ref().map(ToString::to_string),
                         #[cfg(all(feature = "local-tun", unix))]
                         tun_device_fd_from_path: local
                             .tun_device_fd_from_path
@@ -2620,7 +2631,7 @@ impl fmt::Display for Config {
                                     for u in m.users_iter() {
                                         vu.push(SSServerUserConfig {
                                             name: u.name().to_owned(),
-                                            password: base64::encode(u.key()),
+                                            password: base64::engine::general_purpose::STANDARD.encode(u.key()),
                                         });
                                     }
                                     vu

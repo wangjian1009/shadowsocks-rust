@@ -210,11 +210,11 @@ regex = "1.4"
 
 tun = { version = "0.5.3", optional = true, features = ["async"] }
 etherparse = { version = "0.13", optional = true }
-smoltcp = { version = "0.8", optional = true, default-features = false, features = ["std", "log", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-icmp", "socket-udp", "socket-tcp"] }
+smoltcp = { version = "0.9", optional = true, default-features = false, features = ["std", "log", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-icmp", "socket-udp", "socket-tcp"] }
 
 serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
-base64 = "0.13"
+base64 = "0.21"
 
 aes = { version = "0.7", optional = true }
 block-modes = { version = "0.8", optional = true }
@@ -234,7 +234,7 @@ nix = "0.26"
 dlopen = "0.1.8"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.42", features = ["Win32_Networking_WinSock"] }
+windows-sys = { version = "0.45", features = ["Win32_Networking_WinSock"] }
 
 [dev-dependencies]
 byteorder = "1.3"

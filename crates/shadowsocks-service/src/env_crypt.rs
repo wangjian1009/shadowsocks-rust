@@ -1,4 +1,5 @@
 use aes::Aes256;
+use base64::Engine as _;
 use block_modes::{block_padding::Pkcs7, BlockMode, Cbc};
 
 type Aes256Cbc = Cbc<Aes256, Pkcs7>;
@@ -17,7 +18,7 @@ pub fn decrypt(enc_password: &str) -> Result<String, String> {
         0xae, 0x80, 0xed, 0xcb, 0x37, 0xc2, 0x70, 0x33, 0x21, 0xb3, 0x31, 0x07, 0xcf, 0x35, 0x88, 0xc3,
     ];
 
-    let enc_password = match base64::decode(enc_password) {
+    let enc_password = match base64::engine::general_purpose::STANDARD.decode(enc_password) {
         Ok(r) => r,
         Err(code) => {
             return Err(format!("{:?}", code));

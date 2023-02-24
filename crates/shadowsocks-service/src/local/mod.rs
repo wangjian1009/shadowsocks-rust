@@ -417,6 +417,9 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
                 if let Some(address) = local_config.tun_interface_address {
                     builder = builder.address(address);
                 }
+                if let Some(address) = local_config.tun_interface_destination {
+                    builder = builder.destination(address);
+                }
                 if let Some(name) = local_config.tun_interface_name {
                     builder = builder.name(&name);
                 }

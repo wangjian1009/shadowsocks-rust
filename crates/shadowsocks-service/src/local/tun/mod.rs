@@ -60,6 +60,11 @@ impl<C: Connector> TunBuilder<C> {
         self
     }
 
+    pub fn destination(mut self, addr: IpNet) -> TunBuilder<C> {
+        self.tun_config.destination(addr.addr());
+        self
+    }
+
     pub fn name(mut self, name: &str) -> TunBuilder<C> {
         self.tun_config.name(name);
         self
@@ -203,7 +208,7 @@ impl Tun {
         }
     }
 
-    async fn handle_tun_frame(&mut self, frame: &[u8]) -> smoltcp::Result<()> {
+    async fn handle_tun_frame(&mut self, frame: &[u8]) -> smoltcp::wire::Result<()> {
         let packet = match IpPacket::new_checked(frame)? {
             Some(packet) => packet,
             None => {
