@@ -48,6 +48,9 @@ pub mod mkcp;
 #[cfg(feature = "transport-skcp")]
 pub mod skcp;
 
+#[cfg(feature = "transport-restls")]
+pub mod restls;
+
 /// Stream traits
 pub trait StreamConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {
     fn check_connected(&self) -> bool;

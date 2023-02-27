@@ -19,6 +19,7 @@ default = [
     "flow-stat",
     "rate-limit",
     "transport-ws",
+    "transport-restls",
     "transport-tls",
     "transport-mkcp",
     "transport-skcp",
@@ -53,6 +54,7 @@ transport-ws = ["transport", "tokio-tungstenite"]
 transport-tls = ["transport", "tokio-rustls", "webpki", "rustls-native-certs", "rustls-pemfile"]
 transport-mkcp = ["transport", "arc-swap", "rand"]
 transport-skcp = ["transport"]
+transport-restls = ["anyhow", "tokio-util", "hmac", "sha1"]
 flow-stat = []
 statistics = ["metrics"]
 
@@ -97,7 +99,11 @@ tokio = { version = "1.9.0", features = ["io-util", "macros", "net", "parking_lo
 tokio-tfo = "0.2.0"
 tokio-tungstenite = { version = "0.14", optional = true }
 tokio-rustls = { version = "0.23.4", optional = true }
+tokio-util = { version = "*", features = ["codec"], optional = true}
 webpki = { version = "0.22", optional = true }
+anyhow = { version = "1.0.68", optional = true }
+hmac = { version = "*", optional = true }
+sha1 = { version = "*", optional = true }
 
 governor = { version = "0.3.2", optional = true }
 nonzero_ext = { version = "0.2", optional = true }

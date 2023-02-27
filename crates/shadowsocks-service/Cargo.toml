@@ -41,6 +41,7 @@ default = [
     "sniffer-tls",
     "transport-ws",
     "transport-tls",
+    "transport-restls",
     "trojan",
     "vless",
     "tuic",
@@ -69,6 +70,7 @@ full = [
     "transport-tls",
     "transport-mkcp",
     "transport-skcp",
+    "transport-restls",
     "trojan",
     "vless",
     "tuic",
@@ -111,6 +113,7 @@ transport-ws = ["transport", "shadowsocks/transport-ws"]
 transport-tls = ["transport", "shadowsocks/transport-tls"]
 transport-mkcp = ["transport", "shadowsocks/transport-mkcp"]
 transport-skcp = ["transport", "shadowsocks/transport-skcp"]
+transport-restls = ["transport", "shadowsocks/transport-restls"]
 
 # enable protocol
 trojan = ["shadowsocks/trojan"]
@@ -242,7 +245,6 @@ tracing-test = "*"
 tokio-test = "*"
 tokio-util = { version = "*", features = ["io"]}
 mockall = "*"
-base64 = "*"
 
 [package.metadata.docs.rs]
 features = ["full", "local-http-rustls", "local-dns", "dns-over-tls", "dns-over-https"]

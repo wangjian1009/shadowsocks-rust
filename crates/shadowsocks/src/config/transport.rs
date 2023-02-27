@@ -13,6 +13,9 @@ pub const DEFAULT_SNI: &str = "www.google.com";
 #[cfg(feature = "transport-tls")]
 use crate::transport::tls::{TlsAcceptorConfig, TlsConnectorConfig};
 
+#[cfg(feature = "transport-restls")]
+use crate::transport::restls::RestlsConfig;
+
 #[cfg(any(feature = "transport-mkcp", feature = "transport-skcp"))]
 use crate::transport::{HeaderConfig, SecurityConfig};
 
@@ -40,6 +43,8 @@ impl ServerConfig {
                 &TransportAcceptorConfig::Ws(..) => "(ws)",
                 #[cfg(feature = "transport-tls")]
                 &TransportAcceptorConfig::Tls(..) => "(tls)",
+                #[cfg(feature = "transport-restls")]
+                &TransportAcceptorConfig::Restls(..) => "(restls)",
                 #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
                 &TransportAcceptorConfig::Wss(..) => "(wss)",
                 #[cfg(feature = "transport-mkcp")]
@@ -259,6 +264,8 @@ pub enum TransportType {
     Ws,
     #[cfg(feature = "transport-tls")]
     Tls,
+    #[cfg(feature = "transport-restls")]
+    Restls,
     #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
     Wss,
     #[cfg(feature = "transport-mkcp")]
@@ -273,7 +280,9 @@ impl TransportType {
             #[cfg(feature = "transport-ws")]
             Self::Ws => "ws",
             #[cfg(feature = "transport-tls")]
-            Self::Tls => "tss",
+            Self::Tls => "tls",
+            #[cfg(feature = "transport-restls")]
+            Self::Restls => "restls",
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
             Self::Wss => "wss",
             #[cfg(feature = "transport-mkcp")]
@@ -565,6 +574,8 @@ pub enum TransportAcceptorConfig {
     Ws(WebSocketAcceptorConfig),
     #[cfg(feature = "transport-tls")]
     Tls(TlsAcceptorConfig),
+    #[cfg(feature = "transport-restls")]
+    Restls(RestlsConfig),
     #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
     Wss(WebSocketAcceptorConfig, TlsAcceptorConfig),
     #[cfg(feature = "transport-mkcp")]
@@ -580,6 +591,8 @@ impl TransportAcceptorConfig {
             Self::Ws(..) => TransportType::Ws,
             #[cfg(feature = "transport-tls")]
             Self::Tls(..) => TransportType::Tls,
+            #[cfg(feature = "transport-restls")]
+            Self::Restls(..) => TransportType::Restls,
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
             Self::Wss(..) => TransportType::Wss,
             #[cfg(feature = "transport-mkcp")]
@@ -605,6 +618,8 @@ impl TransportAcceptorConfig {
             "ws" => Ok(TransportAcceptorConfig::Ws(Self::build_ws_config(_path))),
             #[cfg(feature = "transport-tls")]
             "tls" => Ok(TransportAcceptorConfig::Tls(Self::build_tls_config(&_args)?)),
+            #[cfg(feature = "transport-restls")]
+            "restls" => Ok(TransportAcceptorConfig::Restls(Self::build_restls_config(&_args)?)),
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
             "wss" => Ok(TransportAcceptorConfig::Wss(
                 Self::build_ws_config(_path),
@@ -666,6 +681,21 @@ impl TransportAcceptorConfig {
 
         Ok(config)
     }
+
+    #[cfg(feature = "transport-restls")]
+    fn build_restls_config(args: &Option<Vec<(&str, &str)>>) -> Result<RestlsConfig, String> {
+        let config = RestlsConfig::new(
+            ServerAddr::DomainName(
+                find_arg(args, "server")
+                    .ok_or("transport restls cert not configured")?
+                    .to_owned(),
+                443,
+            ),
+            find_arg(args, "pass").ok_or("transport restls pass not configured")?,
+        );
+
+        Ok(config)
+    }
 }
 
 impl FromStr for TransportAcceptorConfig {
@@ -690,6 +720,11 @@ impl fmt::Display for TransportAcceptorConfig {
             #[cfg(feature = "transport-tls")]
             Self::Tls(ref _config) => {
                 write!(f, "tls://")?;
+                Ok(())
+            }
+            #[cfg(feature = "transport-restls")]
+            Self::Restls(ref _config) => {
+                write!(f, "restls://")?;
                 Ok(())
             }
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]

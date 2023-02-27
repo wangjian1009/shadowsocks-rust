@@ -45,6 +45,9 @@ use shadowsocks::transport::websocket::WebSocketAcceptor;
 #[cfg(feature = "transport-tls")]
 use shadowsocks::transport::tls::TlsAcceptor;
 
+#[cfg(feature = "transport-restls")]
+use shadowsocks::transport::restls::RestlsAcceptor;
+
 #[cfg(any(feature = "transport-mkcp", feature = "transport-skcp"))]
 use shadowsocks::net::UdpSocket;
 
@@ -114,6 +117,17 @@ impl TcpServer {
                     )
                     .await?;
                     let listener = TlsAcceptor::new(tls_config, listener).await?;
+                    self.run_with_acceptor(listener, svr_cfg).await
+                }
+                #[cfg(feature = "transport-restls")]
+                &TransportAcceptorConfig::Restls(restls_config) => {
+                    let listener = TcpAcceptor::bind_server_with_opts(
+                        self.context.context().as_ref(),
+                        svr_cfg.external_addr(),
+                        self.accept_opts.clone(),
+                    )
+                    .await?;
+                    let listener = RestlsAcceptor::new(self.context.context(), restls_config, listener).await?;
                     self.run_with_acceptor(listener, svr_cfg).await
                 }
                 #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
