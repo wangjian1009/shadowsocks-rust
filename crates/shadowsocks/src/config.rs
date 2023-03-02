@@ -663,7 +663,7 @@ impl ServerConfig {
                 None => return Err(UrlParseError::MissingHost),
             };
 
-            let mut decoded_body = match URL_SAFE_NO_PAD.decode(encoded) {
+            let mut decoded_body = match URL_SAFE.decode(encoded) {
                 Ok(b) => match String::from_utf8(b) {
                     Ok(b) => b,
                     Err(..) => return Err(UrlParseError::InvalidServerAddr),
