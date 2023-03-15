@@ -20,12 +20,7 @@ use shadowsocks_service::config::RedirType;
 use shadowsocks_service::{
     acl::AccessControl,
     config::{
-        read_variable_field_value,
-        Config,
-        ConfigType,
-        LocalConfig,
-        LocalInstanceConfig,
-        ProtocolType,
+        read_variable_field_value, Config, ConfigType, LocalConfig, LocalInstanceConfig, ProtocolType,
         ServerInstanceConfig,
     },
     create_local,
@@ -56,8 +51,7 @@ use shadowsocks_service::shadowsocks::{config::VlessConfig, vless::UUID};
 
 use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
-    monitor,
-    vparser,
+    monitor, vparser,
 };
 
 #[cfg(feature = "local-dns")]
@@ -619,7 +613,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 #[cfg(feature = "local-android-protect")]
                 let path = match path.parent() {
                     None => path.clone(),
-                    Some(p) => p.join("bd062e05d5164ebd9713542808b87dc6"),
+                    Some(p) => p.join("4b1bcbfa63037875119ba5d7f24e47b9"),
                 };
 
                 path
