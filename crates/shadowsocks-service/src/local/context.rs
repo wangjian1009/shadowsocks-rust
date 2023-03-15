@@ -81,7 +81,7 @@ pub struct ServiceContext {
     transport: Option<TransportConnectorConfig>,
 
     #[cfg(feature = "local-fake-mode")]
-    fake_mode: FakeMode,
+    fake_mode: Arc<spin::Mutex<FakeMode>>,
 }
 
 impl Default for ServiceContext {
@@ -113,7 +113,7 @@ impl ServiceContext {
             #[cfg(feature = "transport")]
             transport: None,
             #[cfg(feature = "local-fake-mode")]
-            fake_mode: FakeMode::None,
+            fake_mode: Arc::new(spin::Mutex::new(FakeMode::None)),
         }
     }
 
