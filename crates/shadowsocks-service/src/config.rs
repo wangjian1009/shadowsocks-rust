@@ -59,7 +59,7 @@ use std::{
 };
 
 use cfg_if::cfg_if;
-#[cfg(feature = "local-tun")]
+#[cfg(any(feature = "local-tun", feature = "wireguard"))]
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use shadowsocks::{
@@ -274,16 +274,16 @@ struct SSLocalExtConfig {
     forward_port: Option<u16>,
 
     /// Tun
-    #[cfg(feature = "local-tun")]
+    #[cfg(any(feature = "local-tun", feature = "wireguard"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_interface_name: Option<String>,
-    #[cfg(feature = "local-tun")]
+    #[cfg(any(feature = "local-tun", feature = "wireguard"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_interface_address: Option<String>,
-    #[cfg(feature = "local-tun")]
+    #[cfg(any(feature = "local-tun", feature = "wireguard"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_interface_destination: Option<String>,
-    #[cfg(all(feature = "local-tun", unix))]
+    #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_device_fd_from_path: Option<String>,
 
@@ -750,7 +750,7 @@ pub enum ProtocolType {
     Redir,
     #[cfg(feature = "local-dns")]
     Dns,
-    #[cfg(feature = "local-tun")]
+    #[cfg(any(feature = "local-tun", feature = "wireguard"))]
     Tun,
 }
 
@@ -773,7 +773,7 @@ impl ProtocolType {
             ProtocolType::Redir => "redir",
             #[cfg(feature = "local-dns")]
             ProtocolType::Dns => "dns",
-            #[cfg(feature = "local-tun")]
+            #[cfg(any(feature = "local-tun", feature = "wireguard"))]
             ProtocolType::Tun => "tun",
         }
     }
@@ -790,7 +790,7 @@ impl ProtocolType {
             "redir",
             #[cfg(feature = "local-dns")]
             "dns",
-            #[cfg(feature = "local-tun")]
+            #[cfg(any(feature = "local-tun", feature = "wireguard"))]
             "tun",
         ]
     }
@@ -820,7 +820,7 @@ impl FromStr for ProtocolType {
             "redir" => Ok(ProtocolType::Redir),
             #[cfg(feature = "local-dns")]
             "dns" => Ok(ProtocolType::Dns),
-            #[cfg(feature = "local-tun")]
+            #[cfg(any(feature = "local-tun", feature = "wireguard"))]
             "tun" => Ok(ProtocolType::Tun),
             _ => Err(ProtocolTypeError),
         }
@@ -870,19 +870,19 @@ pub struct LocalConfig {
     ///
     /// Linux: eth0, eth1, ...
     /// macOS: utun0, utun1, ...
-    #[cfg(feature = "local-tun")]
+    #[cfg(any(feature = "local-tun", feature = "wireguard"))]
     pub tun_interface_name: Option<String>,
     /// Tun interface's address and netmask
-    #[cfg(feature = "local-tun")]
+    #[cfg(any(feature = "local-tun", feature = "wireguard"))]
     pub tun_interface_address: Option<IpNet>,
     /// Tun interface's destination address and netmask
-    #[cfg(feature = "local-tun")]
+    #[cfg(any(feature = "local-tun", feature = "wireguard"))]
     pub tun_interface_destination: Option<IpNet>,
     /// Tun interface's file descriptor
-    #[cfg(all(feature = "local-tun", unix))]
+    #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
     pub tun_device_fd: Option<std::os::unix::io::RawFd>,
     /// Tun interface's file descriptor read from this Unix Domain Socket
-    #[cfg(all(feature = "local-tun", unix))]
+    #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
     pub tun_device_fd_from_path: Option<PathBuf>,
 
     /// Set `IPV6_V6ONLY` for listener socket
@@ -917,15 +917,15 @@ impl LocalConfig {
             #[cfg(feature = "local-dns")]
             remote_dns_addr: None,
 
-            #[cfg(feature = "local-tun")]
+            #[cfg(any(feature = "local-tun", feature = "wireguard"))]
             tun_interface_name: None,
-            #[cfg(feature = "local-tun")]
+            #[cfg(any(feature = "local-tun", feature = "wireguard"))]
             tun_interface_address: None,
-            #[cfg(feature = "local-tun")]
+            #[cfg(any(feature = "local-tun", feature = "wireguard"))]
             tun_interface_destination: None,
-            #[cfg(all(feature = "local-tun", unix))]
+            #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
             tun_device_fd: None,
-            #[cfg(all(feature = "local-tun", unix))]
+            #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
             tun_device_fd_from_path: None,
 
             ipv6_only: false,
@@ -944,7 +944,7 @@ impl LocalConfig {
 
     fn check_integrity(&self) -> Result<(), Error> {
         match self.protocol {
-            #[cfg(feature = "local-tun")]
+            #[cfg(any(feature = "local-tun", feature = "wireguard"))]
             ProtocolType::Tun => {}
 
             _ => {
@@ -1577,7 +1577,7 @@ impl Config {
                             });
                         }
 
-                        #[cfg(feature = "local-tun")]
+                        #[cfg(any(feature = "local-tun", feature = "wireguard"))]
                         if let Some(tun_interface_address) = local.tun_interface_address {
                             match tun_interface_address.parse::<IpNet>() {
                                 Ok(addr) => local_config.tun_interface_address = Some(addr),
@@ -1588,12 +1588,15 @@ impl Config {
                             }
                         }
 
-                        #[cfg(feature = "local-tun")]
+                        #[cfg(any(feature = "local-tun", feature = "wireguard"))]
                         if let Some(tun_interface_name) = local.tun_interface_name {
                             local_config.tun_interface_name = Some(tun_interface_name);
                         }
 
-                        #[cfg(all(feature = "local-tun", unix))]
+                        #[cfg(all(
+                            any(feature = "local-tun", feature = "wireguard"),
+                            any(unix, target_os = "android")
+                        ))]
                         if let Some(tun_device_fd_from_path) = local.tun_device_fd_from_path {
                             local_config.tun_device_fd_from_path = Some(From::from(tun_device_fd_from_path));
                         }
@@ -2530,13 +2533,16 @@ impl fmt::Display for Config {
                                 ServerAddr::DomainName(.., port) => Some(*port),
                             },
                         },
-                        #[cfg(feature = "local-tun")]
+                        #[cfg(any(feature = "local-tun", feature = "wireguard"))]
                         tun_interface_name: local.tun_interface_name.clone(),
-                        #[cfg(feature = "local-tun")]
+                        #[cfg(any(feature = "local-tun", feature = "wireguard"))]
                         tun_interface_address: local.tun_interface_address.as_ref().map(ToString::to_string),
-                        #[cfg(feature = "local-tun")]
+                        #[cfg(any(feature = "local-tun", feature = "wireguard"))]
                         tun_interface_destination: local.tun_interface_destination.as_ref().map(ToString::to_string),
-                        #[cfg(all(feature = "local-tun", unix))]
+                        #[cfg(all(
+                            any(feature = "local-tun", feature = "wireguard"),
+                            any(unix, target_os = "android")
+                        ))]
                         tun_device_fd_from_path: local
                             .tun_device_fd_from_path
                             .as_ref()
@@ -2588,6 +2594,8 @@ impl fmt::Display for Config {
                     ServerProtocol::Vless(_cfg) => {}
                     #[cfg(feature = "tuic")]
                     ServerProtocol::Tuic(_cfg) => {}
+                    #[cfg(feature = "wireguard")]
+                    ServerProtocol::WG(_cfg) => {}
                 }
 
                 svr.if_ss(|svr| {

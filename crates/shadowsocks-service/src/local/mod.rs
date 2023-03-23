@@ -57,6 +57,8 @@ pub mod tun;
 #[cfg(feature = "local-tunnel")]
 pub mod tunnel;
 pub mod utils;
+#[cfg(feature = "wireguard")]
+mod wg;
 
 use cfg_if::cfg_if;
 cfg_if! {
@@ -95,7 +97,7 @@ impl Future for ServerHandle {
 /// Local Server instance
 pub struct Server {
     vfut: Vec<ServerHandle>,
-    balancer: PingBalancer,
+    balancer: Option<PingBalancer>,
 }
 
 impl Server {
@@ -126,8 +128,8 @@ impl Server {
     }
 
     /// Get the internal server balancer
-    pub fn server_balancer(&self) -> &PingBalancer {
-        &self.balancer
+    pub fn server_balancer(&self) -> Option<&PingBalancer> {
+        self.balancer.as_ref()
     }
 }
 
@@ -223,9 +225,65 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
         }
     }
 
-    assert!(!config.local.is_empty(), "no valid local server configuration");
-
     let mut vfut = Vec::new();
+
+    #[cfg(feature = "local-flow-stat")]
+    if let Some(stat_addr) = config.local_stat_addr {
+        // For Android's flow statistic
+
+        let report_fut = flow_report_task(stat_addr, context.cancel_waiter(), context.flow_stat());
+        vfut.push(ServerHandle(tokio::spawn(
+            report_fut.instrument(info_span!("flow-report")),
+        )));
+    }
+
+    // 启动一个维护服务，接受运行时控制
+    #[cfg(feature = "local-maintain")]
+    if let Some(maintain_addr) = config.maintain_addr {
+        let maintain_server = maintain::MaintainServer::new(context.clone());
+        vfut.push(ServerHandle(tokio::spawn(
+            maintain_server.run(maintain_addr).instrument(info_span!("maintain")),
+        )));
+    }
+
+    #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
+    {
+        let mut context = context.clone();
+        vfut.push(ServerHandle(tokio::spawn(
+            async move {
+                tokio::time::sleep(Duration::from_millis(500 + rand::random::<u64>() % 1500)).await;
+                let result = crate::local::android::validate_sign();
+                if result.error.is_some() {
+                    context.set_fake_mode(crate::local::context::FakeMode::ParamError);
+                }
+
+                futures::future::pending::<()>().await;
+                panic!("check completed");
+            }
+            .instrument(info_span!("fake")),
+        )));
+    }
+
+    // vfut.push(async {
+    //     tokio::time::sleep(Duration::from_secs(10)).await;
+    //     tracing::error!("xxxxxxxxx: test done!");
+    //     unsafe { *(0 as *mut u32) = 42; }
+    //     Ok(())
+    // }.boxed());
+    // let (res, ..) = future::select_all(vfut).await;
+    // let (res, _) = vfut.into_future().await;
+    // res.unwrap()
+
+    #[cfg(feature = "wireguard")]
+    if config.server.len() == 1 {
+        use shadowsocks::config::ServerProtocol;
+        if let ServerProtocol::WG(wg_config) = config.server[0].config.protocol() {
+            wg::create_wg_server(context, &mut vfut, config.local, wg_config).await?;
+            return Ok(Server { vfut, balancer: None });
+        }
+    }
+
+    assert!(!config.local.is_empty(), "no valid local server configuration");
 
     // Create a service balancer for choosing between multiple servers
     let balancer = {
@@ -259,25 +317,6 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
 
         balancer_builder.build().await?
     };
-
-    #[cfg(feature = "local-flow-stat")]
-    if let Some(stat_addr) = config.local_stat_addr {
-        // For Android's flow statistic
-
-        let report_fut = flow_report_task(stat_addr, context.cancel_waiter(), context.flow_stat());
-        vfut.push(ServerHandle(tokio::spawn(
-            report_fut.instrument(info_span!("flow-report")),
-        )));
-    }
-
-    // 启动一个维护服务，接受运行时控制
-    #[cfg(feature = "local-maintain")]
-    if let Some(maintain_addr) = config.maintain_addr {
-        let maintain_server = maintain::MaintainServer::new(context.clone());
-        vfut.push(ServerHandle(tokio::spawn(
-            maintain_server.run(maintain_addr).instrument(info_span!("maintain")),
-        )));
-    }
 
     for local_instance in config.local {
         let local_config = local_instance.config;
@@ -413,7 +452,7 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
 
                 use self::tun::TunBuilder;
 
-                let mut builder = TunBuilder::new(context.clone(), connector.clone(), balancer);
+                let mut builder = TunBuilder::new(context.clone(), balancer);
                 if let Some(address) = local_config.tun_interface_address {
                     builder = builder.address(address);
                 }
@@ -441,7 +480,7 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
                     let listener = match UnixListener::bind(fd_path) {
                         Ok(l) => l,
                         Err(err) => {
-                            error!("failed to bind uds path \"{}\", error: {}", fd_path.display(), err);
+                            tracing::error!("failed to bind uds path \"{}\", error: {}", fd_path.display(), err);
                             return Err(err);
                         }
                     };
@@ -458,9 +497,10 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
                         match stream.recv_with_fd(&mut buffer, &mut fd_buffer).await {
                             Ok((n, fd_size)) => {
                                 if fd_size == 0 {
-                                    error!(
+                                    tracing::error!(
                                         "client {:?} didn't send file descriptors with buffer.size {} bytes",
-                                        peer_addr, n
+                                        peer_addr,
+                                        n
                                     );
                                     continue;
                                 }
@@ -471,9 +511,10 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
                                 break;
                             }
                             Err(err) => {
-                                error!(
+                                tracing::error!(
                                     "failed to receive file descriptors from {:?}, error: {}",
-                                    peer_addr, err
+                                    peer_addr,
+                                    err
                                 );
                             }
                         }
@@ -484,35 +525,17 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
                     async move { server.run().await }.instrument(info_span!("tun")),
                 )));
             }
+            #[cfg(all(not(feature = "local-tun"), feature = "wireguard"))]
+            ProtocolType::Tun => {
+                unimplemented!()
+            }
         }
     }
 
-    #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
-    vfut.push(ServerHandle(tokio::spawn(
-        async move {
-            tokio::time::sleep(Duration::from_millis(500 + rand::random::<u64>() % 1500)).await;
-            let result = crate::local::android::validate_sign();
-            if result.error.is_some() {
-                context.set_fake_mode(crate::local::context::FakeMode::ParamError);
-            }
-
-            futures::future::pending::<()>().await;
-            panic!("check completed");
-        }
-        .instrument(info_span!("fake")),
-    )));
-
-    // vfut.push(async {
-    //     tokio::time::sleep(Duration::from_secs(10)).await;
-    //     error!("xxxxxxxxx: test done!");
-    //     unsafe { *(0 as *mut u32) = 42; }
-    //     Ok(())
-    // }.boxed());
-    // let (res, ..) = future::select_all(vfut).await;
-    // let (res, _) = vfut.into_future().await;
-    // res.unwrap()
-
-    Ok(Server { vfut, balancer })
+    Ok(Server {
+        vfut,
+        balancer: Some(balancer),
+    })
 }
 
 #[cfg(feature = "local-flow-stat")]

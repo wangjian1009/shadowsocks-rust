@@ -41,6 +41,8 @@ pub enum ProtocolInfo {
     Tuic {
         cc: &'static str,
     },
+    #[cfg(feature = "wireguard")]
+    WG,
 }
 
 impl ProtocolInfo {
@@ -53,6 +55,8 @@ impl ProtocolInfo {
             Self::Vless => ServerProtocolType::Vless.name(),
             #[cfg(feature = "tuic")]
             Self::Tuic { .. } => ServerProtocolType::Tuic.name(),
+            #[cfg(feature = "wireguard")]
+            Self::WG => ServerProtocolType::WG.name(),
         }
     }
 }
@@ -74,6 +78,8 @@ impl From<&ServerProtocol> for ProtocolInfo {
                     cc: tuic_cfg.congestion_controller.name(),
                 },
             },
+            #[cfg(feature = "wireguard")]
+            ServerProtocol::WG(..) => ProtocolInfo::WG,
         }
     }
 }
@@ -117,6 +123,10 @@ impl BuContext {
             ProtocolInfo::Tuic { cc } => {
                 increment_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans, "tuic_cc" => cc)
             }
+            #[cfg(feature = "wireguard")]
+            ProtocolInfo::WG => {
+                increment_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans)
+            }
         }
     }
 
@@ -139,6 +149,10 @@ impl BuContext {
             #[cfg(feature = "tuic")]
             ProtocolInfo::Tuic { cc } => {
                 decrement_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans, "tuic_cc" => cc)
+            }
+            #[cfg(feature = "wireguard")]
+            ProtocolInfo::WG => {
+                decrement_gauge!(super::METRIC_BU_CLIENT, 1.0, "proto" => protocol, "trans" => trans)
             }
         }
     }
@@ -163,6 +177,10 @@ impl BuContext {
             ProtocolInfo::Tuic { cc } => {
                 increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => protocol, "trans" => trans, "tuic_cc" => cc)
             }
+            #[cfg(feature = "wireguard")]
+            ProtocolInfo::WG => {
+                increment_counter!(super::METRIC_TCP_CONN_ERR_TOTAL, "reason" => reason, "proto" => protocol, "trans" => trans)
+            }
         }
     }
 
@@ -186,6 +204,10 @@ impl BuContext {
             ProtocolInfo::Tuic { cc } => {
                 gauge!(key, bps, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans, "tuic_cc" => cc)
             }
+            #[cfg(feature = "wireguard")]
+            ProtocolInfo::WG => {
+                gauge!(key, bps, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans)
+            }
         }
     }
 
@@ -208,6 +230,10 @@ impl BuContext {
             #[cfg(feature = "tuic")]
             ProtocolInfo::Tuic { cc } => {
                 counter!(key, count, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans, "tuic_cc" => cc)
+            }
+            #[cfg(feature = "wireguard")]
+            ProtocolInfo::WG => {
+                counter!(key, count, "way" => way.name(), "net" => net.name(), "proto" => protocol, "trans" => trans)
             }
         }
     }

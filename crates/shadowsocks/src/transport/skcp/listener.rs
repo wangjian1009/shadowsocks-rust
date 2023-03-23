@@ -224,7 +224,7 @@ mod test {
 
         tokio::spawn(async move {
             loop {
-                let (mut stream, _) = listener.accept_stream().await.unwrap();
+                let (mut stream, _) = listener.accept().await.unwrap();
 
                 tokio::spawn(async move {
                     let mut buffer = [0u8; 8192];

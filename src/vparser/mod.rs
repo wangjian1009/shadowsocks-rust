@@ -4,7 +4,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 
-#[cfg(feature = "local-tun")]
+#[cfg(any(feature = "local-tun", feature = "wireguard"))]
 use ipnet::IpNet;
 #[cfg(feature = "local-redir")]
 use shadowsocks_service::config::RedirType;
@@ -67,7 +67,7 @@ pub fn parse_server_url(v: &str) -> Result<ServerConfig, String> {
     }
 }
 
-#[cfg(feature = "local-tun")]
+#[cfg(any(feature = "local-tun", feature = "wireguard"))]
 pub fn parse_ipnet(v: &str) -> Result<IpNet, String> {
     match v.parse::<IpNet>() {
         Err(..) => Err("should be a CIDR address like 10.1.2.3/24".to_owned()),

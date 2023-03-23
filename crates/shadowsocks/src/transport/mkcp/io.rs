@@ -171,7 +171,7 @@ mod test {
         super::{
             super::common::{crypt::SimpleAuthenticator, cryptreal::AEADAESGCMBasedOnSeed, header::wechat::VideoChat},
             segment::{AckSegment, DataSegment, SegmentData},
-            test::mock::{MockPacketRead, MockPacketWrite},
+            test::mock::MockPacketWrite,
         },
         *,
     };
@@ -182,14 +182,15 @@ mod test {
         header: Option<Arc<HeaderPolicy>>,
         security: Option<Arc<Security>>,
     ) -> io::Result<Vec<Segment>> {
-        let mut pr = MockPacketRead::new();
-        pr.read_one_block(input.to_vec(), "1.1.1.1:80");
+        // let mut pr = MockPacketRead::new();
+        // pr.read_one_block(input.to_vec(), "1.1.1.1:80");
 
-        let mut reader = MkcpPacketReader::new(pr, header, security);
+        // let mut reader = MkcpPacketReader::new(pr, header, security);
 
-        let (segments, addr) = reader.read().await?;
-        assert_eq!(addr.to_string(), "1.1.1.1:80");
-        Ok(segments)
+        // let (segments, addr) = reader.read().await?;
+        // assert_eq!(addr.to_string(), "1.1.1.1:80");
+        // Ok(segments)
+        unimplemented!()
     }
 
     async fn packet_write(
@@ -211,12 +212,14 @@ mod test {
                 Ok(())
             });
 
-        let writer = MkcpPacketWriter::new(pw, header, security);
+        // TODO
+        unimplemented!()
+        // let writer = MkcpPacketWriter::new(pw, header, security);
 
-        writer.write(&addr, seg).await?;
+        // writer.write(&addr, seg).await?;
 
-        let result = output_buf.lock().clone();
-        Ok(result)
+        // let result = output_buf.lock().clone();
+        // Ok(result)
     }
 
     async fn segment_rebuild(

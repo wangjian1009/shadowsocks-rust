@@ -1,3 +1,5 @@
-pub use self::association::{UdpAssociationManager, UdpInboundWrite};
+pub use self::association::{
+    UdpAssociationCloseReason, UdpAssociationCloseReceiver, UdpAssociationManager, UdpInboundWrite,
+};
 
 pub mod association;

@@ -54,7 +54,7 @@ fn parse_vless_wss() {
         },
         TlsConnectorConfig {
             sni: "proxy0101.com".to_owned(),
-            cipher: None,
+            cipher: vec![],
             cert: None,
         },
     )));
@@ -136,7 +136,7 @@ fn rebuild_vless_wss() {
         },
         TlsConnectorConfig {
             sni: "proxy0101.com".to_owned(),
-            cipher: None,
+            cipher: vec![],
             cert: None,
         },
     )));

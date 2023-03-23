@@ -9,6 +9,8 @@ pub enum ServerProtocolType {
     Vless,
     #[cfg(feature = "tuic")]
     Tuic,
+    #[cfg(feature = "wireguard")]
+    WG,
 }
 
 impl ServerProtocolType {
@@ -21,6 +23,8 @@ impl ServerProtocolType {
             Self::Vless => "vless",
             #[cfg(feature = "tuic")]
             Self::Tuic => "tuic",
+            #[cfg(feature = "wireguard")]
+            Self::WG => "wg",
         }
     }
 }
@@ -34,6 +38,8 @@ pub enum ServerProtocol {
     Vless(VlessConfig),
     #[cfg(feature = "tuic")]
     Tuic(TuicConfig),
+    #[cfg(feature = "wireguard")]
+    WG(Config),
 }
 
 impl ServerProtocol {
@@ -46,6 +52,8 @@ impl ServerProtocol {
             "vless",
             #[cfg(feature = "tuic")]
             "tuic",
+            #[cfg(feature = "wireguard")]
+            "wg",
         ]
     }
 
@@ -58,6 +66,8 @@ impl ServerProtocol {
             Self::Vless(..) => ServerProtocolType::Vless,
             #[cfg(feature = "tuic")]
             Self::Tuic(..) => ServerProtocolType::Tuic,
+            #[cfg(feature = "wireguard")]
+            Self::WG(..) => ServerProtocolType::WG,
         }
     }
 
@@ -74,6 +84,8 @@ impl ServerProtocol {
             ServerProtocol::Vless(..) => Some(false),
             #[cfg(feature = "tuic")]
             ServerProtocol::Tuic(..) => Some(true),
+            #[cfg(feature = "wireguard")]
+            ServerProtocol::WG(..) => Some(true),
         }
     }
 }

@@ -324,6 +324,10 @@ impl AutoProxyClientStream {
                         c: Self::create_close_waiter(connection_close_notify),
                     })
                 }
+                #[cfg(feature = "wireguard")]
+                shadowsocks::config::ServerProtocol::WG(_wg_cfg) => {
+                    unreachable!()
+                }
             }
         })
     }

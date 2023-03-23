@@ -71,6 +71,8 @@ pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> 
             shadowsocks::config::ServerProtocol::Vless(_cfg) => {}
             #[cfg(feature = "tuic")]
             shadowsocks::config::ServerProtocol::Tuic(_cfg) => {}
+            #[cfg(feature = "wireguard")]
+            shadowsocks::config::ServerProtocol::WG(_cfg) => {}
         }
     }
 

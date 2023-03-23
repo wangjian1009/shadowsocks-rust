@@ -58,6 +58,9 @@ pub mod vless;
 #[cfg(feature = "tuic")]
 pub mod tuic;
 
+#[cfg(feature = "wireguard")]
+pub mod wg;
+
 #[cfg(test)]
 mod test;
 

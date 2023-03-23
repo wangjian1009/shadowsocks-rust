@@ -30,7 +30,6 @@ use tokio::{
 use tracing::{error, trace};
 
 use crate::{
-    auto_proxy_then,
     local::{
         context::ServiceContext,
         loadbalancing::PingBalancer,
@@ -478,35 +477,28 @@ impl TcpTun {
 /// Established Client Transparent Proxy
 ///
 /// This method must be called after handshaking with client (for example, socks5 handshaking)
-async fn establish_client_tcp_redir<'a, C: Connector>(
+async fn establish_client_tcp_redir<'a>(
     context: Arc<ServiceContext>,
-    connector: Arc<C>,
     balancer: PingBalancer,
     mut stream: TcpConnection,
     peer_addr: SocketAddr,
     addr: &Address,
 ) -> io::Result<()> {
     if balancer.is_empty() {
-        let mut remote = AutoProxyClientStream::connect_bypassed(context, addr).await?;
-        return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, addr).await;
+        let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), addr).await?;
+        return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, addr, None).await;
     }
 
     let server = balancer.best_tcp_server();
     let svr_cfg = server.server_config();
 
-    auto_proxy_then!(context.clone(), server.as_ref(), addr, |remote| {
-        let mut remote = remote?;
+    let mut remote = AutoProxyClientStream::connect(&context, server.as_ref(), addr).await?;
 
-        #[cfg(feature = "rate-limit")]
-        stream.set_rate_limit(context.rate_limiter());
-
-        establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
-    })
+    establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
 }
 
-async fn handle_redir_client<C: Connector>(
+async fn handle_redir_client(
     context: Arc<ServiceContext>,
-    connector: Arc<C>,
     balancer: PingBalancer,
     s: TcpConnection,
     peer_addr: SocketAddr,
@@ -521,5 +513,5 @@ async fn handle_redir_client<C: Connector>(
         }
     }
     let target_addr = Address::from(daddr);
-    establish_client_tcp_redir(context, connector, balancer, s, peer_addr, &target_addr).await
+    establish_client_tcp_redir(context, balancer, s, peer_addr, &target_addr).await
 }

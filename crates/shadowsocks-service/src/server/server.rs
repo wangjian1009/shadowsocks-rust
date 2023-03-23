@@ -244,6 +244,8 @@ impl Server {
                 ServerProtocol::Vless(_cfg) => {}
                 #[cfg(feature = "tuic")]
                 ServerProtocol::Tuic(_cfg) => {}
+                #[cfg(feature = "wireguard")]
+                ServerProtocol::WG(_cfg) => {}
             }
         }
 

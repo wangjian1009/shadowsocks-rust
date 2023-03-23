@@ -100,10 +100,11 @@ default = [
     "transport-tls",
     "transport-mkcp",
     "transport-skcp",
-    "transport-restls",
+    # "transport-restls",
     "trojan",
     "vless",
     "tuic",
+    "wireguard",
     "aead-cipher-2022",
 ]
 
@@ -131,6 +132,7 @@ transport-restls = ["shadowsocks-service/transport-restls", "transport"]
 trojan = ["shadowsocks-service/trojan"]
 vless = ["shadowsocks-service/vless"]
 tuic = ["shadowsocks-service/tuic"]
+wireguard = ["shadowsocks-service/wireguard", "ipnet"]
 
 # Enable remote server
 server = ["shadowsocks-service/server"]
@@ -301,3 +303,4 @@ tokio-test = "*"
 [patch.crates-io]
 quinn = { path = "depends/quinn/quinn" }
 tracing-oslog = { path = "depends/tracing-oslog" }
+x25519-dalek =  { path = "depends/x25519-dalek" }

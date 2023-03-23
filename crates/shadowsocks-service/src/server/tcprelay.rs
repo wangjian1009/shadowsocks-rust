@@ -419,6 +419,10 @@ impl TcpServer {
                 ServerProtocol::Tuic(..) => {
                     unreachable!()
                 }
+                #[cfg(feature = "wireguard")]
+                ServerProtocol::WG(..) => {
+                    unreachable!()
+                }
             }
         }
     }

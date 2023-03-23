@@ -135,10 +135,6 @@ async fn start_server(
             let (stream, peer_addr) = acceptor.accept().await?;
 
             let peer_addr = peer_addr.unwrap();
-            let peer_addr = match peer_addr {
-                ServerAddr::SocketAddr(addr) => addr,
-                _ => unreachable!(),
-            };
 
             let inbound = inbound.clone();
             let modifiler = modifiler.clone();

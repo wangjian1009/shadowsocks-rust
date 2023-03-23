@@ -2,6 +2,7 @@ use super::*;
 use async_trait::async_trait;
 use bytes::BufMut;
 use mockall::*;
+use std::net::SocketAddr;
 
 use crate::transport::{PacketMutWrite, PacketRead, PacketWrite};
 
@@ -24,16 +25,16 @@ mock! {
 
     #[async_trait]
     impl PacketRead for PacketRead {
-        async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, ServerAddr)>;
+        async fn read_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)>;
     }
 }
 
 impl MockPacketRead {
     pub fn read_one_block(&mut self, input: Vec<u8>, addr: &str) {
-        let addr = addr.parse::<ServerAddr>().unwrap();
+        let addr = addr.parse::<SocketAddr>().unwrap();
         self.expect_read_from().times(1).returning(move |mut buf: &mut [u8]| {
             buf.put_slice(&input[..]);
-            Ok((input.len(), addr.clone()))
+            Ok((input.len(), addr))
         });
     }
 }

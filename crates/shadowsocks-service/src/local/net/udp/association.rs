@@ -938,6 +938,10 @@ where
                         };
                         self.proxied_socket.insert(context)
                     }
+                    #[cfg(feature = "wireguard")]
+                    ServerProtocol::WG(_wg_config) => {
+                        unimplemented!()
+                    }
                 }
             }
         };

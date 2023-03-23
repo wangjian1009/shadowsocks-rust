@@ -44,7 +44,7 @@ pub fn build_config(
     cipher_suites: &[SupportedCipherSuite],
     alpn: Option<Vec<Vec<u8>>>,
 ) -> io::Result<ClientConfig> {
-    let crypto = rustls::ClientConfig::builder();
+    let crypto = tokio_rustls::rustls::ClientConfig::builder();
 
     let crypto = crypto.with_cipher_suites(cipher_suites);
 
@@ -58,8 +58,10 @@ pub fn build_config(
                 }
             }
 
-            b.with_custom_certificate_verifier(Arc::new(NoVerifier {}) as Arc<dyn rustls::client::ServerCertVerifier>)
-                .with_no_client_auth()
+            b.with_custom_certificate_verifier(
+                Arc::new(NoVerifier {}) as Arc<dyn tokio_rustls::rustls::client::ServerCertVerifier>
+            )
+            .with_no_client_auth()
         })
         .unwrap();
 
@@ -78,13 +80,13 @@ pub(crate) struct NoVerifier;
 impl tokio_rustls::rustls::client::ServerCertVerifier for NoVerifier {
     fn verify_server_cert(
         &self,
-        _end_entity: &rustls::Certificate,
-        _intermediates: &[rustls::Certificate],
-        _server_name: &rustls::ServerName,
+        _end_entity: &tokio_rustls::rustls::Certificate,
+        _intermediates: &[tokio_rustls::rustls::Certificate],
+        _server_name: &tokio_rustls::rustls::ServerName,
         _scts: &mut dyn Iterator<Item = &[u8]>,
         _ocsp_response: &[u8],
         _now: std::time::SystemTime,
-    ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::ServerCertVerified::assertion())
+    ) -> Result<tokio_rustls::rustls::client::ServerCertVerified, tokio_rustls::rustls::Error> {
+        Ok(tokio_rustls::rustls::client::ServerCertVerified::assertion())
     }
 }

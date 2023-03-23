@@ -930,6 +930,8 @@ impl PingChecker {
                 ServerProtocol::Vless(_cfg) => Ok(()),
                 #[cfg(feature = "tuic")]
                 ServerProtocol::Tuic(_cfg) => Ok(()),
+                #[cfg(feature = "wireguard")]
+                ServerProtocol::WG(_cfg) => Ok(()),
             },
         }
     }

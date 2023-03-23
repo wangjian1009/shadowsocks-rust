@@ -464,7 +464,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
         }
     }
 
-    #[cfg(feature = "local-tun")]
+    #[cfg(any(feature = "local-tun", feature = "wireguard"))]
     {
         app = app
             .arg(
@@ -490,7 +490,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                     .help("Tun interface destination address (network)"),
             );
 
-        #[cfg(unix)]
+        #[cfg(any(unix, target_os = "android"))]
         {
             app = app.arg(
                 Arg::new("TUN_DEVICE_FD_FROM_PATH")
@@ -792,7 +792,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 Some("redir") => ProtocolType::Redir,
                 #[cfg(feature = "local-dns")]
                 Some("dns") => ProtocolType::Dns,
-                #[cfg(feature = "local-tun")]
+                #[cfg(any(feature = "local-tun", feature = "wireguard"))]
                 Some("tun") => ProtocolType::Tun,
                 Some(p) => panic!("not supported `protocol` \"{p}\""),
                 None => ProtocolType::Socks,
@@ -802,7 +802,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             if let Some(local_addr) = matches.get_one::<ServerAddr>("LOCAL_ADDR").cloned() {
                 local_config.addr = Some(local_addr)
             } else {
-                #[cfg(feature = "local-tun")]
+                #[cfg(any(feature = "local-tun", feature = "wireguard"))]
                 if protocol == ProtocolType::Tun {
                     // `tun` protocol doesn't need --local-addr
                 } else {
@@ -885,7 +885,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 }
             }
 
-            #[cfg(feature = "local-tun")]
+            #[cfg(any(feature = "local-tun", feature = "wireguard"))]
             {
                 use ipnet::IpNet;
 
@@ -899,7 +899,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                     local_config.tun_interface_name = Some(tun_name);
                 }
 
-                #[cfg(unix)]
+                #[cfg(any(unix, target_os = "android"))]
                 if let Some(fd_path) = matches.get_one::<PathBuf>("TUN_DEVICE_FD_FROM_PATH").cloned() {
                     local_config.tun_device_fd_from_path = Some(fd_path);
                 }
@@ -1099,7 +1099,11 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
         let instance = create_local(config, canceler.waiter()).await.expect("create local");
 
         if let Some(config_path) = config_path {
-            launch_reload_server_task(config_path, instance.server_balancer().clone(), canceler.waiter());
+            launch_reload_server_task(
+                config_path,
+                instance.server_balancer().clone().cloned(),
+                canceler.waiter(),
+            );
         }
 
         let abort_signal = monitor::create_signal_monitor(canceler);
@@ -1134,7 +1138,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 use shadowsocks_service::shadowsocks::canceler::CancelWaiter;
 
 #[cfg(unix)]
-fn launch_reload_server_task(config_path: PathBuf, balancer: PingBalancer, cancel_waiter: CancelWaiter) {
+fn launch_reload_server_task(config_path: PathBuf, mut balancer: Option<PingBalancer>, cancel_waiter: CancelWaiter) {
     use tokio::signal::unix::{signal, SignalKind};
     use tracing::{info_span, Instrument};
 
@@ -1160,10 +1164,12 @@ fn launch_reload_server_task(config_path: PathBuf, balancer: PingBalancer, cance
                 let servers: Vec<ServerConfig> = config.server.into_iter().map(|s| s.config).collect();
                 info!("auto-reload {} with {} servers", config_path.display(), servers.len());
 
-                let r = balancer.reset_servers(servers).await;
+                if let Some(balancer) = balancer.as_mut() {
+                    let r = balancer.reset_servers(servers).await;
 
-                if let Err(err) = r {
-                    error!("auto-reload {} but found error: {}", config_path.display(), err);
+                    if let Err(err) = r {
+                        error!("auto-reload {} but found error: {}", config_path.display(), err);
+                    }
                 }
             }
         }

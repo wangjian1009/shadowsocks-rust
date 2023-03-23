@@ -128,6 +128,11 @@ impl DnsClient {
             ServerProtocol::Vless(_cfg) => Err(io::Error::new(io::ErrorKind::Other, "not support dns udp over vless")),
             #[cfg(feature = "tuic")]
             ServerProtocol::Tuic(_cfg) => Err(io::Error::new(io::ErrorKind::Other, "not support dns udp over tuic")),
+            #[cfg(feature = "wireguard")]
+            ServerProtocol::WG(_cfg) => Err(io::Error::new(
+                io::ErrorKind::Other,
+                "not support dns udp over wireguard",
+            )),
         }
     }
 

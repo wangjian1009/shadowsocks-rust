@@ -25,6 +25,7 @@ default = [
     "local-http-rustls",
     "local-redir",
     "local-tunnel",
+    "local-tun",
     "local-socks4",
     "local-maintain",
     "local-signed-info",
@@ -41,10 +42,11 @@ default = [
     "sniffer-tls",
     "transport-ws",
     "transport-tls",
-    "transport-restls",
+    # "transport-restls",
     "trojan",
     "vless",
     "tuic",
+    "wireguard",
 ]
 
 full = [
@@ -56,6 +58,7 @@ full = [
     "local-dns",
     "local-redir",
     "local-tunnel",
+    "local-tun",
     "local-socks4",
     "local-maintain",
     "server-maintain",
@@ -74,6 +77,7 @@ full = [
     "trojan",
     "vless",
     "tuic",
+    "wireguard",
 ]
 
 # Enable local server
@@ -119,6 +123,7 @@ transport-restls = ["transport", "shadowsocks/transport-restls"]
 trojan = ["shadowsocks/trojan"]
 vless = ["shadowsocks/vless"]
 tuic = ["shadowsocks/tuic"]
+wireguard = ["shadowsocks/wireguard"]
 
 # Enables trust-dns for replacing tokio's builtin DNS resolver
 trust-dns = ["trust-dns-resolver", "shadowsocks/trust-dns"]

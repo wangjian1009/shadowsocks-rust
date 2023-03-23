@@ -16,7 +16,7 @@ use crate::{
     local::{
         context::ServiceContext,
         loadbalancing::PingBalancer,
-        net::{UdpAssociationManager, UdpInboundWrite},
+        net::{UdpAssociationCloseReason, UdpAssociationCloseReceiver, UdpAssociationManager, UdpInboundWrite},
     },
     net::utils::to_ipv4_mapped,
 };
@@ -32,9 +32,9 @@ impl UdpTun {
         balancer: PingBalancer,
         time_to_live: Option<Duration>,
         capacity: Option<usize>,
-    ) -> (UdpTun, Duration, mpsc::Receiver<SocketAddr>) {
+    ) -> (UdpTun, UdpAssociationCloseReceiver) {
         let (tun_tx, tun_rx) = mpsc::channel(64);
-        let (manager, cleanup_interval, keepalive_rx) = UdpAssociationManager::new(
+        let (mut manager, mut close_rx) = UdpAssociationManager::new(
             context,
             UdpTunInboundWriter::new(tun_tx),
             time_to_live,
@@ -42,7 +42,11 @@ impl UdpTun {
             balancer,
         );
 
-        (UdpTun { tun_rx, manager }, cleanup_interval, keepalive_rx)
+        (UdpTun { tun_rx, manager }, close_rx)
+    }
+
+    pub fn close_association(&mut self, peer_addr: &SocketAddr, reason: UdpAssociationCloseReason) {
+        self.manager.close_association(peer_addr, reason)
     }
 
     pub async fn handle_packet(
@@ -71,15 +75,15 @@ impl UdpTun {
         }
     }
 
-    #[inline(always)]
-    pub async fn cleanup_expired(&mut self) {
-        self.manager.cleanup_expired().await;
-    }
+    // #[inline(always)]
+    // pub async fn cleanup_expired(&mut self) {
+    //     self.manager.cleanup_expired().await;
+    // }
 
-    #[inline(always)]
-    pub async fn keep_alive(&mut self, peer_addr: &SocketAddr) {
-        self.manager.keep_alive(peer_addr).await;
-    }
+    // #[inline(always)]
+    // pub async fn keep_alive(&mut self, peer_addr: &SocketAddr) {
+    //     self.manager.keep_alive(peer_addr).await;
+    // }
 }
 
 #[derive(Clone)]

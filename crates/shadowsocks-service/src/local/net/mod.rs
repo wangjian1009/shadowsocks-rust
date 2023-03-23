@@ -2,7 +2,7 @@
 
 pub use self::{
     tcp::{auto_proxy_io::AutoProxyIo, auto_proxy_stream::AutoProxyClientStream},
-    udp::{UdpAssociationManager, UdpInboundWrite},
+    udp::{UdpAssociationCloseReason, UdpAssociationCloseReceiver, UdpAssociationManager, UdpInboundWrite},
 };
 
 mod tcp;

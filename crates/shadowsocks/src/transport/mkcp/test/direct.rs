@@ -8,13 +8,13 @@ use std::{
 use tokio::task::JoinHandle;
 
 use crate::{
-    net::{ConnectOpts, Destination, UdpSocket},
-    transport::{direct::TcpConnector, Acceptor, Connection, Connector},
+    net::{ConnectOpts, UdpSocket},
+    transport::{direct::TcpConnector, Acceptor, Connector},
     ServerAddr,
 };
 
-type TestMkcpAcceptor = MkcpAcceptor<Arc<UdpSocket>>;
-type TestMkcpConnector = MkcpConnector<TcpConnector>;
+type TestMkcpAcceptor = MkcpAcceptor;
+type TestMkcpConnector = MkcpConnector;
 type TestMkcpClientStream = <TestMkcpConnector as Connector>::TS;
 
 pub async fn create_acceptor(
@@ -37,11 +37,7 @@ pub async fn create_acceptor(
 
 pub fn start_echo_server(mut listener: TestMkcpAcceptor) -> JoinHandle<()> {
     tokio::spawn(async move {
-        while let Ok((connection, _peer_addr)) = listener.accept().await {
-            let stream = match connection {
-                Connection::Stream(stream) => stream,
-                Connection::Packet { .. } => unreachable!(),
-            };
+        while let Ok((stream, _peer_addr)) = listener.accept().await {
             let (mut r, mut w) = tokio::io::split(stream);
 
             tokio::spawn(async move {
@@ -59,19 +55,13 @@ pub async fn connect_to(
 ) -> io::Result<TestMkcpClientStream> {
     // 客户端连接
     let connector = TcpConnector::new(None);
-    let connector = MkcpConnector::new(config, connector, statistic);
+    let connector = MkcpConnector::new(config, statistic);
 
     let listen_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
 
     let conn = connector
-        .connect(
-            &Destination::Tcp(ServerAddr::SocketAddr(listen_addr)),
-            &ConnectOpts::default(),
-        )
+        .connect(&ServerAddr::SocketAddr(listen_addr), &ConnectOpts::default())
         .await?;
 
-    match conn {
-        Connection::Stream(stream) => Ok(stream),
-        Connection::Packet { .. } => unreachable!(),
-    }
+    Ok(conn)
 }

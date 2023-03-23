@@ -20,7 +20,7 @@ use shadowsocks::{
     },
     transport::{
         direct::{TcpAcceptor, TcpConnector},
-        Acceptor, Connection, Connector, StreamConnection,
+        Acceptor, Connector, StreamConnection,
     },
     ProxyClientStream, ServerAddr,
 };
@@ -137,11 +137,6 @@ async fn tcp_tunnel_example(
 
         while let Ok((stream, peer_addr)) = listener.accept().await {
             let peer_addr = peer_addr.unwrap();
-
-            let stream = match stream {
-                Connection::Stream(stream) => stream,
-                Connection::Packet { .. } => unreachable!(),
-            };
 
             info!("server accepted stream {}", peer_addr);
 

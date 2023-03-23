@@ -596,7 +596,7 @@ mod test {
     //     let worker = Arc::new(worker);
     // }
 
-    fn create_worker(config: Arc<MkcpConfig>) -> (SendingWorker<PacketCollector>, mpsc::Receiver<Segment>) {
+    fn create_worker(config: Arc<MkcpConfig>) -> (SendingWorker, mpsc::Receiver<Segment>) {
         let (conn_ctx, outputs) =
             create_connection_ctx(config.clone(), 1, MkcpConnWay::Incoming, "1.1.1.1:1", "2.2.2.2:2", None);
         (SendingWorker::new(Arc::new(conn_ctx)), outputs)

@@ -1,14 +1,12 @@
 use anyhow::{anyhow, Context, Result};
 use futures_util::stream::StreamExt;
-use hmac::{Hmac, Mac};
-use sha1::Sha1;
+use ring::hmac;
 use std::io::Cursor;
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
     select,
 };
 use tracing::debug;
-type HmacSha1 = Hmac<Sha1>;
 
 use super::{
     client_hello::ClientHello,
@@ -105,9 +103,11 @@ impl TryHandshake {
             outbound.codec_mut().next_record();
             self.relay_to(inbound, outbound).await?;
         }
-        let mut hasher = HmacSha1::new_from_slice(restls_password).expect("sha1 should take key of any size");
+        let key_ref = hmac::Key::new(hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, restls_password);
+        let mut hasher = hmac::Context::with_key(&key_ref);
         hasher.update(&server_hello.server_random);
-        let secret = hasher.finalize().into_bytes();
+        let secret = hasher.sign();
+        let secret = secret.as_ref();
         debug!("tls13 server challenge {:?}", &secret[..REQUIRED_HMAC_LEN]);
         let record = outbound.codec_mut().next_record();
         xor_bytes(&secret[..REQUIRED_HMAC_LEN], &mut record[5..]);
@@ -160,11 +160,12 @@ impl TryHandshake {
     }
 
     fn check_tls_13_session_id(&self, client_hello: &ClientHello, restls_password: &[u8]) -> Result<()> {
-        let mut hasher = HmacSha1::new_from_slice(restls_password).expect("sha1 should take key of any size");
+        let key_ref = hmac::Key::new(hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, restls_password);
+        let mut hasher = hmac::Context::with_key(&key_ref);
         hasher.update(&client_hello.key_share);
         hasher.update(&client_hello.psk);
-        let res_raw = hasher.finalize();
-        let res = res_raw.into_bytes();
+        let res_raw = hasher.sign();
+        let res = res_raw.as_ref();
         let expect = &res[..REQUIRED_HMAC_LEN];
         let actual = &client_hello.session_id.get()[..REQUIRED_HMAC_LEN];
         // we don't need constant time comparison since
@@ -186,10 +187,12 @@ impl TryHandshake {
         restls_password: &[u8],
         in_buf: &[u8],
     ) -> Result<()> {
-        let mut hasher = HmacSha1::new_from_slice(restls_password).expect("sha1 should take key of any size");
+        let key_ref = hmac::Key::new(hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, restls_password);
+        let mut hasher = hmac::Context::with_key(&key_ref);
         hasher.update(&server_hello.server_random);
         hasher.update(&server_hello.server_random);
-        let res = hasher.finalize().into_bytes();
+        let res_raw = hasher.sign();
+        let res = res_raw.as_ref();
         let expect = &res[..REQUIRED_HMAC_LEN];
         let application_data = &in_buf[5..];
         if application_data.len() < REQUIRED_HMAC_LEN {

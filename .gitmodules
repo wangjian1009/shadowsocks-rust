@@ -4,3 +4,6 @@
 [submodule "depends/tracing-oslog"]
 	path = depends/tracing-oslog
 	url = git@github.com:wangjian1009/tracing-oslog.git
+[submodule "depends/x25519-dalek"]
+	path = depends/x25519-dalek
+	url = git@github.com:wangjian1009/x25519-dalek.git

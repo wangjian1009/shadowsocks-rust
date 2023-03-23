@@ -58,6 +58,13 @@ cfg_if! {
     }
 }
 
+cfg_if! {
+    if #[cfg(feature = "wireguard")] {
+        mod wg;
+        pub use crate::wg::Config;
+    }
+}
+
 mod protocol;
 pub use protocol::{ServerProtocol, ServerProtocolType};
 
@@ -506,6 +513,8 @@ impl ServerConfig {
             ServerProtocol::Vless(..) => &self.addr,
             #[cfg(feature = "tuic")]
             ServerProtocol::Tuic(..) => &self.addr,
+            #[cfg(feature = "wireguard")]
+            ServerProtocol::WG(..) => &self.addr,
         }
     }
 
@@ -566,6 +575,12 @@ impl ServerConfig {
                 let param = "".to_string();
                 return format!("tuic://{}", URL_SAFE_NO_PAD.encode(param));
             }
+            #[cfg(feature = "wireguard")]
+            ServerProtocol::WG(_config) => {
+                // TODO: Loki
+                let param = "".to_string();
+                return format!("wg://{}", URL_SAFE_NO_PAD.encode(param));
+            }
         };
         let param = format!("{}:{}@{}", config.method(), config.password(), self.addr());
         format!("ss://{}", URL_SAFE_NO_PAD.encode(param))
@@ -585,6 +600,8 @@ impl ServerConfig {
             ServerProtocol::Vless(vless_config) => return self.to_url_vless(vless_config),
             #[cfg(feature = "tuic")]
             ServerProtocol::Tuic(tuic_config) => return self.to_url_tuic(tuic_config),
+            #[cfg(feature = "wireguard")]
+            ServerProtocol::WG(wg_config) => return self.to_url_wg(wg_config),
         };
 
         cfg_if! {
@@ -648,6 +665,11 @@ impl ServerConfig {
             #[cfg(feature = "tuic")]
             if parsed.scheme() == "tuic" {
                 return Self::from_url_tuic_client(&parsed);
+            }
+
+            #[cfg(feature = "wireguard")]
+            if parsed.scheme() == "wg" {
+                return Self::from_url_wg(&parsed);
             }
 
             tracing::error!("not supported protocol {}", parsed.scheme());
@@ -860,6 +882,8 @@ impl ServerConfig {
             ServerProtocol::Vless(..) => unreachable!(),
             #[cfg(feature = "tuic")]
             ServerProtocol::Tuic(..) => unreachable!(),
+            #[cfg(feature = "wireguard")]
+            ServerProtocol::WG(..) => unreachable!(),
         }
     }
 
@@ -875,6 +899,8 @@ impl ServerConfig {
             ServerProtocol::Vless(..) => None,
             #[cfg(feature = "tuic")]
             ServerProtocol::Tuic(..) => None,
+            #[cfg(feature = "wireguard")]
+            ServerProtocol::WG(..) => None,
         }
     }
 
@@ -890,6 +916,8 @@ impl ServerConfig {
             ServerProtocol::Vless(..) => None,
             #[cfg(feature = "tuic")]
             ServerProtocol::Tuic(..) => None,
+            #[cfg(feature = "wireguard")]
+            ServerProtocol::WG(..) => None,
         }
     }
 
@@ -902,6 +930,8 @@ impl ServerConfig {
             ServerProtocol::Vless(..) => true,
             #[cfg(feature = "tuic")]
             ServerProtocol::Tuic(..) => true,
+            #[cfg(feature = "wireguard")]
+            ServerProtocol::WG(..) => true,
         }
     }
 }

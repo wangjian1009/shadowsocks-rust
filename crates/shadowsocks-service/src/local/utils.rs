@@ -110,6 +110,8 @@ where
         ServerProtocol::Vless(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
         #[cfg(feature = "tuic")]
         ServerProtocol::Tuic(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
+        #[cfg(feature = "wireguard")]
+        ServerProtocol::WG(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
     };
     match r {
         Ok(()) => {

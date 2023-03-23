@@ -1,5 +1,6 @@
 use super::*;
 use async_trait::async_trait;
+use std::net::SocketAddr;
 
 use super::{super::io::*, mock::*, segment::*};
 use crate::transport::{PacketMutWrite, PacketWrite};
@@ -13,19 +14,20 @@ pub struct PacketCollector {
 #[async_trait]
 impl PacketWrite for PacketCollector {
     async fn write_to(&self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
-        let mut pr = MockPacketRead::new();
-        pr.read_one_block(buf.to_vec(), addr.to_string().as_str());
-        let mut pr = MkcpPacketReader::new(pr, None, None);
-        let (segments, ..) = pr.read().await?;
+        // let mut pr = MockPacketRead::new();
+        // pr.read_one_block(buf.to_vec(), addr.to_string().as_str());
+        // let mut pr = MkcpPacketReader::new(pr, None, None);
+        // let (segments, ..) = pr.read().await?;
 
-        for seg in segments {
-            match self.sender.send(seg).await {
-                Ok(()) => {}
-                Err(err) => panic!("send seg error: {}", err),
-            }
-        }
+        // for seg in segments {
+        //     match self.sender.send(seg).await {
+        //         Ok(()) => {}
+        //         Err(err) => panic!("send seg error: {}", err),
+        //     }
+        // }
 
-        Ok(())
+        // Ok(())
+        unimplemented!()
     }
 }
 
@@ -43,26 +45,27 @@ pub fn create_connection(
     local_addr: &str,
     remote_addr: &str,
     statistic: Option<Arc<StatisticStat>>,
-) -> (MkcpConnection<PacketCollector>, mpsc::Receiver<Segment>) {
-    let (tx, rx) = mpsc::channel(100);
+) -> (MkcpConnection, mpsc::Receiver<Segment>) {
+    // let (tx, rx) = mpsc::channel(100);
 
-    let pw = PacketCollector { sender: tx };
+    // let pw = PacketCollector { sender: tx };
 
-    (
-        MkcpConnection::new(
-            config,
-            MkcpConnMetadata {
-                way,
-                local_addr: local_addr.parse::<ServerAddr>().unwrap(),
-                remote_addr: remote_addr.parse::<ServerAddr>().unwrap(),
-                conversation: conv,
-            },
-            None,
-            Arc::new(MkcpPacketWriter::new(pw, None, None)),
-            statistic,
-        ),
-        rx,
-    )
+    // (
+    //     MkcpConnection::new(
+    //         config,
+    //         MkcpConnMetadata {
+    //             way,
+    //             local_addr: local_addr.parse::<SocketAddr>().unwrap(),
+    //             remote_addr: remote_addr.parse::<ServerAddr>().unwrap(),
+    //             conversation: conv,
+    //         },
+    //         None,
+    //         Arc::new(MkcpPacketWriter::new(pw, None, None)),
+    //         statistic,
+    //     ),
+    //     rx,
+    // )
+    unimplemented!()
 }
 
 pub fn create_connection_ctx(
@@ -72,26 +75,24 @@ pub fn create_connection_ctx(
     local_addr: &str,
     remote_addr: &str,
     statistic: Option<Arc<StatisticStat>>,
-) -> (
-    connection::MkcpConnectionContext<PacketCollector>,
-    mpsc::Receiver<Segment>,
-) {
-    let (tx, rx) = mpsc::channel(100);
+) -> (connection::MkcpConnectionContext, mpsc::Receiver<Segment>) {
+    // let (tx, rx) = mpsc::channel(100);
 
-    let pw = PacketCollector { sender: tx };
+    // let pw = PacketCollector { sender: tx };
 
-    let (ctx, _data_updator, _ping_updator) = connection::MkcpConnectionContext::new(
-        config,
-        MkcpConnMetadata {
-            way,
-            local_addr: local_addr.parse::<ServerAddr>().unwrap(),
-            remote_addr: remote_addr.parse::<ServerAddr>().unwrap(),
-            conversation: conv,
-        },
-        None,
-        Arc::new(MkcpPacketWriter::new(pw, None, None)),
-        statistic,
-    );
+    // let (ctx, _data_updator, _ping_updator) = connection::MkcpConnectionContext::new(
+    //     config,
+    //     MkcpConnMetadata {
+    //         way,
+    //         local_addr: local_addr.parse::<SocketAddr>().unwrap(),
+    //         remote_addr: remote_addr.parse::<ServerAddr>().unwrap(),
+    //         conversation: conv,
+    //     },
+    //     None,
+    //     Arc::new(MkcpPacketWriter::new(pw, None, None)),
+    //     statistic,
+    // );
 
-    (ctx, rx)
+    // (ctx, rx)
+    unimplemented!()
 }

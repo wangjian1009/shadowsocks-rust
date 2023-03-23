@@ -11,13 +11,13 @@ use std::{
 
 use byte_string::ByteStr;
 use ipnet::IpNet;
-use shadowsocks::{config::Mode, transport::Connector};
+use shadowsocks::config::Mode;
 use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
-use tokio::{io::AsyncReadExt, sync::mpsc, time};
+use tokio::io::AsyncReadExt;
 use tracing::{debug, error, info, trace, warn};
 use tun::{AsyncDevice, Configuration as TunConfiguration, Device as TunDevice, Error as TunError, Layer};
 
-use crate::local::{context::ServiceContext, loadbalancing::PingBalancer};
+use crate::local::{context::ServiceContext, loadbalancing::PingBalancer, net::UdpAssociationCloseReceiver};
 
 use self::{
     ip_packet::IpPacket,
@@ -32,9 +32,8 @@ mod tcp;
 mod udp;
 mod virt_device;
 
-pub struct TunBuilder<C: Connector> {
+pub struct TunBuilder {
     context: Arc<ServiceContext>,
-    connector: Arc<C>,
     balancer: PingBalancer,
     tun_config: TunConfiguration,
     udp_expiry_duration: Option<Duration>,
@@ -42,11 +41,10 @@ pub struct TunBuilder<C: Connector> {
     mode: Mode,
 }
 
-impl<C: Connector> TunBuilder<C> {
-    pub fn new(context: Arc<ServiceContext>, connector: Arc<C>, balancer: PingBalancer) -> TunBuilder<C> {
+impl TunBuilder {
+    pub fn new(context: Arc<ServiceContext>, balancer: PingBalancer) -> TunBuilder {
         TunBuilder {
             context,
-            connector,
             balancer,
             tun_config: TunConfiguration::default(),
             udp_expiry_duration: None,
@@ -55,28 +53,28 @@ impl<C: Connector> TunBuilder<C> {
         }
     }
 
-    pub fn address(mut self, addr: IpNet) -> TunBuilder<C> {
+    pub fn address(mut self, addr: IpNet) -> TunBuilder {
         self.tun_config.address(addr.addr()).netmask(addr.netmask());
         self
     }
 
-    pub fn destination(mut self, addr: IpNet) -> TunBuilder<C> {
+    pub fn destination(mut self, addr: IpNet) -> TunBuilder {
         self.tun_config.destination(addr.addr());
         self
     }
 
-    pub fn name(mut self, name: &str) -> TunBuilder<C> {
+    pub fn name(mut self, name: &str) -> TunBuilder {
         self.tun_config.name(name);
         self
     }
 
     #[cfg(unix)]
-    pub fn file_descriptor(mut self, fd: RawFd) -> TunBuilder<C> {
+    pub fn file_descriptor(mut self, fd: RawFd) -> TunBuilder {
         self.tun_config.raw_fd(fd);
         self
     }
 
-    pub fn udp_expiry_duration(mut self, udp_expiry_duration: Duration) -> TunBuilder<C> {
+    pub fn udp_expiry_duration(mut self, udp_expiry_duration: Duration) -> TunBuilder {
         self.udp_expiry_duration = Some(udp_expiry_duration);
         self
     }
@@ -106,7 +104,7 @@ impl<C: Connector> TunBuilder<C> {
             Err(err) => return Err(io::Error::new(ErrorKind::Other, err)),
         };
 
-        let (udp, udp_cleanup_interval, udp_keepalive_rx) = UdpTun::new(
+        let (udp, udp_close_rx) = UdpTun::new(
             self.context.clone(),
             self.balancer.clone(),
             self.udp_expiry_duration,
@@ -123,8 +121,7 @@ impl<C: Connector> TunBuilder<C> {
             device,
             tcp,
             udp,
-            udp_cleanup_interval,
-            udp_keepalive_rx,
+            udp_close_rx,
             mode: self.mode,
         })
     }
@@ -134,8 +131,7 @@ pub struct Tun {
     device: AsyncDevice,
     tcp: TcpTun,
     udp: UdpTun,
-    udp_cleanup_interval: Duration,
-    udp_keepalive_rx: mpsc::Receiver<SocketAddr>,
+    udp_close_rx: UdpAssociationCloseReceiver,
     mode: Mode,
 }
 
@@ -152,7 +148,6 @@ impl Tun {
         );
 
         let mut packet_buffer = vec![0u8; 65536 + IFF_PI_PREFIX_LEN].into_boxed_slice();
-        let mut udp_cleanup_timer = time::interval(self.udp_cleanup_interval);
 
         loop {
             tokio::select! {
@@ -185,15 +180,17 @@ impl Tun {
                     }
                 }
 
-                // UDP cleanup expired associations
-                _ = udp_cleanup_timer.tick() => {
-                    self.udp.cleanup_expired().await;
-                }
-
                 // UDP keep-alive associations
-                peer_addr_opt = self.udp_keepalive_rx.recv() => {
-                    let peer_addr = peer_addr_opt.expect("UDP keep-alive channel closed unexpectly");
-                    self.udp.keep_alive(&peer_addr).await;
+                close_opt = self.udp_close_rx.recv() => {
+                    let (peer_addr, reason) = match close_opt {
+                        Some(v) => v,
+                        None => {
+                            error!("[TUN] udp close rx closed");
+                            return Err(io::Error::new(io::ErrorKind::Other, "udp close rx closed"));
+                        }
+                    };
+
+                    self.udp.close_association(&peer_addr, reason)
                 }
 
                 // TCP channel sent back
