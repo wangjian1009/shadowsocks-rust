@@ -285,6 +285,9 @@ struct SSLocalExtConfig {
     tun_interface_destination: Option<String>,
     #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
     #[serde(skip_serializing_if = "Option::is_none")]
+    tun_device_fd: Option<i32>,
+    #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
+    #[serde(skip_serializing_if = "Option::is_none")]
     tun_device_fd_from_path: Option<String>,
 
     /// SOCKS5
@@ -1601,6 +1604,14 @@ impl Config {
                             local_config.tun_device_fd_from_path = Some(From::from(tun_device_fd_from_path));
                         }
 
+                        #[cfg(all(
+                            any(feature = "local-tun", feature = "wireguard"),
+                            any(unix, target_os = "android")
+                        ))]
+                        if let Some(tun_device_fd) = local.tun_device_fd {
+                            local_config.tun_device_fd = Some(tun_device_fd);
+                        }
+
                         #[cfg(feature = "local")]
                         if let Some(socks5_auth_config_path) = local.socks5_auth_config_path {
                             local_config.socks5_auth = Socks5AuthConfig::load_from_file(&socks5_auth_config_path)?;
@@ -2539,6 +2550,11 @@ impl fmt::Display for Config {
                         tun_interface_address: local.tun_interface_address.as_ref().map(ToString::to_string),
                         #[cfg(any(feature = "local-tun", feature = "wireguard"))]
                         tun_interface_destination: local.tun_interface_destination.as_ref().map(ToString::to_string),
+                        #[cfg(all(
+                            any(feature = "local-tun", feature = "wireguard"),
+                            any(unix, target_os = "android")
+                        ))]
+                        tun_device_fd: local.tun_device_fd,
                         #[cfg(all(
                             any(feature = "local-tun", feature = "wireguard"),
                             any(unix, target_os = "android")

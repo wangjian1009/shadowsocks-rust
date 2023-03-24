@@ -45,6 +45,13 @@ pub extern "C" fn lib_local_run(
     control_port: c_ushort,
     #[cfg(target_os = "android")] c_vpn_protect_path: *const c_char,
 ) {
+    // use tracing_oslog::OsLogger;
+    // use tracing_subscriber::layer::SubscriberExt;
+
+    // let collector = tracing_subscriber::registry().with(OsLogger::new("moe.absolucy.test", "default"));
+    // tracing::subscriber::set_global_default(collector).expect("failed to set global subscriber");
+
+    // tracing::error!("xxxxx lib_local_run 1");
     let str_config = unsafe { CStr::from_ptr(c_config).to_string_lossy().to_owned() };
 
     let acl_path = if !c_acl_path.is_null() {
@@ -85,6 +92,8 @@ pub extern "C" fn lib_local_run(
             crate::logging::init_with_config("sslocal", &log_config)
         };
 
+        // tracing::trace!("config = {}", str_config);
+
         let config = load_config(
             &str_config,
             acl_path.as_deref(),
@@ -95,7 +104,9 @@ pub extern "C" fn lib_local_run(
             vpn_protect_path.as_deref(),
         );
 
-        run(config, control_port).await;
+        if let Some(config) = config {
+            run(config, control_port).await;
+        }
 
         #[cfg(feature = "logging")]
         log_guard.close().await;
@@ -108,27 +119,31 @@ fn load_config(
     control_port: u16,
     #[cfg(feature = "local-flow-stat")] stat_path: Option<&str>,
     #[cfg(target_os = "android")] vpn_protect_path: Option<&str>,
-) -> Config {
+) -> Option<Config> {
     let mut config = match Config::load_from_str(str_config, ConfigType::Local) {
         Ok(c) => c,
         Err(e) => {
-            panic!("load_config fail: {}", e);
+            tracing::error!(err = ?e, "load_config fail");
+            return None;
         }
     };
 
     if config.local.is_empty() {
-        panic!(
+        tracing::error!(
             "missing `local_address`, consider specifying it by \"local_address\" and \"local_port\" in configuration file");
+        return None;
     }
 
     if config.server.is_empty() {
-        panic!(
+        tracing::error!(
             "missing proxy servers, consider specifying it by configuration file, check more details in https://shadowsocks.org/en/config/quick-guide.html"
         );
+        return None;
     }
 
     if let Err(err) = config.check_integrity() {
-        panic!("config integrity check failed, {}", err);
+        tracing::error!(err = ?err, "config integrity check failed");
+        return None;
     }
 
     #[cfg(target_os = "android")]
@@ -152,13 +167,14 @@ fn load_config(
         let acl = match AccessControl::load_from_file(acl_path) {
             Ok(acl) => acl,
             Err(err) => {
-                panic!("loading ACL \"{}\", {}", acl_path, err);
+                tracing::error!(error = ?err, "loading ACL \"{}\"", acl_path);
+                return None;
             }
         };
         config.acl = Some(acl);
     }
 
-    config
+    Some(config)
 }
 
 async fn run(config: Config, control_port: u16) {
