@@ -92,6 +92,20 @@ pub(super) async fn create_wg_server(
                 }
 
                 // tracing::error!("xxxxx: tx={}, rx={}", peer.rx_bytes, peer.tx_bytes);
+
+                #[cfg(feature = "local-fake-mode")]
+                {
+                    use crate::local::context::FakeMode;
+
+                    let fake_mode = context.fake_mode();
+                    match fake_mode {
+                        FakeMode::ParamError => {
+                            cfg.remove_peer(&peer.public_key);
+                            // tracing::error!("xxxxxxx: remove {:?}", peer.public_key);
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
     })));
