@@ -1,5 +1,5 @@
 use std::os::unix::io::RawFd;
-use tokio::io;
+use tokio::io::{self, AsyncWriteExt};
 
 use shadowsocks::wg::{plt, set_configuration, Config as WgConfig, Configuration, WireGuard, WireGuardConfig};
 
@@ -150,6 +150,10 @@ async fn read_tun_fd(config: &LocalInstanceConfig) -> io::Result<RawFd> {
                     }
 
                     tracing::info!("got file descriptor {} for tun from {:?}", fd_buffer[0], peer_addr);
+
+                    if let Err(err) = stream.write_u8(0).await {
+                        tracing::error!(err = ?err, "client {:?} send recv fd success error", peer_addr);
+                    }
 
                     return Ok(fd_buffer[0]);
                 }
