@@ -11,10 +11,6 @@ use super::super::tests::make_packet;
 
 use std::time::Instant;
 
-fn init() {
-    // let _ = env_logger::builder().is_test(true).try_init();
-}
-
 fn pad(msg: &[u8]) -> Vec<u8> {
     let mut o = vec![0; msg.len() + SIZE_MESSAGE_PREFIX];
     o[SIZE_MESSAGE_PREFIX..SIZE_MESSAGE_PREFIX + msg.len()].copy_from_slice(msg);

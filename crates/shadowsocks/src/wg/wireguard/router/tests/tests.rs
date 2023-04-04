@@ -1,3 +1,4 @@
+use cfg_if::cfg_if;
 use std::net::IpAddr;
 use std::ops::Deref;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -115,9 +116,8 @@ impl Callbacks for TestCallbacks {
 }
 
 #[test]
+#[traced_test]
 fn test_outbound() {
-    init();
-
     // create device
     let (_fake, _reader, tun_writer, _mtu) = dummy::TunTest::create(false);
     let router: Device<_, TestCallbacks, _, _> = Device::new(1, tun_writer);
@@ -220,9 +220,8 @@ fn test_outbound() {
 }
 
 #[test]
+#[traced_test]
 fn test_bidirectional() {
-    init();
-
     const MAX_SIZE_BODY: usize = 1 << 15;
 
     let tests = [

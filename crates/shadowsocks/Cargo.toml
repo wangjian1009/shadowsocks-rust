@@ -64,7 +64,7 @@ vless = ["rand", "hex"]
 tuic = ["byteorder", "quinn", "parking_lot", "crossbeam-utils", "rustls", "rustls-native-certs", "rustls-pemfile"]
 wireguard = ["byteorder", "dashmap", "parking_lot", "digest", "generic-array", "hex", "aead", "arraydeque", "blake2",
              "chacha20poly1305", "clear_on_drop", "crossbeam-channel", "hjul", "rand", "ring", "zerocopy",
-             "x25519-dalek", "subtle", "treebitmap", "hmac"]
+             "x25519-dalek", "subtle", "treebitmap", "rustls", "hmac"]
 
 rate-limit = ["governor", "nonzero_ext", "futures-timer", "quanta", "lazy_static", "regex"]
 

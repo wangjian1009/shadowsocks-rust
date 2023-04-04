@@ -1,5 +1,6 @@
 use super::dummy;
 use super::wireguard::WireGuard;
+use cfg_if::cfg_if;
 
 use std::convert::TryInto;
 use std::net::IpAddr;
@@ -69,17 +70,35 @@ pub fn make_packet(size: usize, src: IpAddr, dst: IpAddr, id: u64) -> Vec<u8> {
  * - All packets are delivered in-order
  */
 #[test]
+#[traced_test]
 fn test_pure_wireguard() {
     // create WG instances for dummy TUN devices
     use crate::net::ConnectOpts;
 
+    cfg_if! {
+        if #[cfg(feature = "rate-limit")] {
+            use std::sync::Arc;
+            use crate::transport::RateLimiter;
+        }
+    }
+
     let (fake1, tun_reader1, tun_writer1, _) = dummy::TunTest::create(true);
-    let wg1: WireGuard<dummy::TunTest, dummy::PairBind> = WireGuard::new(tun_writer1, ConnectOpts::default());
+    let wg1: WireGuard<dummy::TunTest, dummy::PairBind> = WireGuard::new(
+        tun_writer1,
+        ConnectOpts::default(),
+        #[cfg(feature = "rate-limit")]
+        Arc::new(RateLimiter::new(None).unwrap()),
+    );
     wg1.add_tun_reader(tun_reader1);
     wg1.up(1500);
 
     let (fake2, tun_reader2, tun_writer2, _) = dummy::TunTest::create(true);
-    let wg2: WireGuard<dummy::TunTest, dummy::PairBind> = WireGuard::new(tun_writer2, ConnectOpts::default());
+    let wg2: WireGuard<dummy::TunTest, dummy::PairBind> = WireGuard::new(
+        tun_writer2,
+        ConnectOpts::default(),
+        #[cfg(feature = "rate-limit")]
+        Arc::new(RateLimiter::new(None).unwrap()),
+    );
     wg2.add_tun_reader(tun_reader2);
     wg2.up(1500);
 
