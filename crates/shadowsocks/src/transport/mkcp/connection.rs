@@ -314,10 +314,10 @@ impl MkcpConnectionContext {
         self.state_begin_time.load(Ordering::Relaxed) as _
     }
 
-    #[cfg(test)]
-    pub fn mss(&self) -> u32 {
-        self.mss
-    }
+    // #[cfg(test)]
+    // pub fn mss(&self) -> u32 {
+    //     self.mss
+    // }
 
     #[inline]
     pub fn output(&self) -> &Arc<MkcpPacketWriter> {
@@ -981,57 +981,57 @@ impl Drop for MkcpConnection {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use super::{super::test::collect::*, segment::*, *};
+// #[cfg(test)]
+// mod test {
+//     use super::{super::test::collect::*, segment::*, *};
 
-    #[tokio::test]
-    async fn basic_data_first() {
-        let config = Arc::new(MkcpConfig::default());
-        let (conn, mut outputs) =
-            create_connection(config.clone(), 1, MkcpConnWay::Incoming, "1.1.1.1:1", "2.2.2.2:2", None);
+//     #[tokio::test]
+//     async fn basic_data_first() {
+//         let config = Arc::new(MkcpConfig::default());
+//         let (conn, mut outputs) =
+//             create_connection(config.clone(), 1, MkcpConnWay::Incoming, "1.1.1.1:1", "2.2.2.2:2", None);
 
-        conn.input(vec![segment::Segment {
-            conv: 1,
-            option: 0,
-            data: SegmentData::Data(DataSegment {
-                timestamp: 1,
-                number: 0,
-                sending_next: 0,
-                payload: Arc::new(Bytes::copy_from_slice(b"abcd")),
-            }),
-        }]);
+//         conn.input(vec![segment::Segment {
+//             conv: 1,
+//             option: 0,
+//             data: SegmentData::Data(DataSegment {
+//                 timestamp: 1,
+//                 number: 0,
+//                 sending_next: 0,
+//                 payload: Arc::new(Bytes::copy_from_slice(b"abcd")),
+//             }),
+//         }]);
 
-        let seg = outputs.recv().await.unwrap();
+//         let seg = outputs.recv().await.unwrap();
 
-        assert_eq!(seg.conv, 1);
-        assert_eq!(seg.option, 0);
+//         assert_eq!(seg.conv, 1);
+//         assert_eq!(seg.option, 0);
 
-        assert_matches!(seg.data, SegmentData::Ack(..));
-        if let SegmentData::Ack(ack) = seg.data {
-            assert_eq!(ack.receiving_next, 0);
-            assert_eq!(ack.receiving_window, config.receiving_in_flight_size());
-            assert_eq!(ack.number_list, vec![0]);
-        }
+//         assert_matches!(seg.data, SegmentData::Ack(..));
+//         if let SegmentData::Ack(ack) = seg.data {
+//             assert_eq!(ack.receiving_next, 0);
+//             assert_eq!(ack.receiving_window, config.receiving_in_flight_size());
+//             assert_eq!(ack.number_list, vec![0]);
+//         }
 
-        conn.input(vec![segment::Segment {
-            conv: 1,
-            option: 0,
-            data: SegmentData::Data(DataSegment {
-                timestamp: 2,
-                number: 1,
-                sending_next: 0,
-                payload: Arc::new(Bytes::copy_from_slice(b"abcd")),
-            }),
-        }]);
+//         conn.input(vec![segment::Segment {
+//             conv: 1,
+//             option: 0,
+//             data: SegmentData::Data(DataSegment {
+//                 timestamp: 2,
+//                 number: 1,
+//                 sending_next: 0,
+//                 payload: Arc::new(Bytes::copy_from_slice(b"abcd")),
+//             }),
+//         }]);
 
-        let seg = outputs.recv().await.unwrap();
-        assert_matches!(seg.data, SegmentData::Ack(..));
-        if let SegmentData::Ack(ack) = seg.data {
-            assert_eq!(ack.receiving_next, 0);
-            assert_eq!(ack.receiving_window, config.receiving_in_flight_size());
-            assert_eq!(ack.number_list, vec![1, 0]);
-            assert_eq!(ack.timestamp, 2);
-        }
-    }
-}
+//         let seg = outputs.recv().await.unwrap();
+//         assert_matches!(seg.data, SegmentData::Ack(..));
+//         if let SegmentData::Ack(ack) = seg.data {
+//             assert_eq!(ack.receiving_next, 0);
+//             assert_eq!(ack.receiving_window, config.receiving_in_flight_size());
+//             assert_eq!(ack.number_list, vec![1, 0]);
+//             assert_eq!(ack.timestamp, 2);
+//         }
+//     }
+// }

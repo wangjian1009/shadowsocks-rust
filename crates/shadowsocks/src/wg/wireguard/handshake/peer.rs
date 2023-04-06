@@ -1,7 +1,7 @@
 use spin::Mutex;
 
 use std::mem;
-use std::time::{Duration, Instant};
+use tokio::time::{Duration, Instant};
 
 use generic_array::typenum::U32;
 use generic_array::GenericArray;

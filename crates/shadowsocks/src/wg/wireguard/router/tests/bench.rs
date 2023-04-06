@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 #[cfg(feature = "unstable")]
 extern crate test;
 
@@ -52,16 +54,17 @@ impl TransmissionCounter {
 
 struct BencherCallbacks {}
 
+#[async_trait]
 impl Callbacks for BencherCallbacks {
     type Opaque = Arc<TransmissionCounter>;
-    fn send(t: &Self::Opaque, size: usize, _sent: bool, _keypair: &Arc<KeyPair>, _counter: u64) {
+    async fn send(t: &Self::Opaque, size: usize, _sent: bool, _keypair: &Arc<KeyPair>, _counter: u64) {
         t.sent.fetch_add(size, Ordering::SeqCst);
     }
-    fn recv(t: &Self::Opaque, size: usize, _sent: bool, _keypair: &Arc<KeyPair>) {
+    async fn recv(t: &Self::Opaque, size: usize, _sent: bool, _keypair: &Arc<KeyPair>) {
         t.recv.fetch_add(size, Ordering::SeqCst);
     }
-    fn need_key(_t: &Self::Opaque) {}
-    fn key_confirmed(_t: &Self::Opaque) {}
+    async fn need_key(_t: &Self::Opaque) {}
+    async fn key_confirmed(_t: &Self::Opaque) {}
 }
 
 #[cfg(feature = "profiler")]
@@ -135,9 +138,7 @@ fn bench_router_outbound(b: &mut Bencher) {
     b.iter(|| {
         opaque.reset();
         while opaque.sent() < BYTES_PER_ITER / packet.len() {
-            router
-                .send(msg.to_vec())
-                .expect("failed to crypto-route packet");
+            router.send(msg.to_vec()).expect("failed to crypto-route packet");
         }
     });
 

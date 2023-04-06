@@ -123,7 +123,7 @@ transport-restls = ["transport", "shadowsocks/transport-restls"]
 trojan = ["shadowsocks/trojan"]
 vless = ["shadowsocks/vless"]
 tuic = ["shadowsocks/tuic"]
-wireguard = ["shadowsocks/wireguard"]
+wireguard = ["shadowsocks/wireguard", "tun"]
 
 # Enables trust-dns for replacing tokio's builtin DNS resolver
 trust-dns = ["trust-dns-resolver", "shadowsocks/trust-dns"]

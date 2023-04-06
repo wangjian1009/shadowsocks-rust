@@ -11,7 +11,7 @@ pub use error::ConfigError;
 pub use config::Configuration;
 pub use config::WireGuardConfig;
 
-pub fn set_configuration(config: &impl Configuration, content: &str) -> Result<(), ConfigError> {
+pub async fn set_configuration(config: &impl Configuration, content: &str) -> Result<(), ConfigError> {
     tracing::debug!("UAPI, Set operation");
     let mut parser = uapi::LineParser::new(config);
     for ln in content.lines() {
@@ -19,10 +19,10 @@ pub fn set_configuration(config: &impl Configuration, content: &str) -> Result<(
             break;
         }
         let (k, v) = keypair(ln)?;
-        parser.parse_line(k, v)?;
+        parser.parse_line(k, v).await?;
     }
 
-    parser.parse_line("", "")
+    parser.parse_line("", "").await
 }
 
 // split into (key, value) pair

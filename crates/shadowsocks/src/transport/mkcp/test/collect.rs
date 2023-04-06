@@ -1,33 +1,33 @@
 use super::*;
 use async_trait::async_trait;
-use std::net::SocketAddr;
+// use std::net::SocketAddr;
 
-use super::{super::io::*, mock::*, segment::*};
+use super::segment::*;
 use crate::transport::{PacketMutWrite, PacketWrite};
 
+use super::mock::MockPacketRead;
 use tokio::sync::mpsc;
 
 pub struct PacketCollector {
-    sender: mpsc::Sender<Segment>,
+    _sender: mpsc::Sender<Segment>,
 }
 
 #[async_trait]
 impl PacketWrite for PacketCollector {
     async fn write_to(&self, buf: &[u8], addr: &ServerAddr) -> io::Result<()> {
-        // let mut pr = MockPacketRead::new();
-        // pr.read_one_block(buf.to_vec(), addr.to_string().as_str());
-        // let mut pr = MkcpPacketReader::new(pr, None, None);
-        // let (segments, ..) = pr.read().await?;
+        let mut pr = MockPacketRead::new();
+        pr.read_one_block(buf.to_vec(), addr.to_string().as_str());
+        let mut pr = MkcpPacketReader::new(pr, None, None);
+        let (segments, ..) = pr.read().await?;
 
-        // for seg in segments {
-        //     match self.sender.send(seg).await {
-        //         Ok(()) => {}
-        //         Err(err) => panic!("send seg error: {}", err),
-        //     }
-        // }
+        for seg in segments {
+            match self.sender.send(seg).await {
+                Ok(()) => {}
+                Err(err) => panic!("send seg error: {}", err),
+            }
+        }
 
-        // Ok(())
-        unimplemented!()
+        Ok(())
     }
 }
 
@@ -39,12 +39,12 @@ impl PacketMutWrite for PacketCollector {
 }
 
 pub fn create_connection(
-    config: Arc<MkcpConfig>,
-    conv: u16,
-    way: MkcpConnWay,
-    local_addr: &str,
-    remote_addr: &str,
-    statistic: Option<Arc<StatisticStat>>,
+    _config: Arc<MkcpConfig>,
+    _conv: u16,
+    _way: MkcpConnWay,
+    _local_addr: &str,
+    _remote_addr: &str,
+    _statistic: Option<Arc<StatisticStat>>,
 ) -> (MkcpConnection, mpsc::Receiver<Segment>) {
     // let (tx, rx) = mpsc::channel(100);
 
@@ -65,16 +65,15 @@ pub fn create_connection(
     //     ),
     //     rx,
     // )
-    unimplemented!()
 }
 
 pub fn create_connection_ctx(
-    config: Arc<MkcpConfig>,
-    conv: u16,
-    way: MkcpConnWay,
-    local_addr: &str,
-    remote_addr: &str,
-    statistic: Option<Arc<StatisticStat>>,
+    _config: Arc<MkcpConfig>,
+    _conv: u16,
+    _way: MkcpConnWay,
+    _local_addr: &str,
+    _remote_addr: &str,
+    _statistic: Option<Arc<StatisticStat>>,
 ) -> (connection::MkcpConnectionContext, mpsc::Receiver<Segment>) {
     // let (tx, rx) = mpsc::channel(100);
 

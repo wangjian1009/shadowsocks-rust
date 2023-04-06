@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 use super::messages::{TransportHeader, TYPE_TRANSPORT};
 use super::peer::Peer;
 use super::queue::{ParallelJob, Queue, SequentialJob};
@@ -94,12 +96,13 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> ParallelJob f
     }
 }
 
+#[async_trait]
 impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> SequentialJob for SendJob<E, C, T, B> {
     fn is_ready(&self) -> bool {
         self.0.ready.load(Ordering::Acquire)
     }
 
-    fn sequential_work(self) {
+    async fn sequential_work(self) {
         debug_assert_eq!(
             self.is_ready(),
             true,
@@ -111,9 +114,9 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> SequentialJob
         // send to peer
         let job = &self.0;
         let msg = job.buffer.lock();
-        let xmit = job.peer.send_raw(&msg[..]).is_ok();
+        let xmit = job.peer.send_raw(&msg[..]).await.is_ok();
 
         // trigger callback (for timers)
-        C::send(&job.peer.opaque, msg.len(), xmit, &job.keypair, job.counter);
+        C::send(&job.peer.opaque, msg.len(), xmit, &job.keypair, job.counter).await;
     }
 }

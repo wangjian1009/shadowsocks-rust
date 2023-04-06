@@ -52,7 +52,7 @@ impl<'a, C: Configuration> LineParser<'a, C> {
         }
     }
 
-    pub fn parse_line(&mut self, key: &str, value: &str) -> Result<(), ConfigError> {
+    pub async fn parse_line(&mut self, key: &str, value: &str) -> Result<(), ConfigError> {
         #[cfg(debug)]
         {
             if key.len() > 0 {
@@ -61,43 +61,43 @@ impl<'a, C: Configuration> LineParser<'a, C> {
         }
 
         // flush peer updates to configuration
-        fn flush_peer<C: Configuration>(config: &C, peer: &ParsedPeer) -> Option<ConfigError> {
+        async fn flush_peer<C: Configuration>(config: &C, peer: &ParsedPeer) -> Option<ConfigError> {
             if peer.remove {
                 tracing::trace!("flush peer, remove peer");
-                config.remove_peer(&peer.public_key);
+                config.remove_peer(&peer.public_key).await;
                 return None;
             }
 
             if !peer.update_only {
                 tracing::trace!("flush peer, add peer");
-                config.add_peer(&peer.public_key);
+                config.add_peer(&peer.public_key).await;
             }
 
             for (ip, cidr) in &peer.allowed_ips {
                 tracing::trace!("flush peer, add allowed_ips : {}/{}", ip.to_string(), cidr);
-                config.add_allowed_ip(&peer.public_key, *ip, *cidr);
+                config.add_allowed_ip(&peer.public_key, *ip, *cidr).await;
             }
 
             if let Some(psk) = peer.preshared_key {
                 tracing::trace!("flush peer, set preshared_key {}", hex::encode(psk));
-                config.set_preshared_key(&peer.public_key, psk);
+                config.set_preshared_key(&peer.public_key, psk).await;
             }
 
             if let Some(secs) = peer.persistent_keepalive_interval {
                 tracing::trace!("flush peer, set persistent_keepalive_interval {}", secs);
-                config.set_persistent_keepalive_interval(&peer.public_key, secs);
+                config.set_persistent_keepalive_interval(&peer.public_key, secs).await;
             }
 
             if let Some(version) = peer.protocol_version {
                 tracing::trace!("flush peer, set protocol_version {}", version);
-                if version == 0 || version > config.get_protocol_version() {
+                if version == 0 || version > config.get_protocol_version().await {
                     return Some(ConfigError::UnsupportedProtocolVersion);
                 }
             }
 
             if let Some(endpoint) = peer.endpoint {
                 tracing::trace!("flush peer, set endpoint {}", endpoint.to_string());
-                config.set_endpoint(&peer.public_key, endpoint);
+                config.set_endpoint(&peer.public_key, endpoint).await;
             };
 
             None
@@ -110,11 +110,13 @@ impl<'a, C: Configuration> LineParser<'a, C> {
                 // opt: set private key
                 "private_key" => match <[u8; 32]>::from_hex(value) {
                     Ok(sk) => {
-                        self.config.set_private_key(if sk.ct_eq(&[0u8; 32]).into() {
-                            None
-                        } else {
-                            Some(StaticSecret::from(sk))
-                        });
+                        self.config
+                            .set_private_key(if sk.ct_eq(&[0u8; 32]).into() {
+                                None
+                            } else {
+                                Some(StaticSecret::from(sk))
+                            })
+                            .await;
                         Ok(())
                     }
                     Err(_) => Err(ConfigError::InvalidHexValue),
@@ -123,7 +125,7 @@ impl<'a, C: Configuration> LineParser<'a, C> {
                 // opt: set listen port
                 "listen_port" => match value.parse() {
                     Ok(port) => {
-                        self.config.set_listen_port(port)?;
+                        self.config.set_listen_port(port).await?;
                         Ok(())
                     }
                     Err(_) => Err(ConfigError::InvalidPortNumber),
@@ -132,7 +134,9 @@ impl<'a, C: Configuration> LineParser<'a, C> {
                 // opt: set fwmark
                 "fwmark" => match value.parse() {
                     Ok(fwmark) => {
-                        self.config.set_fwmark(if fwmark == 0 { None } else { Some(fwmark) })?;
+                        self.config
+                            .set_fwmark(if fwmark == 0 { None } else { Some(fwmark) })
+                            .await?;
                         Ok(())
                     }
                     Err(_) => Err(ConfigError::InvalidFwmark),
@@ -141,8 +145,8 @@ impl<'a, C: Configuration> LineParser<'a, C> {
                 // opt: remove all peers
                 "replace_peers" => match value {
                     "true" => {
-                        for p in self.config.get_peers() {
-                            self.config.remove_peer(&p.public_key)
+                        for p in self.config.get_peers().await {
+                            self.config.remove_peer(&p.public_key).await
                         }
                         Ok(())
                     }
@@ -166,7 +170,7 @@ impl<'a, C: Configuration> LineParser<'a, C> {
             ParserState::Peer(ref mut peer) => match key {
                 // opt: new peer
                 "public_key" => {
-                    flush_peer(self.config, &peer);
+                    flush_peer(self.config, &peer).await;
                     self.state = Self::new_peer(value)?;
                     Ok(())
                 }
@@ -246,7 +250,7 @@ impl<'a, C: Configuration> LineParser<'a, C> {
                 // flush (used at end of transcipt)
                 "" => {
                     tracing::trace!("UAPI, Set, processes end of transaction");
-                    flush_peer(self.config, &peer);
+                    flush_peer(self.config, &peer).await;
                     Ok(())
                 }
 

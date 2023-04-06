@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::thread;
 
 use spin::{Mutex, RwLock};
 use zerocopy::LayoutVerified;
@@ -86,8 +85,8 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> Deref for Dev
 }
 
 pub struct DeviceHandle<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> {
-    state: Device<E, C, T, B>,            // reference to device state
-    handles: Vec<thread::JoinHandle<()>>, // join handles for workers
+    state: Device<E, C, T, B>,                 // reference to device state
+    handles: Vec<tokio::task::JoinHandle<()>>, // join handles for workers
 }
 
 impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> Drop for DeviceHandle<E, C, T, B> {
@@ -99,8 +98,8 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> Drop for Devi
 
         // join all worker threads
         while let Some(handle) = self.handles.pop() {
-            handle.thread().unpark();
-            handle.join().unwrap();
+            handle.abort();
+            // handle.join().unwrap();
         }
         tracing::debug!("router: joined with all workers from pool");
     }
@@ -122,7 +121,7 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> DeviceHandle<
         // start worker threads
         let mut threads = Vec::with_capacity(num_workers);
         while let Some(rx) = consumers.pop() {
-            threads.push(thread::spawn(move || worker(rx)));
+            threads.push(tokio::spawn(async move { worker(rx).await }));
         }
         debug_assert!(num_workers > 0, "zero worker threads");
         debug_assert_eq!(threads.len(), num_workers, "workers does not match consumers");
@@ -134,7 +133,7 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> DeviceHandle<
         }
     }
 
-    pub fn send_raw(
+    pub async fn send_raw(
         &self,
         msg: &[u8],
         dst: &mut E,
@@ -143,14 +142,14 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> DeviceHandle<
         let bind = self.state.outbound.read();
         if bind.0 {
             if let Some(bind) = bind.1.as_ref() {
-                bind.write(msg, dst)?;
+                bind.write(msg, dst).await?;
                 #[cfg(feature = "rate-limit")]
                 {
                     let processed_size = msg.len();
                     if let Err(err) = rate_limit.check_n((processed_size as u32).into_nonzero().unwrap()) {
                         match err {
                             NegativeMultiDecision::BatchNonConforming(duration) => {
-                                std::thread::sleep(duration);
+                                tokio::time::sleep(duration).await;
                             }
                             NegativeMultiDecision::InsufficientCapacity => {
                                 tracing::error!("xxxxx: check_n size={} unexpected", processed_size);
@@ -199,7 +198,7 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> DeviceHandle<
     /// # Arguments
     ///
     /// - msg: IP packet to crypt-key route
-    pub fn send(&self, msg: Vec<u8>) -> Result<(), RouterError> {
+    pub async fn send(&self, msg: Vec<u8>) -> Result<(), RouterError> {
         debug_assert!(msg.len() > SIZE_MESSAGE_PREFIX);
         tracing::trace!("send, packet = {}", hex::encode(&msg[SIZE_MESSAGE_PREFIX..]));
 
@@ -214,7 +213,7 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> DeviceHandle<
             .ok_or(RouterError::NoCryptoKeyRoute)?;
 
         // schedule for encryption and transmission to peer
-        peer.send(msg, true);
+        peer.send(msg, true).await;
         Ok(())
     }
 
@@ -226,7 +225,7 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> DeviceHandle<
     /// - msg: Encrypted transport message
     ///
     /// # Returns
-    pub fn recv(&self, src: E, msg: Vec<u8>) -> Result<(), RouterError> {
+    pub async fn recv(&self, src: E, msg: Vec<u8>) -> Result<(), RouterError> {
         tracing::trace!("receive, src: {}", src.into_address());
 
         // parse / cast
@@ -262,7 +261,7 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> DeviceHandle<
         // 1. add to sequential queue (drop if full)
         // 2. then add to parallel work queue (wait if full)
         if dec.peer.inbound.push(job.clone()) {
-            self.state.work.send(JobUnion::Inbound(job));
+            self.state.work.send(JobUnion::Inbound(job)).await;
         }
         Ok(())
     }

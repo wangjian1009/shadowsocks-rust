@@ -9,13 +9,16 @@
 
 use super::*;
 
+use async_trait::async_trait;
 use std::cmp::min;
 use std::error::Error;
 use std::fmt;
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::Mutex;
-use std::thread;
 use std::time::Duration;
+
+use tokio::{
+    sync::mpsc::{channel, Receiver, Sender},
+    sync::Mutex,
+};
 
 use hex;
 use rand::rngs::OsRng;
@@ -30,19 +33,19 @@ pub struct TunTest {}
 pub struct TunFakeIO {
     id: u32,
     store: bool,
-    tx: SyncSender<Vec<u8>>,
-    rx: Receiver<Vec<u8>>,
+    tx: Sender<Vec<u8>>,
+    rx: Mutex<Receiver<Vec<u8>>>,
 }
 
 pub struct TunReader {
     id: u32,
-    rx: Receiver<Vec<u8>>,
+    rx: Mutex<Receiver<Vec<u8>>>,
 }
 
 pub struct TunWriter {
     id: u32,
     store: bool,
-    tx: Mutex<SyncSender<Vec<u8>>>,
+    tx: Mutex<Sender<Vec<u8>>>,
 }
 
 impl fmt::Display for TunFakeIO {
@@ -83,12 +86,13 @@ impl fmt::Display for TunError {
     }
 }
 
+#[async_trait]
 impl Reader for TunReader {
     type Error = TunError;
 
-    fn read(&self, buf: &mut [u8], offset: usize) -> Result<usize, Self::Error> {
-        match self.rx.recv() {
-            Ok(msg) => {
+    async fn read(&self, buf: &mut [u8], offset: usize) -> Result<usize, Self::Error> {
+        match self.rx.lock().await.recv().await {
+            Some(msg) => {
                 let n = min(buf.len() - offset, msg.len());
                 buf[offset..offset + n].copy_from_slice(&msg[..n]);
                 debug!(
@@ -99,19 +103,20 @@ impl Reader for TunReader {
                 );
                 Ok(n)
             }
-            Err(_) => Err(TunError::Disconnected),
+            None => Err(TunError::Disconnected),
         }
     }
 }
 
+#[async_trait]
 impl Writer for TunWriter {
     type Error = TunError;
 
-    fn write(&self, src: &[u8]) -> Result<(), Self::Error> {
+    async fn write(&self, src: &[u8]) -> Result<(), Self::Error> {
         debug!("dummy::TUN({}) : write ({}, {})", self.id, src.len(), hex::encode(src));
         if self.store {
             let m = src.to_owned();
-            match self.tx.lock().unwrap().send(m) {
+            match self.tx.lock().await.send(m).await {
                 Ok(_) => Ok(()),
                 Err(_) => Err(TunError::Disconnected),
             }
@@ -121,17 +126,18 @@ impl Writer for TunWriter {
     }
 }
 
+#[async_trait]
 impl Status for TunStatus {
     type Error = TunError;
 
-    fn event(&mut self) -> Result<TunEvent, Self::Error> {
+    async fn event(&mut self) -> Result<TunEvent, Self::Error> {
         if self.first {
             self.first = false;
             return Ok(TunEvent::Up(1420));
         }
 
         loop {
-            thread::sleep(Duration::from_secs(60 * 60));
+            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
         }
     }
 }
@@ -143,31 +149,34 @@ impl Tun for TunTest {
 }
 
 impl TunFakeIO {
-    pub fn write(&self, msg: Vec<u8>) {
+    pub async fn write(&self, msg: Vec<u8>) {
         if self.store {
-            self.tx.send(msg).unwrap();
+            self.tx.send(msg).await.unwrap();
         }
     }
 
-    pub fn read(&self) -> Vec<u8> {
-        self.rx.recv().unwrap()
+    pub async fn read(&self) -> Vec<u8> {
+        self.rx.lock().await.recv().await.unwrap()
     }
 }
 
 impl TunTest {
     pub fn create(store: bool) -> (TunFakeIO, TunReader, TunWriter, TunStatus) {
-        let (tx1, rx1) = if store { sync_channel(32) } else { sync_channel(1) };
-        let (tx2, rx2) = if store { sync_channel(32) } else { sync_channel(1) };
+        let (tx1, rx1) = if store { channel(32) } else { channel(1) };
+        let (tx2, rx2) = if store { channel(32) } else { channel(1) };
 
         let id: u32 = OsRng.gen();
 
         let fake = TunFakeIO {
             id,
             tx: tx1,
-            rx: rx2,
+            rx: Mutex::new(rx2),
             store,
         };
-        let reader = TunReader { id, rx: rx1 };
+        let reader = TunReader {
+            id,
+            rx: Mutex::new(rx1),
+        };
         let writer = TunWriter {
             id,
             tx: Mutex::new(tx2),

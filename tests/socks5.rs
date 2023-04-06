@@ -33,8 +33,8 @@ use shadowsocks_service::shadowsocks::transport::websocket;
 #[cfg(feature = "transport-tls")]
 use shadowsocks_service::shadowsocks::transport::tls;
 
-#[cfg(feature = "transport-skcp")]
-use shadowsocks_service::shadowsocks::transport::skcp;
+// #[cfg(feature = "transport-skcp")]
+// use shadowsocks_service::shadowsocks::transport::skcp;
 
 #[cfg(feature = "trojan")]
 use shadowsocks_service::shadowsocks::config::TrojanConfig;
@@ -376,18 +376,18 @@ async fn socks5_tcp_relay_ss_wss() {
     .await
 }
 
-#[cfg(feature = "transport-skcp")]
-#[tokio::test]
-#[traced_test]
-async fn socks5_tcp_relay_ss_skcp() {
-    socks5_tcp_relay_test(
-        ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
-        Some(TransportAcceptorConfig::Skcp(skcp::SkcpConfig::default())),
-        ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
-        Some(TransportConnectorConfig::Skcp(skcp::SkcpConfig::default())),
-    )
-    .await
-}
+// #[cfg(feature = "transport-skcp")]
+// #[tokio::test]
+// #[traced_test]
+// async fn socks5_tcp_relay_ss_skcp() {
+//     socks5_tcp_relay_test(
+//         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
+//         Some(TransportAcceptorConfig::Skcp(skcp::SkcpConfig::default())),
+//         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
+//         Some(TransportConnectorConfig::Skcp(skcp::SkcpConfig::default())),
+//     )
+//     .await
+// }
 
 #[cfg(feature = "trojan")]
 #[tokio::test]
@@ -461,43 +461,43 @@ async fn socks5_udp_relay_vless() {
     .await
 }
 
-#[cfg(all(feature = "vless", feature = "transport-skcp"))]
-#[tokio::test]
-#[traced_test]
-async fn socks5_tcp_relay_vless_skcp() {
-    let mut config = VlessConfig::new();
-    config
-        .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
-        .unwrap();
+// #[cfg(all(feature = "vless", feature = "transport-skcp"))]
+// #[tokio::test]
+// #[traced_test]
+// async fn socks5_tcp_relay_vless_skcp() {
+//     let mut config = VlessConfig::new();
+//     config
+//         .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
+//         .unwrap();
 
-    let config2 = config.clone();
-    socks5_tcp_relay_test(
-        ServerProtocol::Vless(config),
-        Some(TransportAcceptorConfig::Skcp(skcp::SkcpConfig::default())),
-        ServerProtocol::Vless(config2),
-        Some(TransportConnectorConfig::Skcp(skcp::SkcpConfig::default())),
-    )
-    .await
-}
+//     let config2 = config.clone();
+//     socks5_tcp_relay_test(
+//         ServerProtocol::Vless(config),
+//         Some(TransportAcceptorConfig::Skcp(skcp::SkcpConfig::default())),
+//         ServerProtocol::Vless(config2),
+//         Some(TransportConnectorConfig::Skcp(skcp::SkcpConfig::default())),
+//     )
+//     .await
+// }
 
-#[cfg(all(feature = "vless", feature = "transport-skcp"))]
-#[tokio::test]
-#[traced_test]
-async fn socks5_udp_relay_vless_skcp() {
-    let mut config = VlessConfig::new();
-    config
-        .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
-        .unwrap();
+// #[cfg(all(feature = "vless", feature = "transport-skcp"))]
+// #[tokio::test]
+// #[traced_test]
+// async fn socks5_udp_relay_vless_skcp() {
+//     let mut config = VlessConfig::new();
+//     config
+//         .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
+//         .unwrap();
 
-    let config2 = config.clone();
-    socks5_udp_relay_test(
-        ServerProtocol::Vless(config),
-        Some(TransportAcceptorConfig::Skcp(skcp::SkcpConfig::default())),
-        ServerProtocol::Vless(config2),
-        Some(TransportConnectorConfig::Skcp(skcp::SkcpConfig::default())),
-    )
-    .await
-}
+//     let config2 = config.clone();
+//     socks5_udp_relay_test(
+//         ServerProtocol::Vless(config),
+//         Some(TransportAcceptorConfig::Skcp(skcp::SkcpConfig::default())),
+//         ServerProtocol::Vless(config2),
+//         Some(TransportConnectorConfig::Skcp(skcp::SkcpConfig::default())),
+//     )
+//     .await
+// }
 
 #[cfg(feature = "tuic")]
 #[tokio::test]

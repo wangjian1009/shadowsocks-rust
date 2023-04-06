@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 use super::device::DecryptionState;
 use super::ip::inner_length;
 use super::messages::TransportHeader;
@@ -109,12 +111,13 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> ParallelJob f
     }
 }
 
+#[async_trait]
 impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> SequentialJob for ReceiveJob<E, C, T, B> {
     fn is_ready(&self) -> bool {
         self.0.ready.load(Ordering::Acquire)
     }
 
-    fn sequential_work(self) {
+    async fn sequential_work(self) {
         debug_assert_eq!(self.is_ready(), true, "doing sequential work on an incomplete job");
         tracing::trace!("processing sequential receive job");
 
@@ -142,7 +145,7 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> SequentialJob
         // check for confirms key
         if !job.state.confirmed.swap(true, Ordering::SeqCst) {
             tracing::debug!("inbound worker: message confirms key");
-            peer.confirm_key(&job.state.keypair);
+            peer.confirm_key(&job.state.keypair).await;
         }
 
         // update endpoint
@@ -152,13 +155,13 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> SequentialJob
         // (keep-alive and malformed packets will have no inner length)
         if let Some(inner) = inner_length(packet) {
             if inner + SIZE_TAG <= packet.len() {
-                let _ = peer.device.inbound.write(&packet[..inner]).map_err(|e| {
+                let _ = peer.device.inbound.write(&packet[..inner]).await.map_err(|e| {
                     tracing::debug!("failed to write inbound packet to TUN: {:?}", e);
                 });
             }
         }
 
         // trigger callback
-        C::recv(&peer.opaque, msg.1.len(), true, &job.state.keypair);
+        C::recv(&peer.opaque, msg.1.len(), true, &job.state.keypair).await;
     }
 }

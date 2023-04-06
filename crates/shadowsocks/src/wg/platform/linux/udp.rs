@@ -601,12 +601,13 @@ impl LinuxUDP {
     }
 }
 
+#[async_trait]
 impl PlatformUDP for LinuxUDP {
     type Owner = LinuxOwner;
 
     #[allow(clippy::type_complexity)]
     #[allow(clippy::unnecessary_unwrap)]
-    fn bind(
+    async fn bind(
         mut port: u16,
         _connect_opts: &ConnectOpts,
     ) -> Result<(Vec<Self::Reader>, Self::Writer, Self::Owner), Self::Error> {

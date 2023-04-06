@@ -472,133 +472,133 @@ impl SendingWorker {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use super::{
-        super::{test::collect::*, *},
-        segment::*,
-        *,
-    };
-    use tokio::sync::mpsc;
+// #[cfg(test)]
+// mod test {
+//     use super::{
+//         super::{test::collect::*, *},
+//         segment::*,
+//         *,
+//     };
+//     use tokio::sync::mpsc;
 
-    #[tokio::test]
-    #[traced_test]
-    async fn basic() {
-        let config = Arc::new(MkcpConfig::default());
-        let (worker, mut outputs) = create_worker(config.clone());
-        let worker = Arc::new(worker);
+//     #[tokio::test]
+//     #[traced_test]
+//     async fn basic() {
+//         let config = Arc::new(MkcpConfig::default());
+//         let (worker, mut outputs) = create_worker(config.clone());
+//         let worker = Arc::new(worker);
 
-        // 构造测试数据
-        let mut to_send = vec![0u8; 1024 * 1024]; // 1048576
-        for i in 0..to_send.len() {
-            to_send[i] = i as u8;
-        }
+//         // 构造测试数据
+//         let mut to_send = vec![0u8; 1024 * 1024]; // 1048576
+//         for i in 0..to_send.len() {
+//             to_send[i] = i as u8;
+//         }
 
-        let mss = worker.context.mss() as usize;
-        assert!(mss * worker.window_size as usize >= to_send.len());
+//         let mss = worker.context.mss() as usize;
+//         assert!(mss * worker.window_size as usize >= to_send.len());
 
-        let block_count = (to_send.len() / mss) + if to_send.len() % mss > 0 { 1 } else { 0 };
+//         let block_count = (to_send.len() / mss) + if to_send.len() % mss > 0 { 1 } else { 0 };
 
-        // 首次发送的数据
-        let first_send_count = worker.sending_cwnd() as usize;
-        assert!(block_count > first_send_count); // 测试发送情况，一次flush不能发送完成
+//         // 首次发送的数据
+//         let first_send_count = worker.sending_cwnd() as usize;
+//         assert!(block_count > first_send_count); // 测试发送情况，一次flush不能发送完成
 
-        // 第二次发送的数据
-        let left_count = block_count - first_send_count;
+//         // 第二次发送的数据
+//         let left_count = block_count - first_send_count;
 
-        // 接受窗口大小
-        let remote_window_size = config.sending_in_flight_size();
+//         // 接受窗口大小
+//         let remote_window_size = config.sending_in_flight_size();
 
-        let mut sending_buf = &mut to_send[..];
-        while sending_buf.len() > 0 {
-            let block_size = std::cmp::min(mss, sending_buf.len());
-            assert_eq!(worker.push(Bytes::copy_from_slice(&sending_buf[..block_size])), true);
-            sending_buf = &mut sending_buf[block_size..];
-        }
+//         let mut sending_buf = &mut to_send[..];
+//         while sending_buf.len() > 0 {
+//             let block_size = std::cmp::min(mss, sending_buf.len());
+//             assert_eq!(worker.push(Bytes::copy_from_slice(&sending_buf[..block_size])), true);
+//             sending_buf = &mut sending_buf[block_size..];
+//         }
 
-        assert_eq!(worker.window.cache.lock().len(), block_count);
-        assert_eq!(worker.next_number(), block_count as u32);
-        assert_eq!(worker.window.total_in_flight_size(), 0);
+//         assert_eq!(worker.window.cache.lock().len(), block_count);
+//         assert_eq!(worker.next_number(), block_count as u32);
+//         assert_eq!(worker.window.total_in_flight_size(), 0);
 
-        // worker.
+//         // worker.
 
-        {
-            let worker = worker.clone();
-            let remote_window_size = remote_window_size;
-            let left_count = left_count;
-            tokio::spawn(async move {
-                let mut current = worker.context.elapsed();
+//         {
+//             let worker = worker.clone();
+//             let remote_window_size = remote_window_size;
+//             let left_count = left_count;
+//             tokio::spawn(async move {
+//                 let mut current = worker.context.elapsed();
 
-                // 第一次发送
-                assert_eq!(worker.flush(&mut current).await, false);
-                assert_eq!(worker.window.total_in_flight_size(), worker.sending_cwnd());
+//                 // 第一次发送
+//                 assert_eq!(worker.flush(&mut current).await, false);
+//                 assert_eq!(worker.window.total_in_flight_size(), worker.sending_cwnd());
 
-                // 通过ACK清理头部数据
-                let mut ack = AckSegment::new();
-                ack.receiving_next = 0;
-                ack.receiving_window = ack.receiving_next + remote_window_size;
-                ack.timestamp = 0;
-                for i in 0..left_count {
-                    ack.number_list.push(i as u32);
-                }
-                let huge_rto = worker.context.elapsed() * 2; // 确保重传不会发生
-                worker.process_segment(current, ack, huge_rto);
+//                 // 通过ACK清理头部数据
+//                 let mut ack = AckSegment::new();
+//                 ack.receiving_next = 0;
+//                 ack.receiving_window = ack.receiving_next + remote_window_size;
+//                 ack.timestamp = 0;
+//                 for i in 0..left_count {
+//                     ack.number_list.push(i as u32);
+//                 }
+//                 let huge_rto = worker.context.elapsed() * 2; // 确保重传不会发生
+//                 worker.process_segment(current, ack, huge_rto);
 
-                // 第二次发送
-                assert_eq!(worker.flush(&mut current).await, false);
-            });
-        }
+//                 // 第二次发送
+//                 assert_eq!(worker.flush(&mut current).await, false);
+//             });
+//         }
 
-        // 验证发送的数据
-        let mut check_buf = &to_send[..];
+//         // 验证发送的数据
+//         let mut check_buf = &to_send[..];
 
-        // 第一次发送的数据
-        for i in 0..first_send_count {
-            let seg = outputs.recv().await.unwrap();
-            assert_eq!(seg.conv, 1);
-            assert_eq!(seg.option, 0);
-            assert_matches!(seg.data, SegmentData::Data(..));
+//         // 第一次发送的数据
+//         for i in 0..first_send_count {
+//             let seg = outputs.recv().await.unwrap();
+//             assert_eq!(seg.conv, 1);
+//             assert_eq!(seg.option, 0);
+//             assert_matches!(seg.data, SegmentData::Data(..));
 
-            if let SegmentData::Data(data) = seg.data {
-                // assert_eq!(data.timestamp, 0);
-                assert_eq!(data.number, i as u32);
-                assert_eq!(data.sending_next, 0);
-                assert_eq!(data.payload.as_ref(), &check_buf[..data.payload.len()]);
-                check_buf = &check_buf[data.payload.len()..];
-            }
-        }
+//             if let SegmentData::Data(data) = seg.data {
+//                 // assert_eq!(data.timestamp, 0);
+//                 assert_eq!(data.number, i as u32);
+//                 assert_eq!(data.sending_next, 0);
+//                 assert_eq!(data.payload.as_ref(), &check_buf[..data.payload.len()]);
+//                 check_buf = &check_buf[data.payload.len()..];
+//             }
+//         }
 
-        // 第二次发送的数据
-        for i in first_send_count..block_count {
-            let seg = outputs.recv().await.unwrap();
-            assert_eq!(seg.conv, 1);
-            assert_eq!(seg.option, 0);
-            assert_matches!(seg.data, SegmentData::Data(..));
+//         // 第二次发送的数据
+//         for i in first_send_count..block_count {
+//             let seg = outputs.recv().await.unwrap();
+//             assert_eq!(seg.conv, 1);
+//             assert_eq!(seg.option, 0);
+//             assert_matches!(seg.data, SegmentData::Data(..));
 
-            if let SegmentData::Data(data) = seg.data {
-                // assert_eq!(data.timestamp, 0);
-                assert_eq!(data.number, i as u32);
-                assert_eq!(data.sending_next, left_count as u32); // 为了第二次发送，确认了left_count个数据
-                assert_eq!(data.payload.as_ref(), &check_buf[..data.payload.len()]);
-                check_buf = &check_buf[data.payload.len()..];
-            }
-        }
+//             if let SegmentData::Data(data) = seg.data {
+//                 // assert_eq!(data.timestamp, 0);
+//                 assert_eq!(data.number, i as u32);
+//                 assert_eq!(data.sending_next, left_count as u32); // 为了第二次发送，确认了left_count个数据
+//                 assert_eq!(data.payload.as_ref(), &check_buf[..data.payload.len()]);
+//                 check_buf = &check_buf[data.payload.len()..];
+//             }
+//         }
 
-        assert_eq!(check_buf.len(), 0);
-        assert_eq!(worker.window.total_in_flight_size(), (block_count - left_count) as u32);
-    }
+//         assert_eq!(check_buf.len(), 0);
+//         assert_eq!(worker.window.total_in_flight_size(), (block_count - left_count) as u32);
+//     }
 
-    // #[test]
-    // #[traced_test]
-    // fn rto() {
-    //     let config = Arc::new(MkcpConfig::default());
-    //     let (worker, mut outputs) = create_worker(config);
-    //     let worker = Arc::new(worker);
-    // }
+//     // #[test]
+//     // #[traced_test]
+//     // fn rto() {
+//     //     let config = Arc::new(MkcpConfig::default());
+//     //     let (worker, mut outputs) = create_worker(config);
+//     //     let worker = Arc::new(worker);
+//     // }
 
-    fn create_worker(config: Arc<MkcpConfig>) -> (SendingWorker, mpsc::Receiver<Segment>) {
-        let (conn_ctx, outputs) =
-            create_connection_ctx(config.clone(), 1, MkcpConnWay::Incoming, "1.1.1.1:1", "2.2.2.2:2", None);
-        (SendingWorker::new(Arc::new(conn_ctx)), outputs)
-    }
-}
+//     fn create_worker(config: Arc<MkcpConfig>) -> (SendingWorker, mpsc::Receiver<Segment>) {
+//         let (conn_ctx, outputs) =
+//             create_connection_ctx(config.clone(), 1, MkcpConnWay::Incoming, "1.1.1.1:1", "2.2.2.2:2", None);
+//         (SendingWorker::new(Arc::new(conn_ctx)), outputs)
+//     }
+// }

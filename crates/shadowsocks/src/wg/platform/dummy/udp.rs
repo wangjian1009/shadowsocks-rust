@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use hex;
 use std::error::Error;
 use std::fmt;
@@ -7,9 +8,12 @@ use rand::rngs::OsRng;
 use rand::Rng;
 use tracing::debug;
 
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
-use std::sync::Mutex;
+
+use tokio::sync::{
+    mpsc::{channel, Receiver, Sender},
+    Mutex,
+};
 
 use crate::net::ConnectOpts;
 
@@ -45,18 +49,20 @@ impl fmt::Display for BindError {
 #[derive(Clone, Copy)]
 pub struct VoidBind {}
 
+#[async_trait]
 impl Reader<UnitEndpoint> for VoidBind {
     type Error = BindError;
 
-    fn read(&self, _buf: &mut [u8]) -> Result<(usize, UnitEndpoint), Self::Error> {
+    async fn read(&self, _buf: &mut [u8]) -> Result<(usize, UnitEndpoint), Self::Error> {
         Ok((0, UnitEndpoint {}))
     }
 }
 
+#[async_trait]
 impl Writer<UnitEndpoint> for VoidBind {
     type Error = BindError;
 
-    fn write(&self, _buf: &[u8], _dst: &mut UnitEndpoint) -> Result<(), Self::Error> {
+    async fn write(&self, _buf: &[u8], _dst: &mut UnitEndpoint) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -84,10 +90,11 @@ pub struct PairReader<E> {
     _marker: marker::PhantomData<E>,
 }
 
+#[async_trait]
 impl Reader<UnitEndpoint> for PairReader<UnitEndpoint> {
     type Error = BindError;
-    fn read(&self, buf: &mut [u8]) -> Result<(usize, UnitEndpoint), Self::Error> {
-        let vec = self.recv.lock().unwrap().recv().map_err(|_| BindError::Disconnected)?;
+    async fn read(&self, buf: &mut [u8]) -> Result<(usize, UnitEndpoint), Self::Error> {
+        let vec = self.recv.lock().await.recv().await.ok_or(BindError::Disconnected)?;
         let len = vec.len();
         buf[..len].copy_from_slice(&vec[..]);
         debug!("dummy({}): read ({}, {})", self.id, len, hex::encode(&buf[..len]));
@@ -95,12 +102,13 @@ impl Reader<UnitEndpoint> for PairReader<UnitEndpoint> {
     }
 }
 
+#[async_trait]
 impl Writer<UnitEndpoint> for PairWriter<UnitEndpoint> {
     type Error = BindError;
-    fn write(&self, buf: &[u8], _dst: &mut UnitEndpoint) -> Result<(), Self::Error> {
+    async fn write(&self, buf: &[u8], _dst: &mut UnitEndpoint) -> Result<(), Self::Error> {
         debug!("dummy({}): write ({}, {})", self.id, buf.len(), hex::encode(buf));
         let owned = buf.to_owned();
-        match self.send.lock().unwrap().send(owned) {
+        match self.send.lock().await.send(owned).await {
             Err(_) => Err(BindError::Disconnected),
             Ok(_) => Ok(()),
         }
@@ -110,7 +118,7 @@ impl Writer<UnitEndpoint> for PairWriter<UnitEndpoint> {
 #[derive(Clone)]
 pub struct PairWriter<E> {
     id: u32,
-    send: Arc<Mutex<SyncSender<Vec<u8>>>>,
+    send: Arc<Mutex<Sender<Vec<u8>>>>,
     _marker: marker::PhantomData<E>,
 }
 
@@ -122,8 +130,8 @@ impl PairBind {
         let id1: u32 = OsRng.gen();
         let id2: u32 = OsRng.gen();
 
-        let (tx1, rx1) = sync_channel(128);
-        let (tx2, rx2) = sync_channel(128);
+        let (tx1, rx1) = channel(128);
+        let (tx2, rx2) = channel(128);
         (
             (
                 PairReader {
@@ -172,9 +180,10 @@ impl Owner for VoidOwner {
     }
 }
 
+#[async_trait]
 impl PlatformUDP for PairBind {
     type Owner = VoidOwner;
-    fn bind(
+    async fn bind(
         _port: u16,
         _connect_opts: &ConnectOpts,
     ) -> Result<(Vec<Self::Reader>, Self::Writer, Self::Owner), Self::Error> {

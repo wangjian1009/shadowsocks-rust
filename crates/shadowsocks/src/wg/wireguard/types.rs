@@ -1,6 +1,6 @@
 use clear_on_drop::clear::Clear;
 use std::fmt;
-use std::time::Instant;
+use tokio::time::Instant;
 
 #[derive(Clone)]
 pub struct Key {

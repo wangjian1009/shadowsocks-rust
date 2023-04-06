@@ -1,7 +1,8 @@
+// use chrono::prelude::*;
 use generic_array::GenericArray;
 use rand::{CryptoRng, RngCore};
 use spin::RwLock;
-use std::time::{Duration, Instant};
+use tokio::time::{Duration, Instant};
 
 // types to coalesce into bytes
 use std::net::SocketAddr;
@@ -186,12 +187,30 @@ pub struct Validator {
 
 impl Validator {
     pub fn new(pk: PublicKey) -> Validator {
+        // Format the datetime in a specific way
+        let birth = Instant::now();
+        // let systime = SystemTime::now() + birth.elapsed();
+        // let datetime: DateTime<Local> = systime.into();
+        // tracing::error!(
+        //     "xxxxx: validator 4: {:?} {}",
+        //     birth,
+        //     datetime.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
+        // );
+        let birth = birth - Duration::from_secs(86400);
+        // let systime = SystemTime::now() + birth.elapsed();
+        // let datetime: DateTime<Local> = systime.into();
+        // tracing::error!(
+        //     "xxxxx: validator 7: {:?} {}",
+        //     birth,
+        //     datetime.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
+        // );
+
         Validator {
             mac1_key: HASH!(LABEL_MAC1, pk.as_bytes()).into(),
             cookie_key: HASH!(LABEL_COOKIE, pk.as_bytes()).into(),
             secret: RwLock::new(Secret {
                 value: [0u8; SIZE_SECRET],
-                birth: Instant::now() - Duration::new(86400, 0),
+                birth,
             }),
         }
     }

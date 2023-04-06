@@ -1,8 +1,7 @@
 use super::*;
 
 use std::net::SocketAddr;
-use std::thread;
-use std::time::Duration;
+use tokio::time::Duration;
 
 use hex;
 
@@ -49,8 +48,8 @@ fn setup_devices<R: RngCore + CryptoRng, O: Default>(
     (pk1, dev1, pk2, dev2)
 }
 
-fn wait() {
-    thread::sleep(Duration::from_millis(20));
+async fn wait() {
+    tokio::time::sleep(Duration::from_millis(20)).await;
 }
 
 /* Test longest possible handshake interaction (7 messages):
@@ -63,8 +62,8 @@ fn wait() {
  * 6. I -> R (initiation)
  * 7. I <- R (response)
  */
-#[test]
-fn handshake_under_load() {
+#[tokio::test]
+async fn handshake_under_load() {
     let (_pk1, dev1, pk2, dev2): (_, Device<usize>, _, _) = setup_devices(&mut OsRng, &mut OsRng, &mut OsRng);
 
     let src1: SocketAddr = "172.16.0.1:8080".parse().unwrap();
@@ -74,25 +73,25 @@ fn handshake_under_load() {
     let msg_init = dev1.begin(&mut OsRng, &pk2).unwrap();
 
     // 2. device-2 : responds with CookieReply
-    let msg_cookie = match dev2.process(&mut OsRng, &msg_init, Some(src1)).unwrap() {
+    let msg_cookie = match dev2.process(&mut OsRng, &msg_init, Some(src1)).await.unwrap() {
         (None, Some(msg), None) => msg,
         _ => panic!("unexpected response"),
     };
 
     // device-1 : processes CookieReply (no response)
-    match dev1.process(&mut OsRng, &msg_cookie, Some(src2)).unwrap() {
+    match dev1.process(&mut OsRng, &msg_cookie, Some(src2)).await.unwrap() {
         (None, None, None) => (),
         _ => panic!("unexpected response"),
     }
 
     // avoid initiation flood detection
-    wait();
+    wait().await;
 
     // 3. device-1 : create second initiation
     let msg_init = dev1.begin(&mut OsRng, &pk2).unwrap();
 
     // 4. device-2 : responds with noise response
-    let msg_response = match dev2.process(&mut OsRng, &msg_init, Some(src1)).unwrap() {
+    let msg_response = match dev2.process(&mut OsRng, &msg_init, Some(src1)).await.unwrap() {
         (Some(_), Some(msg), Some(kp)) => {
             assert_eq!(kp.initiator, false);
             msg
@@ -101,25 +100,25 @@ fn handshake_under_load() {
     };
 
     // 5. device-1 : responds with CookieReply
-    let msg_cookie = match dev1.process(&mut OsRng, &msg_response, Some(src2)).unwrap() {
+    let msg_cookie = match dev1.process(&mut OsRng, &msg_response, Some(src2)).await.unwrap() {
         (None, Some(msg), None) => msg,
         _ => panic!("unexpected response"),
     };
 
     // device-2 : processes CookieReply (no response)
-    match dev2.process(&mut OsRng, &msg_cookie, Some(src1)).unwrap() {
+    match dev2.process(&mut OsRng, &msg_cookie, Some(src1)).await.unwrap() {
         (None, None, None) => (),
         _ => panic!("unexpected response"),
     }
 
     // avoid initiation flood detection
-    wait();
+    wait().await;
 
     // 6. device-1 : create third initiation
     let msg_init = dev1.begin(&mut OsRng, &pk2).unwrap();
 
     // 7. device-2 : responds with noise response
-    let (msg_response, kp1) = match dev2.process(&mut OsRng, &msg_init, Some(src1)).unwrap() {
+    let (msg_response, kp1) = match dev2.process(&mut OsRng, &msg_init, Some(src1)).await.unwrap() {
         (Some(_), Some(msg), Some(kp)) => {
             assert_eq!(kp.initiator, false);
             (msg, kp)
@@ -128,7 +127,7 @@ fn handshake_under_load() {
     };
 
     // device-1 : process noise response
-    let kp2 = match dev1.process(&mut OsRng, &msg_response, Some(src2)).unwrap() {
+    let kp2 = match dev1.process(&mut OsRng, &msg_response, Some(src2)).await.unwrap() {
         (Some(_), None, Some(kp)) => {
             assert_eq!(kp.initiator, true);
             kp
@@ -140,8 +139,8 @@ fn handshake_under_load() {
     assert_eq!(kp1.recv, kp2.send);
 }
 
-#[test]
-fn handshake_no_load() {
+#[tokio::test]
+async fn handshake_no_load() {
     let (pk1, mut dev1, pk2, mut dev2): (_, Device<usize>, _, _) = setup_devices(&mut OsRng, &mut OsRng, &mut OsRng);
 
     // do a few handshakes (every handshake should succeed)
@@ -163,6 +162,7 @@ fn handshake_no_load() {
 
         let (_, msg2, ks_r) = dev2
             .process(&mut OsRng, &msg1, None)
+            .await
             .expect("failed to process initiation");
 
         let ks_r = ks_r.unwrap();
@@ -180,6 +180,7 @@ fn handshake_no_load() {
 
         let (_, msg3, ks_i) = dev1
             .process(&mut OsRng, &msg2, None)
+            .await
             .expect("failed to process response");
         let ks_i = ks_i.unwrap();
 
@@ -193,7 +194,7 @@ fn handshake_no_load() {
         dev2.release(ks_r.local_id());
 
         // avoid initiation flood detection
-        wait();
+        wait().await;
     }
 
     dev1.remove(&pk2).unwrap();

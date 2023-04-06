@@ -1,10 +1,13 @@
+use async_trait::async_trait;
 use std::mem;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use x25519_dalek::{PublicKey, StaticSecret};
+
+use tokio::sync::{Mutex, MutexGuard};
 
 use super::udp::Owner;
 use super::*;
@@ -38,8 +41,8 @@ struct Inner<T: tun::Tun, B: udp::PlatformUDP> {
 }
 
 impl<T: tun::Tun, B: udp::PlatformUDP> WireGuardConfig<T, B> {
-    fn lock(&self) -> MutexGuard<Inner<T, B>> {
-        self.0.lock().unwrap()
+    async fn lock(&self) -> MutexGuard<Inner<T, B>> {
+        self.0.lock().await
     }
 }
 
@@ -61,33 +64,34 @@ impl<T: tun::Tun, B: udp::PlatformUDP> Clone for WireGuardConfig<T, B> {
 }
 
 /// Exposed configuration interface
+#[async_trait]
 pub trait Configuration {
-    fn up(&self, mtu: usize) -> Result<(), ConfigError>;
+    async fn up(&self, mtu: usize) -> Result<(), ConfigError>;
 
-    fn down(&self);
+    async fn down(&self);
 
     /// Updates the private key of the device
     ///
     /// # Arguments
     ///
     /// - `sk`: The new private key (or None, if the private key should be cleared)
-    fn set_private_key(&self, sk: Option<StaticSecret>);
+    async fn set_private_key(&self, sk: Option<StaticSecret>);
 
     /// Returns the private key of the device
     ///
     /// # Returns
     ///
     /// The private if set, otherwise None.
-    fn get_private_key(&self) -> Option<StaticSecret>;
+    async fn get_private_key(&self) -> Option<StaticSecret>;
 
     /// Returns the protocol version of the device
     ///
     /// # Returns
     ///
     /// An integer indicating the protocol version
-    fn get_protocol_version(&self) -> usize;
+    async fn get_protocol_version(&self) -> usize;
 
-    fn set_listen_port(&self, port: u16) -> Result<(), ConfigError>;
+    async fn set_listen_port(&self, port: u16) -> Result<(), ConfigError>;
 
     /// Set the firewall mark (or similar, depending on platform)
     ///
@@ -99,10 +103,10 @@ pub trait Configuration {
     ///
     /// An error if this operation is not supported by the underlying
     /// "bind" implementation.
-    fn set_fwmark(&self, mark: Option<u32>) -> Result<(), ConfigError>;
+    async fn set_fwmark(&self, mark: Option<u32>) -> Result<(), ConfigError>;
 
     /// Removes all peers from the device
-    fn replace_peers(&self);
+    async fn replace_peers(&self);
 
     /// Remove the peer from the
     ///
@@ -113,7 +117,7 @@ pub trait Configuration {
     /// # Returns
     ///
     /// If the peer does not exists this operation is a noop
-    fn remove_peer(&self, peer: &PublicKey);
+    async fn remove_peer(&self, peer: &PublicKey);
 
     /// Adds a new peer to the device
     ///
@@ -126,7 +130,7 @@ pub trait Configuration {
     /// A bool indicating if the peer was added.
     ///
     /// If the peer already exists this operation is a noop
-    fn add_peer(&self, peer: &PublicKey) -> bool;
+    async fn add_peer(&self, peer: &PublicKey) -> bool;
 
     /// Update the psk of a peer
     ///
@@ -138,7 +142,7 @@ pub trait Configuration {
     /// # Returns
     ///
     /// An error if no such peer exists
-    fn set_preshared_key(&self, peer: &PublicKey, psk: [u8; 32]);
+    async fn set_preshared_key(&self, peer: &PublicKey, psk: [u8; 32]);
 
     /// Update the endpoint of the
     ///
@@ -146,7 +150,7 @@ pub trait Configuration {
     ///
     /// - `peer': The public key of the peer
     /// - `psk`
-    fn set_endpoint(&self, peer: &PublicKey, addr: SocketAddr);
+    async fn set_endpoint(&self, peer: &PublicKey, addr: SocketAddr);
 
     /// Update the endpoint of the
     ///
@@ -154,7 +158,7 @@ pub trait Configuration {
     ///
     /// - `peer': The public key of the peer
     /// - `psk`
-    fn set_persistent_keepalive_interval(&self, peer: &PublicKey, secs: u64);
+    async fn set_persistent_keepalive_interval(&self, peer: &PublicKey, secs: u64);
 
     /// Remove all allowed IPs from the peer
     ///
@@ -165,7 +169,7 @@ pub trait Configuration {
     /// # Returns
     ///
     /// An error if no such peer exists
-    fn replace_allowed_ips(&self, peer: &PublicKey);
+    async fn replace_allowed_ips(&self, peer: &PublicKey);
 
     /// Add a new allowed subnet to the peer
     ///
@@ -178,25 +182,25 @@ pub trait Configuration {
     /// # Returns
     ///
     /// An error if the peer does not exist
-    fn add_allowed_ip(&self, peer: &PublicKey, ip: IpAddr, masklen: u32);
+    async fn add_allowed_ip(&self, peer: &PublicKey, ip: IpAddr, masklen: u32);
 
-    fn get_listen_port(&self) -> Option<u16>;
+    async fn get_listen_port(&self) -> Option<u16>;
 
     /// Returns the state of all peers
     ///
     /// # Returns
     ///
     /// A list of structures describing the state of each peer
-    fn get_peers(&self) -> Vec<PeerState>;
+    async fn get_peers(&self) -> Vec<PeerState>;
 
-    fn get_fwmark(&self) -> Option<u32>;
+    async fn get_fwmark(&self) -> Option<u32>;
 }
 
-fn start_listener<T: tun::Tun, B: udp::PlatformUDP>(mut cfg: MutexGuard<Inner<T, B>>) -> Result<(), ConfigError> {
+async fn start_listener<T: tun::Tun, B: udp::PlatformUDP>(cfg: &mut Inner<T, B>) -> Result<(), ConfigError> {
     cfg.bind = None;
 
     // create new listener
-    let (mut readers, writer, mut owner) = match B::bind(cfg.port, cfg.wireguard.connect_opts()) {
+    let (mut readers, writer, mut owner) = match B::bind(cfg.port, cfg.wireguard.connect_opts()).await {
         Ok(r) => r,
         Err(_) => {
             return Err(ConfigError::FailedToBind);
@@ -219,49 +223,50 @@ fn start_listener<T: tun::Tun, B: udp::PlatformUDP>(mut cfg: MutexGuard<Inner<T,
     Ok(())
 }
 
+#[async_trait]
 impl<T: tun::Tun, B: udp::PlatformUDP> Configuration for WireGuardConfig<T, B> {
-    fn up(&self, mtu: usize) -> Result<(), ConfigError> {
+    async fn up(&self, mtu: usize) -> Result<(), ConfigError> {
         tracing::info!("configuration, set device up");
-        let cfg = self.lock();
-        cfg.wireguard.up(mtu);
-        start_listener(cfg)
+        let mut cfg = self.lock().await;
+        cfg.wireguard.up(mtu).await;
+        start_listener(&mut *cfg).await
     }
 
-    fn down(&self) {
+    async fn down(&self) {
         tracing::info!("configuration, set device down");
-        let mut cfg = self.lock();
-        cfg.wireguard.down();
+        let mut cfg = self.lock().await;
+        cfg.wireguard.down().await;
         cfg.bind = None;
     }
 
-    fn get_fwmark(&self) -> Option<u32> {
-        self.lock().fwmark
+    async fn get_fwmark(&self) -> Option<u32> {
+        self.lock().await.fwmark
     }
 
-    fn set_private_key(&self, sk: Option<StaticSecret>) {
+    async fn set_private_key(&self, sk: Option<StaticSecret>) {
         tracing::info!("configuration, set private key");
-        self.lock().wireguard.set_key(sk)
+        self.lock().await.wireguard.set_key(sk).await
     }
 
-    fn get_private_key(&self) -> Option<StaticSecret> {
-        self.lock().wireguard.get_sk()
+    async fn get_private_key(&self) -> Option<StaticSecret> {
+        self.lock().await.wireguard.get_sk().await
     }
 
-    fn get_protocol_version(&self) -> usize {
+    async fn get_protocol_version(&self) -> usize {
         1
     }
 
-    fn get_listen_port(&self) -> Option<u16> {
-        let st = self.lock();
+    async fn get_listen_port(&self) -> Option<u16> {
+        let st = self.lock().await;
         tracing::trace!("Config, Get listen port, bound: {}", st.bind.is_some());
         st.bind.as_ref().map(|bind| bind.get_port())
     }
 
-    fn set_listen_port(&self, port: u16) -> Result<(), ConfigError> {
+    async fn set_listen_port(&self, port: u16) -> Result<(), ConfigError> {
         tracing::trace!("Config, Set listen port: {:?}", port);
 
         // update port and take old bind
-        let mut cfg = self.lock();
+        let mut cfg = self.lock().await;
         let bound: bool = {
             let old = mem::replace(&mut cfg.bind, None);
             cfg.port = port;
@@ -270,15 +275,15 @@ impl<T: tun::Tun, B: udp::PlatformUDP> Configuration for WireGuardConfig<T, B> {
 
         // restart listener if bound
         if bound {
-            start_listener(cfg)
+            start_listener(&mut *cfg).await
         } else {
             Ok(())
         }
     }
 
-    fn set_fwmark(&self, mark: Option<u32>) -> Result<(), ConfigError> {
+    async fn set_fwmark(&self, mark: Option<u32>) -> Result<(), ConfigError> {
         tracing::trace!("Config, Set fwmark: {:?}", mark);
-        match self.lock().bind.as_mut() {
+        match self.lock().await.bind.as_mut() {
             Some(bind) => {
                 if bind.set_fwmark(mark).is_err() {
                     Err(ConfigError::IOError)
@@ -290,42 +295,42 @@ impl<T: tun::Tun, B: udp::PlatformUDP> Configuration for WireGuardConfig<T, B> {
         }
     }
 
-    fn replace_peers(&self) {
-        self.lock().wireguard.clear_peers();
+    async fn replace_peers(&self) {
+        self.lock().await.wireguard.clear_peers().await;
     }
 
-    fn remove_peer(&self, peer: &PublicKey) {
-        self.lock().wireguard.remove_peer(peer);
+    async fn remove_peer(&self, peer: &PublicKey) {
+        self.lock().await.wireguard.remove_peer(peer).await;
     }
 
-    fn add_peer(&self, peer: &PublicKey) -> bool {
-        self.lock().wireguard.add_peer(*peer)
+    async fn add_peer(&self, peer: &PublicKey) -> bool {
+        self.lock().await.wireguard.add_peer(*peer).await
     }
 
-    fn set_preshared_key(&self, peer: &PublicKey, psk: [u8; 32]) {
-        self.lock().wireguard.set_psk(*peer, psk);
+    async fn set_preshared_key(&self, peer: &PublicKey, psk: [u8; 32]) {
+        self.lock().await.wireguard.set_psk(*peer, psk).await;
     }
 
-    fn set_endpoint(&self, peer: &PublicKey, addr: SocketAddr) {
-        if let Some(peer) = self.lock().wireguard.peers.read().get(peer) {
+    async fn set_endpoint(&self, peer: &PublicKey, addr: SocketAddr) {
+        if let Some(peer) = self.lock().await.wireguard.peers.read().await.get(peer) {
             peer.set_endpoint(B::Endpoint::from_address(addr));
         }
     }
 
-    fn set_persistent_keepalive_interval(&self, peer: &PublicKey, secs: u64) {
-        if let Some(peer) = self.lock().wireguard.peers.read().get(peer) {
-            peer.opaque().set_persistent_keepalive_interval(secs);
+    async fn set_persistent_keepalive_interval(&self, peer: &PublicKey, secs: u64) {
+        if let Some(peer) = self.lock().await.wireguard.peers.read().await.get(peer) {
+            peer.opaque().set_persistent_keepalive_interval(secs).await;
         }
     }
 
-    fn replace_allowed_ips(&self, peer: &PublicKey) {
-        if let Some(peer) = self.lock().wireguard.peers.read().get(peer) {
+    async fn replace_allowed_ips(&self, peer: &PublicKey) {
+        if let Some(peer) = self.lock().await.wireguard.peers.read().await.get(peer) {
             peer.remove_allowed_ips();
         }
     }
 
-    fn add_allowed_ip(&self, peer: &PublicKey, ip: IpAddr, masklen: u32) {
-        if let Some(peer) = self.lock().wireguard.peers.read().get(peer) {
+    async fn add_allowed_ip(&self, peer: &PublicKey, ip: IpAddr, masklen: u32) {
+        if let Some(peer) = self.lock().await.wireguard.peers.read().await.get(peer) {
             peer.add_allowed_ip(ip, masklen);
         }
     }
@@ -349,9 +354,9 @@ impl<T: tun::Tun, B: udp::PlatformUDP> Configuration for WireGuardConfig<T, B> {
     }
     */
 
-    fn get_peers(&self) -> Vec<PeerState> {
-        let cfg = self.lock();
-        let peers = cfg.wireguard.peers.read();
+    async fn get_peers(&self) -> Vec<PeerState> {
+        let cfg = self.lock().await;
+        let peers = cfg.wireguard.peers.read().await;
         let mut state = Vec::with_capacity(peers.len());
 
         for (pk, p) in peers.iter() {
@@ -363,14 +368,14 @@ impl<T: tun::Tun, B: udp::PlatformUDP> Configuration for WireGuardConfig<T, B> {
                 (duration.as_secs(), duration.subsec_nanos() as u64)
             });
 
-            if let Some(psk) = cfg.wireguard.get_psk(&pk) {
+            if let Some(psk) = cfg.wireguard.get_psk(&pk).await {
                 // extract state into PeerState
                 state.push(PeerState {
                     preshared_key: psk,
                     endpoint: p.get_endpoint(),
                     rx_bytes: p.rx_bytes.load(Ordering::Relaxed),
                     tx_bytes: p.tx_bytes.load(Ordering::Relaxed),
-                    persistent_keepalive_interval: p.get_keepalive_interval(),
+                    persistent_keepalive_interval: p.get_keepalive_interval().await,
                     allowed_ips: p.list_allowed_ips(),
                     last_handshake_time,
                     public_key: pk,

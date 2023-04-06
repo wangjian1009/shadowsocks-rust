@@ -1,4 +1,5 @@
 use arraydeque::ArrayDeque;
+use async_trait::async_trait;
 use spin::Mutex;
 
 use core::mem;
@@ -6,10 +7,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use super::constants::INORDER_QUEUE_SIZE;
 
+#[async_trait]
 pub trait SequentialJob {
     fn is_ready(&self) -> bool;
 
-    fn sequential_work(self);
+    async fn sequential_work(self);
 }
 
 pub trait ParallelJob: Sized + SequentialJob {
@@ -41,7 +43,7 @@ impl<J: SequentialJob> Queue<J> {
         self.queue.lock().push_back(job).is_ok()
     }
 
-    pub fn consume(&self) {
+    pub async fn consume(&self) {
         // check if we are the first contender
         let pos = self.contenders.fetch_add(1, Ordering::SeqCst);
         if pos > 0 {
@@ -79,7 +81,7 @@ impl<J: SequentialJob> Queue<J> {
                 mem::drop(queue);
 
                 // process element
-                job.sequential_work();
+                job.sequential_work().await;
             }
 
             #[cfg(debug)]
@@ -95,35 +97,35 @@ impl<J: SequentialJob> Queue<J> {
 mod tests {
     use super::*;
 
-    use std::thread;
-
     use std::sync::Arc;
     use std::time::Duration;
 
-    use rand::thread_rng;
-    use rand::Rng;
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
 
-    #[test]
-    fn test_consume_queue() {
+    #[tokio::test]
+    #[traced_test]
+    async fn test_consume_queue() {
         struct TestJob {
             cnt: Arc<AtomicUsize>,
             wait_sequential: Duration,
         }
 
+        #[async_trait]
         impl SequentialJob for TestJob {
             fn is_ready(&self) -> bool {
                 true
             }
 
-            fn sequential_work(self) {
-                thread::sleep(self.wait_sequential);
+            async fn sequential_work(self) {
+                tokio::time::sleep(self.wait_sequential).await;
                 self.cnt.fetch_add(1, Ordering::SeqCst);
             }
         }
 
-        fn hammer(queue: &Arc<Queue<TestJob>>, cnt: Arc<AtomicUsize>) -> usize {
+        async fn hammer(queue: &Arc<Queue<TestJob>>, cnt: Arc<AtomicUsize>) -> usize {
             let mut jobs = 0;
-            let mut rng = thread_rng();
+            let mut rng = SmallRng::from_entropy();
             for _ in 0..10_000 {
                 if rng.gen() {
                     let wait_sequential: u64 = rng.gen();
@@ -132,7 +134,7 @@ mod tests {
                     let wait_parallel: u64 = rng.gen();
                     let wait_parallel = wait_parallel % 1000;
 
-                    thread::sleep(Duration::from_micros(wait_parallel));
+                    tokio::time::sleep(Duration::from_micros(wait_parallel)).await;
 
                     queue.push(TestJob {
                         cnt: cnt.clone(),
@@ -140,10 +142,10 @@ mod tests {
                     });
                     jobs += 1;
                 } else {
-                    queue.consume();
+                    queue.consume().await;
                 }
             }
-            queue.consume();
+            queue.consume().await;
             jobs
         }
 
@@ -154,40 +156,38 @@ mod tests {
         let other = {
             let queue = queue.clone();
             let counter = counter.clone();
-            thread::spawn(move || hammer(&queue, counter))
+            tokio::spawn(async move { hammer(&queue, counter).await })
         };
-        let mut jobs = hammer(&queue, counter.clone());
+        let mut jobs = hammer(&queue, counter.clone()).await;
 
         // wait, consume and check empty
-        jobs += other.join().unwrap();
+        jobs += other.await.unwrap();
         assert_eq!(queue.queue.lock().len(), 0, "elements left in queue");
-        assert_eq!(
-            jobs,
-            counter.load(Ordering::Acquire),
-            "did not consume every job"
-        );
+        assert_eq!(jobs, counter.load(Ordering::Acquire), "did not consume every job");
     }
 
     /* Fuzz the Queue */
-    #[test]
-    fn test_fuzz_queue() {
+    #[tokio::test]
+    #[traced_test]
+    async fn test_fuzz_queue() {
         struct TestJob {}
 
+        #[async_trait]
         impl SequentialJob for TestJob {
             fn is_ready(&self) -> bool {
                 true
             }
 
-            fn sequential_work(self) {}
+            async fn sequential_work(self) {}
         }
 
-        fn hammer(queue: &Arc<Queue<TestJob>>) {
-            let mut rng = thread_rng();
+        async fn hammer(queue: &Arc<Queue<TestJob>>) {
+            let mut rng = SmallRng::from_entropy();
             for _ in 0..1_000_000 {
                 if rng.gen() {
                     queue.push(TestJob {});
                 } else {
-                    queue.consume();
+                    queue.consume().await;
                 }
             }
         }
@@ -197,13 +197,13 @@ mod tests {
         // repeatedly apply operations randomly from concurrent threads
         let other = {
             let queue = queue.clone();
-            thread::spawn(move || hammer(&queue))
+            tokio::spawn(async move { hammer(&queue).await })
         };
-        hammer(&queue);
+        hammer(&queue).await;
 
         // wait, consume and check empty
-        other.join().unwrap();
-        queue.consume();
+        other.await.unwrap();
+        queue.consume().await;
         assert_eq!(queue.queue.lock().len(), 0);
     }
 }

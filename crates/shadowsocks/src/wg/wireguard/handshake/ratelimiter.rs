@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use tokio::time::{Duration, Instant};
 
 const PACKETS_PER_SECOND: u64 = 20;
 const PACKETS_BURSTABLE: u64 = 5;
@@ -21,17 +20,15 @@ pub struct RateLimiter(Arc<RateLimiterInner>);
 
 struct RateLimiterInner {
     gc_running: AtomicBool,
-    gc_dropped: (Mutex<bool>, Condvar),
+    gc_task: spin::Mutex<Option<tokio::task::JoinHandle<()>>>,
     table: spin::RwLock<HashMap<IpAddr, spin::Mutex<Entry>>>,
 }
 
 impl Drop for RateLimiter {
     fn drop(&mut self) {
         // wake up & terminate any lingering GC thread
-        let &(ref lock, ref cvar) = &self.0.gc_dropped;
-        let mut dropped = lock.lock().unwrap();
-        *dropped = true;
-        cvar.notify_all();
+        let mut gc_task = self.0.gc_task.lock();
+        gc_task.as_mut().map(|gc_task| gc_task.abort());
     }
 }
 
@@ -39,7 +36,7 @@ impl RateLimiter {
     pub fn new() -> Self {
         #[allow(clippy::mutex_atomic)]
         RateLimiter(Arc::new(RateLimiterInner {
-            gc_dropped: (Mutex::new(false), Condvar::new()),
+            gc_task: spin::Mutex::new(None),
             gc_running: AtomicBool::from(false),
             table: spin::RwLock::new(HashMap::new()),
         }))
@@ -54,8 +51,7 @@ impl RateLimiter {
                 let mut entry = entry.lock();
 
                 // add tokens earned since last time
-                entry.tokens = MAX_TOKENS
-                    .min(entry.tokens + u64::from(entry.last_time.elapsed().subsec_nanos()));
+                entry.tokens = MAX_TOKENS.min(entry.tokens + u64::from(entry.last_time.elapsed().subsec_nanos()));
                 entry.last_time = Instant::now();
 
                 // subtract cost of packet
@@ -81,27 +77,25 @@ impl RateLimiter {
         // check that GC thread is scheduled
         if !self.0.gc_running.swap(true, Ordering::Relaxed) {
             let limiter = self.0.clone();
-            thread::spawn(move || {
-                let &(ref lock, ref cvar) = &limiter.gc_dropped;
-                let mut dropped = lock.lock().unwrap();
-                while !*dropped {
+            let mut gc_task = self.0.gc_task.lock();
+            assert!(gc_task.is_none());
+            *gc_task = Some(tokio::spawn(async move {
+                loop {
                     // garbage collect
                     {
                         let mut tw = limiter.table.write();
-                        tw.retain(|_, ref mut entry| {
-                            entry.lock().last_time.elapsed() <= GC_INTERVAL
-                        });
+                        tw.retain(|_, ref mut entry| entry.lock().last_time.elapsed() <= GC_INTERVAL);
                         if tw.len() == 0 {
+                            *limiter.gc_task.lock() = None;
                             limiter.gc_running.store(false, Ordering::Relaxed);
                             return;
                         }
                     }
 
                     // wait until stopped or new GC (~1 every sec)
-                    let res = cvar.wait_timeout(dropped, GC_INTERVAL).unwrap();
-                    dropped = res.0;
+                    tokio::time::sleep(GC_INTERVAL).await;
                 }
-            });
+            }));
         }
 
         allowed
@@ -119,8 +113,9 @@ mod tests {
         wait: Duration,
     }
 
-    #[test]
-    fn test_ratelimiter() {
+    #[tokio::test]
+    #[traced_test]
+    async fn test_ratelimiter() {
         let ratelimiter = RateLimiter::new();
         let mut expected = vec![];
         let ips = vec![
@@ -185,7 +180,7 @@ mod tests {
         });
 
         for item in expected {
-            std::thread::sleep(item.wait);
+            tokio::time::sleep(item.wait).await;
             for ip in ips.iter() {
                 if ratelimiter.allow(&ip) != item.allowed {
                     panic!(

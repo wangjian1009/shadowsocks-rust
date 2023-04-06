@@ -1,4 +1,4 @@
-use std::time::Instant;
+use tokio::time::Instant;
 
 // DH
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};

@@ -1,31 +1,23 @@
 use super::super::udp::*;
 use super::super::Endpoint;
-use cfg_if::cfg_if;
+use async_trait::async_trait;
 
 use std::convert::TryInto;
 use std::io::{self, Read};
 use std::mem;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::os::unix::io::RawFd;
+use std::os::fd::FromRawFd;
+use std::os::unix::net::UnixStream;
+use std::os::unix::{io::RawFd, prelude::AsRawFd};
 use std::ptr;
 use std::sync::Arc;
+use std::{io::ErrorKind, path::Path};
 
 use sendfd::SendWithFd;
 
+use tokio::net::UdpSocket;
+
 use crate::net::ConnectOpts;
-
-pub struct FD(RawFd);
-
-impl Drop for FD {
-    fn drop(&mut self) {
-        if self.0 != -1 {
-            tracing::debug!("android udp, release fd (fd = {})", self.0);
-            unsafe {
-                libc::close(self.0);
-            };
-        }
-    }
-}
 
 #[repr(C, align(1))]
 struct ControlHeaderV4 {
@@ -53,19 +45,19 @@ pub struct AndroidUDP();
 
 pub struct AndroidOwner {
     port: u16,
-    sock4: Option<Arc<FD>>,
-    sock6: Option<Arc<FD>>,
+    sock4: Option<Arc<UdpSocket>>,
+    sock6: Option<Arc<UdpSocket>>,
 }
 
 pub enum AndroidUDPReader {
-    V4(Arc<FD>),
-    V6(Arc<FD>),
+    V4(Arc<UdpSocket>),
+    V6(Arc<UdpSocket>),
 }
 
 #[derive(Clone)]
 pub struct AndroidUDPWriter {
-    sock4: Arc<FD>,
-    sock6: Arc<FD>,
+    sock4: Option<Arc<UdpSocket>>,
+    sock6: Option<Arc<UdpSocket>>,
 }
 
 pub enum AndroidEndpoint {
@@ -192,240 +184,320 @@ impl Endpoint for AndroidEndpoint {
 }
 
 impl AndroidUDPReader {
-    fn read6(fd: RawFd, buf: &mut [u8]) -> Result<(usize, AndroidEndpoint), io::Error> {
-        tracing::trace!("receive IPv6 packet (block), (fd {}, max-len {})", fd, buf.len());
+    async fn read6(sock: &UdpSocket, buf: &mut [u8]) -> Result<(usize, AndroidEndpoint), io::Error> {
+        tracing::trace!("receive IPv6 packet, (fd {}, max-len {})", sock.as_raw_fd(), buf.len());
 
         debug_assert!(!buf.is_empty(), "reading into empty buffer (will fail)");
 
-        let mut iovs: [libc::iovec; 1] = [libc::iovec {
-            iov_base: buf.as_mut_ptr() as *mut core::ffi::c_void,
-            iov_len: buf.len(),
-        }];
-        let mut src: libc::sockaddr_in6 = unsafe { mem::MaybeUninit::zeroed().assume_init() };
-        let mut control: ControlHeaderV6 = unsafe { mem::MaybeUninit::zeroed().assume_init() };
-        let mut hdr = libc::msghdr {
-            msg_name: safe_cast(&mut src),
-            msg_namelen: mem::size_of_val(&src) as libc::socklen_t,
-            msg_iov: iovs.as_mut_ptr(),
-            msg_iovlen: iovs.len(),
-            msg_control: safe_cast(&mut control),
-            msg_controllen: mem::size_of_val(&control),
-            msg_flags: 0,
-        };
+        loop {
+            tracing::error!("xxxxx: {}: wait read6 begin", sock.as_raw_fd());
+            if let Err(err) = sock.readable().await {
+                tracing::error!(err = ?err, "wait readable IPv6 packet fail");
+                return Err(err);
+            }
+            tracing::error!("xxxxx: {}: wait read6 end", sock.as_raw_fd());
 
-        debug_assert!(hdr.msg_controllen >= mem::size_of::<libc::cmsghdr>() + mem::size_of::<libc::in6_pktinfo>(),);
+            let mut iovs: [libc::iovec; 1] = [libc::iovec {
+                iov_base: buf.as_mut_ptr() as *mut core::ffi::c_void,
+                iov_len: buf.len(),
+            }];
+            let mut src: libc::sockaddr_in6 = unsafe { mem::MaybeUninit::zeroed().assume_init() };
+            let mut control: ControlHeaderV6 = unsafe { mem::MaybeUninit::zeroed().assume_init() };
+            let mut hdr = libc::msghdr {
+                msg_name: safe_cast(&mut src),
+                msg_namelen: mem::size_of_val(&src) as libc::socklen_t,
+                msg_iov: iovs.as_mut_ptr(),
+                msg_iovlen: iovs.len(),
+                msg_control: safe_cast(&mut control),
+                msg_controllen: mem::size_of_val(&control),
+                msg_flags: 0,
+            };
 
-        let len = unsafe { libc::recvmsg(fd, &mut hdr as *mut libc::msghdr, 0) };
+            debug_assert!(hdr.msg_controllen >= mem::size_of::<libc::cmsghdr>() + mem::size_of::<libc::in6_pktinfo>(),);
 
-        if len <= 0 {
-            // TODO: FIX!
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                format!("failed to receive (len = {}, fd = {}, errno = {})", len, fd, errno()),
+            let len = unsafe { libc::recvmsg(sock.as_raw_fd(), &mut hdr as *mut libc::msghdr, 0) };
+
+            if len <= 0 {
+                let sys_err = errno();
+                if sys_err == libc::EAGAIN || sys_err == libc::EWOULDBLOCK {
+                    tracing::debug!("read IPv6 packet wouldblock");
+                    continue;
+                }
+
+                // TODO: FIX!
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    format!(
+                        "failed to receive (len = {}, fd = {}, errno = {})",
+                        len,
+                        sock.as_raw_fd(),
+                        sys_err,
+                    ),
+                ));
+            }
+
+            tracing::error!("xxxxxx: {}: <== receiving IPv6 packet {} bytes", sock.as_raw_fd(), len);
+
+            return Ok((
+                len.try_into().unwrap(),
+                AndroidEndpoint::V6(EndpointV6 {
+                    info: control.info, // save pktinfo (sticky source)
+                    dst: src,           // our future destination is the source address
+                }),
             ));
         }
-
-        Ok((
-            len.try_into().unwrap(),
-            AndroidEndpoint::V6(EndpointV6 {
-                info: control.info, // save pktinfo (sticky source)
-                dst: src,           // our future destination is the source address
-            }),
-        ))
     }
 
-    fn read4(fd: RawFd, buf: &mut [u8]) -> Result<(usize, AndroidEndpoint), io::Error> {
-        tracing::trace!("receive IPv4 packet (block), (fd {}, max-len {})", fd, buf.len());
+    async fn read4(sock: &UdpSocket, buf: &mut [u8]) -> Result<(usize, AndroidEndpoint), io::Error> {
+        tracing::trace!("receive IPv4 packet, (fd {}, max-len {})", sock.as_raw_fd(), buf.len());
 
         debug_assert!(!buf.is_empty(), "reading into empty buffer (will fail)");
 
-        let mut iovs: [libc::iovec; 1] = [libc::iovec {
-            iov_base: buf.as_mut_ptr() as *mut core::ffi::c_void,
-            iov_len: buf.len(),
-        }];
-        let mut src: libc::sockaddr_in = unsafe { mem::MaybeUninit::zeroed().assume_init() };
-        let mut control: ControlHeaderV4 = unsafe { mem::MaybeUninit::zeroed().assume_init() };
-        let mut hdr = libc::msghdr {
-            msg_name: safe_cast(&mut src),
-            msg_namelen: mem::size_of_val(&src) as libc::socklen_t,
-            msg_iov: iovs.as_mut_ptr(),
-            msg_iovlen: iovs.len(),
-            msg_control: safe_cast(&mut control),
-            msg_controllen: mem::size_of_val(&control),
-            msg_flags: 0,
-        };
+        loop {
+            tracing::error!("xxxxx: {}: wait read begin", sock.as_raw_fd());
+            if let Err(err) = sock.readable().await {
+                tracing::error!(err = ?err, "wait readable IPv4 packet fail");
+                return Err(err);
+            }
+            tracing::error!("xxxxx: {}: wait read end", sock.as_raw_fd());
 
-        debug_assert!(hdr.msg_controllen >= mem::size_of::<libc::cmsghdr>() + mem::size_of::<libc::in_pktinfo>(),);
+            let mut iovs: [libc::iovec; 1] = [libc::iovec {
+                iov_base: buf.as_mut_ptr() as *mut core::ffi::c_void,
+                iov_len: buf.len(),
+            }];
+            let mut src: libc::sockaddr_in = unsafe { mem::MaybeUninit::zeroed().assume_init() };
+            let mut control: ControlHeaderV4 = unsafe { mem::MaybeUninit::zeroed().assume_init() };
+            let mut hdr = libc::msghdr {
+                msg_name: safe_cast(&mut src),
+                msg_namelen: mem::size_of_val(&src) as libc::socklen_t,
+                msg_iov: iovs.as_mut_ptr(),
+                msg_iovlen: iovs.len(),
+                msg_control: safe_cast(&mut control),
+                msg_controllen: mem::size_of_val(&control),
+                msg_flags: 0,
+            };
 
-        let len = unsafe { libc::recvmsg(fd, &mut hdr as *mut libc::msghdr, 0) };
+            debug_assert!(hdr.msg_controllen >= mem::size_of::<libc::cmsghdr>() + mem::size_of::<libc::in_pktinfo>(),);
 
-        if len <= 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                format!("failed to receive (len = {}, fd = {}, errno = {})", len, fd, errno()),
+            let len = unsafe { libc::recvmsg(sock.as_raw_fd(), &mut hdr as *mut libc::msghdr, 0) };
+
+            if len <= 0 {
+                let sys_err = errno();
+                if sys_err == libc::EAGAIN || sys_err == libc::EWOULDBLOCK {
+                    tracing::debug!("read IPv4 packet wouldblock");
+                    continue;
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    format!(
+                        "failed to receive (len = {}, fd = {}, errno = {})",
+                        len,
+                        sock.as_raw_fd(),
+                        sys_err
+                    ),
+                ));
+            }
+
+            tracing::error!("xxxxxx: {}: <== receiving IPv4 packet {} bytes", sock.as_raw_fd(), len);
+
+            return Ok((
+                len.try_into().unwrap(),
+                AndroidEndpoint::V4(EndpointV4 {
+                    info: control.info, // save pktinfo (sticky source)
+                    dst: src,           // our future destination is the source address
+                }),
             ));
         }
-
-        Ok((
-            len.try_into().unwrap(),
-            AndroidEndpoint::V4(EndpointV4 {
-                info: control.info, // save pktinfo (sticky source)
-                dst: src,           // our future destination is the source address
-            }),
-        ))
     }
 }
 
+#[async_trait]
 impl Reader<AndroidEndpoint> for AndroidUDPReader {
     type Error = io::Error;
 
-    fn read(&self, buf: &mut [u8]) -> Result<(usize, AndroidEndpoint), Self::Error> {
+    async fn read(&self, buf: &mut [u8]) -> Result<(usize, AndroidEndpoint), Self::Error> {
         match self {
-            Self::V4(fd) => Self::read4(fd.0, buf),
-            Self::V6(fd) => Self::read6(fd.0, buf),
+            Self::V4(sock) => Self::read4(sock, buf).await,
+            Self::V6(sock) => Self::read6(sock, buf).await,
         }
     }
 }
 
 impl AndroidUDPWriter {
-    fn write6(fd: RawFd, buf: &[u8], dst: &mut EndpointV6) -> Result<(), io::Error> {
-        tracing::debug!("sending IPv6 packet ({} fd, {} bytes)", fd, buf.len());
+    async fn write6(sock: &UdpSocket, buf: &[u8], dst: &mut EndpointV6) -> Result<(), io::Error> {
+        tracing::debug!("sending IPv6 packet ({} fd, {} bytes)", sock.as_raw_fd(), buf.len());
 
-        let mut iovs: [libc::iovec; 1] = [libc::iovec {
-            iov_base: buf.as_ptr() as *mut core::ffi::c_void,
-            iov_len: buf.len(),
-        }];
-
-        let mut control = ControlHeaderV6 {
-            hdr: libc::cmsghdr {
-                cmsg_len: CMSG_LEN(mem::size_of::<libc::in6_pktinfo>()),
-                cmsg_level: libc::IPPROTO_IPV6,
-                cmsg_type: libc::IPV6_PKTINFO,
-            },
-            info: dst.info,
-        };
-
-        debug_assert_eq!(
-            control.hdr.cmsg_len % mem::size_of::<u32>(),
-            0,
-            "cmsg_len must be aligned to a long"
-        );
-
-        debug_assert_eq!(
-            dst.dst.sin6_family,
-            libc::AF_INET6 as libc::sa_family_t,
-            "this method only handles IPv6 destinations"
-        );
-
-        let mut hdr = libc::msghdr {
-            msg_name: safe_cast(&mut dst.dst),
-            msg_namelen: mem::size_of_val(&dst.dst) as libc::socklen_t,
-            msg_iov: iovs.as_mut_ptr(),
-            msg_iovlen: iovs.len(),
-            msg_control: safe_cast(&mut control),
-            msg_controllen: mem::size_of_val(&control),
-            msg_flags: 0,
-        };
-
-        let ret = unsafe { libc::sendmsg(fd, &hdr, 0) };
-
-        if ret < 0 {
-            if errno() == libc::EINVAL {
-                tracing::trace!("clear source and retry");
-                hdr.msg_control = ptr::null_mut();
-                hdr.msg_controllen = 0;
-                dst.info = unsafe { mem::zeroed() };
-                return if unsafe { libc::sendmsg(fd, &hdr, 0) } < 0 {
-                    Err(io::Error::new(
-                        io::ErrorKind::NotConnected,
-                        "failed to send IPv6 packet",
-                    ))
-                } else {
-                    Ok(())
-                };
+        let mut cleared = true;
+        loop {
+            if let Err(err) = sock.writable().await {
+                tracing::error!(err = ?err, "wait writable IPv6 packet fail");
+                return Err(err);
             }
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "failed to send IPv6 packet",
-            ));
-        }
 
-        Ok(())
+            let mut iovs: [libc::iovec; 1] = [libc::iovec {
+                iov_base: buf.as_ptr() as *mut core::ffi::c_void,
+                iov_len: buf.len(),
+            }];
+
+            let mut control = ControlHeaderV6 {
+                hdr: libc::cmsghdr {
+                    cmsg_len: CMSG_LEN(mem::size_of::<libc::in6_pktinfo>()),
+                    cmsg_level: libc::IPPROTO_IPV6,
+                    cmsg_type: libc::IPV6_PKTINFO,
+                },
+                info: dst.info,
+            };
+
+            debug_assert_eq!(
+                control.hdr.cmsg_len % mem::size_of::<u32>(),
+                0,
+                "cmsg_len must be aligned to a long"
+            );
+
+            debug_assert_eq!(
+                dst.dst.sin6_family,
+                libc::AF_INET6 as libc::sa_family_t,
+                "this method only handles IPv6 destinations"
+            );
+
+            let mut hdr = libc::msghdr {
+                msg_name: safe_cast(&mut dst.dst),
+                msg_namelen: mem::size_of_val(&dst.dst) as libc::socklen_t,
+                msg_iov: iovs.as_mut_ptr(),
+                msg_iovlen: iovs.len(),
+                msg_control: safe_cast(&mut control),
+                msg_controllen: mem::size_of_val(&control),
+                msg_flags: 0,
+            };
+
+            let ret = unsafe { libc::sendmsg(sock.as_raw_fd(), &hdr, 0) };
+
+            if ret < 0 {
+                let sys_err = errno();
+                if sys_err == libc::EAGAIN || sys_err == libc::EWOULDBLOCK {
+                    tracing::debug!("write IPv6 packet wouldblock");
+                    continue;
+                } else if sys_err == libc::EINVAL && !cleared {
+                    cleared = true;
+                    tracing::trace!("clear source and retry");
+                    hdr.msg_control = ptr::null_mut();
+                    hdr.msg_controllen = 0;
+                    dst.info = unsafe { mem::zeroed() };
+                    continue;
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "failed to send IPv6 packet",
+                ));
+            }
+
+            tracing::error!(
+                "xxxxxx: {}: => sending IPv6 packet {} bytes",
+                sock.as_raw_fd(),
+                buf.len()
+            );
+            return Ok(());
+        }
     }
 
-    fn write4(fd: RawFd, buf: &[u8], dst: &mut EndpointV4) -> Result<(), io::Error> {
-        tracing::debug!("sending IPv4 packet ({} fd, {} bytes)", fd, buf.len());
+    async fn write4(sock: &UdpSocket, buf: &[u8], dst: &mut EndpointV4) -> Result<(), io::Error> {
+        tracing::debug!("sending IPv4 packet ({} fd, {} bytes)", sock.as_raw_fd(), buf.len());
 
-        let mut iovs: [libc::iovec; 1] = [libc::iovec {
-            iov_base: buf.as_ptr() as *mut core::ffi::c_void,
-            iov_len: buf.len(),
-        }];
-
-        let mut control = ControlHeaderV4 {
-            hdr: libc::cmsghdr {
-                cmsg_len: CMSG_LEN(mem::size_of::<libc::in_pktinfo>()),
-                cmsg_level: libc::IPPROTO_IP,
-                cmsg_type: libc::IP_PKTINFO,
-            },
-            info: dst.info,
-        };
-
-        debug_assert_eq!(
-            control.hdr.cmsg_len % mem::size_of::<u32>(),
-            0,
-            "cmsg_len must be aligned to a long"
-        );
-
-        debug_assert_eq!(
-            dst.dst.sin_family,
-            libc::AF_INET as libc::sa_family_t,
-            "this method only handles IPv4 destinations"
-        );
-
-        let mut hdr = libc::msghdr {
-            msg_name: safe_cast(&mut dst.dst),
-            msg_namelen: mem::size_of_val(&dst.dst) as libc::socklen_t,
-            msg_iov: iovs.as_mut_ptr(),
-            msg_iovlen: iovs.len(),
-            msg_control: safe_cast(&mut control),
-            msg_controllen: mem::size_of_val(&control),
-            msg_flags: 0,
-        };
-
-        let ret = unsafe { libc::sendmsg(fd, &hdr, 0) };
-
-        if ret < 0 {
-            if errno() == libc::EINVAL {
-                tracing::trace!("clear source and retry");
-                hdr.msg_control = ptr::null_mut();
-                hdr.msg_controllen = 0;
-                dst.info = unsafe { mem::zeroed() };
-                return if unsafe { libc::sendmsg(fd, &hdr, 0) } < 0 {
-                    Err(io::Error::new(
-                        io::ErrorKind::NotConnected,
-                        "failed to send IPv4 packet",
-                    ))
-                } else {
-                    Ok(())
-                };
+        let mut cleared = false;
+        loop {
+            if let Err(err) = sock.writable().await {
+                tracing::error!(err = ?err, "wait writable IPv4 packet fail");
+                return Err(err);
             }
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "failed to send IPv4 packet",
-            ));
-        }
 
-        Ok(())
+            let mut iovs: [libc::iovec; 1] = [libc::iovec {
+                iov_base: buf.as_ptr() as *mut core::ffi::c_void,
+                iov_len: buf.len(),
+            }];
+
+            let mut control = ControlHeaderV4 {
+                hdr: libc::cmsghdr {
+                    cmsg_len: CMSG_LEN(mem::size_of::<libc::in_pktinfo>()),
+                    cmsg_level: libc::IPPROTO_IP,
+                    cmsg_type: libc::IP_PKTINFO,
+                },
+                info: dst.info,
+            };
+
+            debug_assert_eq!(
+                control.hdr.cmsg_len % mem::size_of::<u32>(),
+                0,
+                "cmsg_len must be aligned to a long"
+            );
+
+            debug_assert_eq!(
+                dst.dst.sin_family,
+                libc::AF_INET as libc::sa_family_t,
+                "this method only handles IPv4 destinations"
+            );
+
+            let mut hdr = libc::msghdr {
+                msg_name: safe_cast(&mut dst.dst),
+                msg_namelen: mem::size_of_val(&dst.dst) as libc::socklen_t,
+                msg_iov: iovs.as_mut_ptr(),
+                msg_iovlen: iovs.len(),
+                msg_control: safe_cast(&mut control),
+                msg_controllen: mem::size_of_val(&control),
+                msg_flags: 0,
+            };
+
+            let ret = unsafe { libc::sendmsg(sock.as_raw_fd(), &hdr, 0) };
+
+            if ret < 0 {
+                let sys_err = errno();
+                if sys_err == libc::EAGAIN || sys_err == libc::EWOULDBLOCK {
+                    tracing::debug!("write IPv4 packet wouldblock");
+                    continue;
+                } else if sys_err == libc::EINVAL && !cleared {
+                    cleared = true;
+
+                    tracing::trace!("clear source and retry");
+                    hdr.msg_control = ptr::null_mut();
+                    hdr.msg_controllen = 0;
+                    dst.info = unsafe { mem::zeroed() };
+                    continue;
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "failed to send IPv4 packet",
+                ));
+            }
+
+            tracing::error!(
+                "xxxxxx: {}: => sending IPv4 packet {} bytes",
+                sock.as_raw_fd(),
+                buf.len()
+            );
+            return Ok(());
+        }
     }
 }
 
+#[async_trait]
 impl Writer<AndroidEndpoint> for AndroidUDPWriter {
     type Error = io::Error;
 
-    fn write(&self, buf: &[u8], dst: &mut AndroidEndpoint) -> Result<(), Self::Error> {
+    async fn write(&self, buf: &[u8], dst: &mut AndroidEndpoint) -> Result<(), Self::Error> {
         match dst {
-            AndroidEndpoint::V4(ref mut end) => Self::write4(self.sock4.0, buf, end),
-            AndroidEndpoint::V6(ref mut end) => Self::write6(self.sock6.0, buf, end),
+            AndroidEndpoint::V4(ref mut end) => match self.sock4.as_ref() {
+                Some(sock) => Self::write4(sock, buf, end).await,
+                None => Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "failed to send IPv4 packet(no socket)",
+                )),
+            },
+            AndroidEndpoint::V6(ref mut end) => match self.sock6.as_ref() {
+                Some(sock) => Self::write6(sock, buf, end).await,
+                None => Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "failed to send IPv6 packet(no socket)",
+                )),
+            },
         }
     }
 }
@@ -446,24 +518,24 @@ impl Owner for AndroidOwner {
             }
         }
         let value = value.unwrap_or(0);
-        set_mark(self.sock6.as_ref().map(|fd| fd.0), value)?;
-        set_mark(self.sock4.as_ref().map(|fd| fd.0), value)
+        set_mark(self.sock6.as_ref().map(|sock| sock.as_raw_fd()), value)?;
+        set_mark(self.sock4.as_ref().map(|sock| sock.as_raw_fd()), value)
     }
 }
 
 impl Drop for AndroidOwner {
     fn drop(&mut self) {
         tracing::debug!("closing the bind (port = {})", self.port);
-        if let Some(fd) = &self.sock4 {
-            tracing::debug!("shutdown IPv4 (fd = {})", fd.0);
+        if let Some(sock) = &self.sock4 {
+            tracing::debug!("shutdown IPv4 (fd = {})", sock.as_raw_fd());
             unsafe {
-                libc::shutdown(fd.0, libc::SHUT_RDWR);
+                libc::shutdown(sock.as_raw_fd(), libc::SHUT_RDWR);
             }
         };
-        if let Some(fd) = &self.sock6 {
-            tracing::debug!("shutdown IPv6 (fd = {})", fd.0);
+        if let Some(sock) = &self.sock6 {
+            tracing::debug!("shutdown IPv6 (fd = {})", sock.as_raw_fd());
             unsafe {
-                libc::shutdown(fd.0, libc::SHUT_RDWR);
+                libc::shutdown(sock.as_raw_fd(), libc::SHUT_RDWR);
             }
         };
     }
@@ -602,14 +674,21 @@ impl AndroidUDP {
         tracing::trace!("bound IPv4 socket (port {}, fd {})", new_port, fd);
         Ok((new_port, fd))
     }
+
+    fn to_socket(fd: RawFd) -> io::Result<UdpSocket> {
+        let std_sock = unsafe { std::net::UdpSocket::from_raw_fd(fd) };
+        std_sock.set_nonblocking(true)?;
+        UdpSocket::from_std(std_sock)
+    }
 }
 
+#[async_trait]
 impl PlatformUDP for AndroidUDP {
     type Owner = AndroidOwner;
 
     #[allow(clippy::type_complexity)]
     #[allow(clippy::unnecessary_unwrap)]
-    fn bind(
+    async fn bind(
         mut port: u16,
         connect_opts: &ConnectOpts,
     ) -> Result<(Vec<Self::Reader>, Self::Writer, Self::Owner), Self::Error> {
@@ -635,23 +714,20 @@ impl PlatformUDP for AndroidUDP {
 
         // Any traffic to localhost should not be protected
         // This is a workaround for VPNService
-        #[cfg(target_os = "android")]
-        {
-            if let Some(ref path) = connect_opts.vpn_protect_path {
-                // RPC calls to `VpnService.protect()`
-                // Timeout in 3 seconds like shadowsocks-libev
-                if let Ok((_, fd)) = bind4 {
-                    vpn_protect(path, fd)?;
-                }
+        if let Some(ref path) = connect_opts.vpn_protect_path {
+            // RPC calls to `VpnService.protect()`
+            // Timeout in 3 seconds like shadowsocks-libev
+            if let Ok((_, fd)) = bind4 {
+                vpn_protect(path, fd)?;
+            }
 
-                if let Ok((_, fd)) = bind6 {
-                    vpn_protect(path, fd)?;
-                }
+            if let Ok((_, fd)) = bind6 {
+                vpn_protect(path, fd)?;
             }
         }
 
-        let sock6 = bind6.ok().map(|(_, fd)| Arc::new(FD(fd)));
-        let sock4 = bind4.ok().map(|(_, fd)| Arc::new(FD(fd)));
+        let sock6 = bind6.ok().map(|(_, fd)| Arc::new(Self::to_socket(fd).unwrap()));
+        let sock4 = bind4.ok().map(|(_, fd)| Arc::new(Self::to_socket(fd).unwrap()));
 
         // create owner
         let owner = AndroidOwner {
@@ -671,46 +747,32 @@ impl PlatformUDP for AndroidUDP {
         debug_assert!(!readers.is_empty());
 
         // create writer
-        let writer = AndroidUDPWriter {
-            sock4: sock4.unwrap_or_else(|| Arc::new(FD(-1))),
-            sock6: sock6.unwrap_or_else(|| Arc::new(FD(-1))),
-        };
+        let writer = AndroidUDPWriter { sock4, sock6 };
 
         Ok((readers, writer, owner))
     }
 }
 
-cfg_if! {
-    if #[cfg(target_os = "android")] {
-        use std::{
-            io::ErrorKind,
-            path::Path,
-        };
+/// This is a RPC for Android to `protect()` socket for connecting to remote servers
+///
+/// https://developer.android.com/reference/android/net/VpnService#protect(java.net.Socket)
+///
+/// More detail could be found in [shadowsocks-android](https://github.com/shadowsocks/shadowsocks-android) project.
+fn vpn_protect<P: AsRef<Path>>(protect_path: P, fd: RawFd) -> io::Result<()> {
+    let mut stream = UnixStream::connect(protect_path)?;
 
-        use std::os::unix::net::{UnixStream};
+    // send fds
+    let dummy: [u8; 1] = [1];
+    let fds: [RawFd; 1] = [fd];
+    stream.send_with_fd(&dummy, &fds)?;
 
-        /// This is a RPC for Android to `protect()` socket for connecting to remote servers
-        ///
-        /// https://developer.android.com/reference/android/net/VpnService#protect(java.net.Socket)
-        ///
-        /// More detail could be found in [shadowsocks-android](https://github.com/shadowsocks/shadowsocks-android) project.
-        fn vpn_protect<P: AsRef<Path>>(protect_path: P, fd: RawFd) -> io::Result<()> {
-            let mut stream = UnixStream::connect(protect_path)?;
+    // receive the return value
+    let mut response = [0; 1];
+    stream.read_exact(&mut response)?;
 
-            // send fds
-            let dummy: [u8; 1] = [1];
-            let fds: [RawFd; 1] = [fd];
-            stream.send_with_fd(&dummy, &fds)?;
-
-            // receive the return value
-            let mut response = [0; 1];
-            stream.read_exact(&mut response)?;
-
-            if response[0] == 0xFF {
-                return Err(io::Error::new(ErrorKind::Other, "protect() failed"));
-            }
-
-            Ok(())
-        }
+    if response[0] == 0xFF {
+        return Err(io::Error::new(ErrorKind::Other, "protect() failed"));
     }
+
+    Ok(())
 }

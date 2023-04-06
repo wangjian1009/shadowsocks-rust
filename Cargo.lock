@@ -4040,6 +4040,7 @@ dependencies = [
  "tracing",
  "tracing-test",
  "trust-dns-resolver",
+ "tun",
  "url",
  "webpki",
  "windows-sys 0.45.0",

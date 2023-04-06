@@ -1,3 +1,19 @@
+use std::fmt;
+
+use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use tokio::time::Instant;
+
+use rand::rngs::OsRng;
+use rand::Rng;
+
+// use hjul::Runner;
+use tokio::sync::{Mutex, Notify, RwLock};
+use x25519_dalek::{PublicKey, StaticSecret};
+
+use crate::net::ConnectOpts;
+
 use super::constants::*;
 use super::handshake;
 use super::peer::PeerInner;
@@ -7,29 +23,11 @@ use super::timers::Timers;
 use super::queue::ParallelQueue;
 use super::workers::HandshakeJob;
 
+use super::timer::Runner;
 use super::tun::Tun;
 use super::udp::UDP;
 
 use super::workers::{handshake_worker, tun_worker, udp_worker};
-
-use std::fmt;
-use std::thread;
-
-use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::sync::Condvar;
-use std::sync::Mutex as StdMutex;
-use std::time::Instant;
-
-use rand::rngs::OsRng;
-use rand::Rng;
-
-use hjul::Runner;
-use spin::{Mutex, RwLock};
-use x25519_dalek::{PublicKey, StaticSecret};
-
-use crate::net::ConnectOpts;
 
 #[cfg(feature = "rate-limit")]
 use crate::transport::RateLimiter;
@@ -62,7 +60,7 @@ pub struct WireguardInner<T: Tun, B: UDP> {
     pub router: router::Device<B::Endpoint, PeerInner<T, B>, T::Writer, B::Writer>,
 
     // handshake related state
-    pub last_under_load: Mutex<Instant>,
+    pub last_under_load: spin::Mutex<Instant>,
     pub pending: AtomicUsize, // number of pending handshake packets in queue
     pub queue: ParallelQueue<HandshakeJob<B::Endpoint>>,
 }
@@ -71,7 +69,7 @@ pub struct WireGuard<T: Tun, B: UDP> {
     inner: Arc<WireguardInner<T, B>>,
 }
 
-pub struct WaitCounter(StdMutex<usize>, Condvar);
+pub struct WaitCounter(Mutex<usize>, Notify);
 
 impl<T: Tun, B: UDP> fmt::Display for WireGuard<T, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -96,28 +94,31 @@ impl<T: Tun, B: UDP> Clone for WireGuard<T, B> {
 
 #[allow(clippy::mutex_atomic)]
 impl WaitCounter {
-    pub fn wait(&self) {
-        let mut nread = self.0.lock().unwrap();
-        while *nread > 0 {
-            nread = self.1.wait(nread).unwrap();
+    pub async fn wait(&self) {
+        while *self.0.lock().await > 0 {
+            self.1.notified().await
         }
     }
 
     fn new() -> Self {
-        Self(StdMutex::new(0), Condvar::new())
+        Self(Mutex::new(0), Notify::new())
     }
 
-    fn decrease(&self) {
-        let mut nread = self.0.lock().unwrap();
-        assert!(*nread > 0);
-        *nread -= 1;
-        if *nread == 0 {
-            self.1.notify_all();
+    async fn decrease(&self) {
+        let need_notify = {
+            let mut nread = self.0.lock().await;
+            assert!(*nread > 0);
+            *nread -= 1;
+            *nread == 0
+        };
+
+        if need_notify {
+            self.1.notify_waiters()
         }
     }
 
-    fn increase(&self) {
-        *self.0.lock().unwrap() += 1;
+    async fn increase(&self) {
+        *self.0.lock().await += 1;
     }
 }
 
@@ -131,9 +132,9 @@ impl<T: Tun, B: UDP> WireGuard<T, B> {
     ///
     /// The instance will continue to consume and discard messages
     /// on both ends of the device.
-    pub fn down(&self) {
+    pub async fn down(&self) {
         // ensure exclusive access (to avoid race with "up" call)
-        let mut enabled = self.enabled.write();
+        let mut enabled = self.enabled.write().await;
 
         // check if already down
         if !(*enabled) {
@@ -147,8 +148,8 @@ impl<T: Tun, B: UDP> WireGuard<T, B> {
         self.router.down();
 
         // set all peers down (stops timers)
-        for (_, peer) in self.peers.write().iter() {
-            peer.stop_timers();
+        for (_, peer) in self.peers.write().await.iter() {
+            peer.stop_timers().await;
             peer.down();
         }
 
@@ -157,9 +158,9 @@ impl<T: Tun, B: UDP> WireGuard<T, B> {
 
     /// Brings the WireGuard device up.
     /// Usually called when the associated interface is brought up.
-    pub fn up(&self, mtu: usize) {
+    pub async fn up(&self, mtu: usize) {
         // ensure exclusive access (to avoid race with "up" call)
-        let mut enabled = self.enabled.write();
+        let mut enabled = self.enabled.write().await;
 
         // set mtu
         self.mtu.store(mtu, Ordering::Relaxed);
@@ -173,9 +174,9 @@ impl<T: Tun, B: UDP> WireGuard<T, B> {
         self.router.up();
 
         // set all peers up (restarts timers)
-        for (_, peer) in self.peers.write().iter() {
+        for (_, peer) in self.peers.write().await.iter() {
             peer.up();
-            peer.start_timers();
+            peer.start_timers().await;
         }
 
         *enabled = true;
@@ -190,42 +191,46 @@ impl<T: Tun, B: UDP> WireGuard<T, B> {
         &self.inner.connect_opts
     }
 
-    pub fn clear_peers(&self) {
-        self.peers.write().clear();
+    pub async fn clear_peers(&self) {
+        self.peers.write().await.clear();
     }
 
-    pub fn remove_peer(&self, pk: &PublicKey) {
-        let _ = self.peers.write().remove(pk);
+    pub async fn remove_peer(&self, pk: &PublicKey) {
+        let _ = self.peers.write().await.remove(pk);
     }
 
-    pub fn set_key(&self, sk: Option<StaticSecret>) {
-        let mut peers = self.peers.write();
+    pub async fn set_key(&self, sk: Option<StaticSecret>) {
+        let mut peers = self.peers.write().await;
         peers.set_sk(sk);
         self.router.clear_sending_keys();
     }
 
-    pub fn get_sk(&self) -> Option<StaticSecret> {
-        self.peers.read().get_sk().map(|sk| StaticSecret::from(sk.to_bytes()))
+    pub async fn get_sk(&self) -> Option<StaticSecret> {
+        self.peers
+            .read()
+            .await
+            .get_sk()
+            .map(|sk| StaticSecret::from(sk.to_bytes()))
     }
 
-    pub fn set_psk(&self, pk: PublicKey, psk: [u8; 32]) -> bool {
-        self.peers.write().set_psk(pk, psk).is_ok()
+    pub async fn set_psk(&self, pk: PublicKey, psk: [u8; 32]) -> bool {
+        self.peers.write().await.set_psk(pk, psk).is_ok()
     }
-    pub fn get_psk(&self, pk: &PublicKey) -> Option<[u8; 32]> {
-        self.peers.read().get_psk(pk).ok()
+    pub async fn get_psk(&self, pk: &PublicKey) -> Option<[u8; 32]> {
+        self.peers.read().await.get_psk(pk).ok()
     }
 
-    pub fn add_peer(&self, pk: PublicKey) -> bool {
-        let mut peers = self.peers.write();
+    pub async fn add_peer(&self, pk: PublicKey) -> bool {
+        let mut peers = self.peers.write().await;
         if peers.contains_key(&pk) {
             return false;
         }
 
         // prevent up/down while inserting
-        let enabled = self.enabled.read();
+        let enabled = self.enabled.read().await;
 
         // create timers (lookup by public key)
-        let timers = Timers::new::<T, B>(self.clone(), pk, *enabled);
+        let timers = Timers::new::<T, B>(self.clone(), pk, *enabled).await;
 
         // create new router peer
         let peer: router::PeerHandle<B::Endpoint, PeerInner<T, B>, T::Writer, B::Writer> =
@@ -233,8 +238,8 @@ impl<T: Tun, B: UDP> WireGuard<T, B> {
                 id: OsRng.gen(),
                 pk,
                 wg: self.clone(),
-                walltime_last_handshake: Mutex::new(None),
-                last_handshake_sent: Mutex::new(Instant::now() - TIME_HORIZON),
+                walltime_last_handshake: spin::Mutex::new(None),
+                last_handshake_sent: spin::Mutex::new(Instant::now() - TIME_HORIZON),
                 handshake_queued: AtomicBool::new(false),
                 rx_bytes: AtomicU64::new(0),
                 tx_bytes: AtomicU64::new(0),
@@ -252,8 +257,8 @@ impl<T: Tun, B: UDP> WireGuard<T, B> {
     /// which unblocks the thread and causes an error on reader.read
     pub fn add_udp_reader(&self, reader: B::Reader) {
         let wg = self.clone();
-        thread::spawn(move || {
-            udp_worker(&wg, reader);
+        tokio::spawn(async move {
+            udp_worker(&wg, reader).await;
         });
     }
 
@@ -261,21 +266,21 @@ impl<T: Tun, B: UDP> WireGuard<T, B> {
         self.router.set_outbound_writer(writer);
     }
 
-    pub fn add_tun_reader(&self, reader: T::Reader) {
+    pub async fn add_tun_reader(&self, reader: T::Reader) {
         let wg = self.clone();
 
         // increment reader count
-        wg.tun_readers.increase();
+        wg.tun_readers.increase().await;
 
         // start worker
-        thread::spawn(move || {
-            tun_worker(&wg, reader);
-            wg.tun_readers.decrease();
+        tokio::spawn(async move {
+            tun_worker(&wg, reader).await;
+            wg.tun_readers.decrease().await;
         });
     }
 
-    pub fn wait(&self) {
-        self.tun_readers.wait();
+    pub async fn wait(&self) {
+        self.tun_readers.wait().await;
     }
 
     pub fn new(
@@ -303,11 +308,11 @@ impl<T: Tun, B: UDP> WireGuard<T, B> {
                 tun_readers: WaitCounter::new(),
                 id: OsRng.gen(),
                 mtu: AtomicUsize::new(0),
-                last_under_load: Mutex::new(Instant::now() - TIME_HORIZON),
+                last_under_load: spin::Mutex::new(Instant::now() - TIME_HORIZON),
                 router,
                 pending: AtomicUsize::new(0),
                 peers: RwLock::new(handshake::Device::new()),
-                runner: Mutex::new(Runner::new(TIMERS_TICK, TIMERS_SLOTS, TIMERS_CAPACITY)),
+                runner: tokio::sync::Mutex::new(Runner::new(TIMERS_TICK, TIMERS_SLOTS, TIMERS_CAPACITY)),
                 queue: tx,
             }),
         };
@@ -315,7 +320,7 @@ impl<T: Tun, B: UDP> WireGuard<T, B> {
         // start handshake workers
         while let Some(rx) = rxs.pop() {
             let wg = wg.clone();
-            thread::spawn(move || handshake_worker(&wg, rx));
+            tokio::spawn(async move { handshake_worker(&wg, rx).await });
         }
 
         wg

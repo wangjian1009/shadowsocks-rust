@@ -1,18 +1,21 @@
 use super::Endpoint;
+use async_trait::async_trait;
 use std::error::Error;
 
 use crate::net::ConnectOpts;
 
+#[async_trait]
 pub trait Reader<E: Endpoint>: Send + Sync {
     type Error: Error;
 
-    fn read(&self, buf: &mut [u8]) -> Result<(usize, E), Self::Error>;
+    async fn read(&self, buf: &mut [u8]) -> Result<(usize, E), Self::Error>;
 }
 
+#[async_trait]
 pub trait Writer<E: Endpoint>: Send + Sync + 'static {
     type Error: Error;
 
-    fn write(&self, buf: &[u8], dst: &mut E) -> Result<(), Self::Error>;
+    async fn write(&self, buf: &[u8], dst: &mut E) -> Result<(), Self::Error>;
 }
 
 pub trait UDP: Send + Sync + 'static {
@@ -37,6 +40,7 @@ pub trait Owner: Send {
 
 /// On some platforms the application can itself bind to a socket.
 /// This enables configuration using the UAPI interface.
+#[async_trait]
 pub trait PlatformUDP: UDP {
     type Owner: Owner;
 
@@ -44,7 +48,7 @@ pub trait PlatformUDP: UDP {
     /// an associated instance of the owner type, which closes the UDP socket upon "drop"
     /// and enables configuration of the fwmark value.
     #[allow(clippy::type_complexity)]
-    fn bind(
+    async fn bind(
         port: u16,
         connect_opts: &ConnectOpts,
     ) -> Result<(Vec<Self::Reader>, Self::Writer, Self::Owner), Self::Error>;

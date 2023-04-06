@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::error::Error;
 
 #[allow(dead_code)]
@@ -6,14 +7,16 @@ pub enum TunEvent {
     Down,      // interface is down
 }
 
+#[async_trait]
 pub trait Status: Send + 'static {
     type Error: Error;
 
     /// Returns status updates for the interface
     /// When the status is unchanged the method blocks
-    fn event(&mut self) -> Result<TunEvent, Self::Error>;
+    async fn event(&mut self) -> Result<TunEvent, Self::Error>;
 }
 
+#[async_trait]
 pub trait Writer: Send + Sync + 'static {
     type Error: Error;
 
@@ -26,10 +29,11 @@ pub trait Writer: Send + Sync + 'static {
     /// # Returns
     ///
     /// Unit type or an error
-    fn write(&self, src: &[u8]) -> Result<(), Self::Error>;
+    async fn write(&self, src: &[u8]) -> Result<(), Self::Error>;
 }
 
-pub trait Reader: Send + 'static {
+#[async_trait]
+pub trait Reader: Send + Sync + 'static {
     type Error: Error;
 
     /// Reads an IP packet into dst[offset:] from the tunnel device
@@ -46,7 +50,7 @@ pub trait Reader: Send + 'static {
     /// # Returns
     ///
     /// The size of the IP packet (ignoring the header) or an std::error::Error instance:
-    fn read(&self, buf: &mut [u8], offset: usize) -> Result<usize, Self::Error>;
+    async fn read(&self, buf: &mut [u8], offset: usize) -> Result<usize, Self::Error>;
 }
 
 pub trait Tun: Send + Sync + 'static {

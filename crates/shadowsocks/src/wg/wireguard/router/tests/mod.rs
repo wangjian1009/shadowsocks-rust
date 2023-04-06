@@ -9,7 +9,7 @@ use super::{Key, KeyPair};
 use super::super::dummy;
 use super::super::tests::make_packet;
 
-use std::time::Instant;
+use tokio::time::Instant;
 
 fn pad(msg: &[u8]) -> Vec<u8> {
     let mut o = vec![0; msg.len() + SIZE_MESSAGE_PREFIX];

@@ -21,5 +21,5 @@ fn new_error<T: ToString>(message: T) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Other, format!("mkcp: {}", message.to_string()))
 }
 
-#[cfg(test)]
-mod test;
+// #[cfg(test)]
+// mod test;

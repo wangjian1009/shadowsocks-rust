@@ -1,9 +1,8 @@
 use cfg_if::cfg_if;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use tokio::time::Instant;
 
 use byteorder::{ByteOrder, LittleEndian};
-use crossbeam_channel::Receiver;
 use rand::rngs::OsRng;
 use tracing::debug;
 use x25519_dalek::PublicKey;
@@ -23,6 +22,8 @@ use super::tun::Tun;
 
 use super::udp::Reader as UDPReader;
 use super::udp::UDP;
+
+use super::queue::Receiver;
 
 // constants
 use super::constants::{
@@ -61,7 +62,7 @@ const fn padding(size: usize, mtu: usize) -> usize {
     min(mtu, size + (pad - size % pad) % pad)
 }
 
-pub fn tun_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, reader: T::Reader) {
+pub async fn tun_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, reader: T::Reader) {
     loop {
         // create vector big enough for any transport message (based on MTU)
         let mtu = wg.mtu.load(Ordering::Relaxed);
@@ -69,7 +70,7 @@ pub fn tun_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, reader: T::Reader) {
         let mut msg: Vec<u8> = vec![0; size + CAPACITY_MESSAGE_POSTFIX];
 
         // read a new IP packet
-        let payload = match reader.read(&mut msg[..], SIZE_MESSAGE_PREFIX) {
+        let payload = match reader.read(&mut msg[..], SIZE_MESSAGE_PREFIX).await {
             Ok(payload) => payload,
             Err(e) => {
                 debug!("TUN worker, failed to read from tun device: {}", e);
@@ -98,12 +99,12 @@ pub fn tun_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, reader: T::Reader) {
         );
 
         // crypt-key route
-        let e = wg.router.send(msg);
+        let e = wg.router.send(msg).await;
         debug!("TUN worker, router returned {:?}", e);
     }
 }
 
-pub fn udp_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, reader: B::Reader) {
+pub async fn udp_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, reader: B::Reader) {
     #[cfg(feature = "rate-limit")]
     let rate_limiter = wg.rate_limit();
 
@@ -113,8 +114,11 @@ pub fn udp_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, reader: B::Reader) {
         let size = mtu + MAX_HANDSHAKE_MSG_SIZE;
         let mut msg: Vec<u8> = vec![0; size];
 
+        #[cfg(feature = "rate-limit")]
+        let mut sleep_duration = None;
+
         // read UDP packet into vector
-        let (size, src) = match reader.read(&mut msg) {
+        let (size, src) = match reader.read(&mut msg).await {
             Err(e) => {
                 debug!("Bind reader closed with {}", e);
                 return;
@@ -126,7 +130,7 @@ pub fn udp_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, reader: B::Reader) {
                     if let Err(err) = rate_limiter.check_n((processed_size as u32).into_nonzero().unwrap()) {
                         match err {
                             NegativeMultiDecision::BatchNonConforming(duration) => {
-                                std::thread::sleep(duration);
+                                sleep_duration = Some(duration);
                             }
                             NegativeMultiDecision::InsufficientCapacity => {
                                 tracing::error!("xxxxx: check_n size={} unexpected", processed_size);
@@ -138,6 +142,12 @@ pub fn udp_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, reader: B::Reader) {
                 v
             }
         };
+
+        #[cfg(feature = "rate-limit")]
+        if let Some(duration) = sleep_duration {
+            tokio::time::sleep(duration).await;
+        }
+
         msg.truncate(size);
 
         // TODO: start device down
@@ -153,13 +163,13 @@ pub fn udp_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, reader: B::Reader) {
             TYPE_COOKIE_REPLY | TYPE_INITIATION | TYPE_RESPONSE => {
                 debug!("{} : reader, received handshake message", wg);
                 wg.pending.fetch_add(1, Ordering::SeqCst);
-                wg.queue.send(HandshakeJob::Message(msg, src));
+                wg.queue.send(HandshakeJob::Message(msg, src)).await;
             }
             TYPE_TRANSPORT => {
                 debug!("{} : reader, received transport message", wg);
 
                 // transport message
-                let _ = wg.router.recv(src, msg).map_err(|e| {
+                let _ = wg.router.recv(src, msg).await.map_err(|e| {
                     debug!("Failed to handle incoming transport message: {}", e);
                 });
             }
@@ -168,14 +178,22 @@ pub fn udp_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, reader: B::Reader) {
     }
 }
 
-pub fn handshake_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, rx: Receiver<HandshakeJob<B::Endpoint>>) {
+pub async fn handshake_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, rx: Receiver<HandshakeJob<B::Endpoint>>) {
     debug!("{} : handshake worker, started", wg);
 
     #[cfg(feature = "rate-limit")]
     let rate_limit = wg.rate_limit();
 
     // process elements from the handshake queue
-    for job in rx {
+    loop {
+        let job = match rx.recv().await {
+            Some(j) => j,
+            None => {
+                tracing::trace!("{} : handshake worker, complete, channel closed", wg);
+                break;
+            }
+        };
+
         // check if under load
         let mut under_load = false;
         let job: HandshakeJob<B::Endpoint> = job;
@@ -202,12 +220,15 @@ pub fn handshake_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, rx: Receiver<Hands
         match job {
             HandshakeJob::Message(msg, mut src) => {
                 // process message
-                let device = wg.peers.read();
-                match device.process(
-                    &mut OsRng,
-                    &msg[..],
-                    if under_load { Some(src.into_address()) } else { None },
-                ) {
+                let device = wg.peers.read().await;
+                match device
+                    .process(
+                        &mut OsRng,
+                        &msg[..],
+                        if under_load { Some(src.into_address()) } else { None },
+                    )
+                    .await
+                {
                     Ok((peer, resp, keypair)) => {
                         // send response (might be cookie reply or handshake response)
                         let mut resp_len: u64 = 0;
@@ -222,6 +243,7 @@ pub fn handshake_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, rx: Receiver<Hands
                                     #[cfg(feature = "rate-limit")]
                                     rate_limit.as_ref(),
                                 )
+                                .await
                                 .map_err(|e| {
                                     debug!("{} : handshake worker, failed to send response, error = {}", wg, e);
                                 });
@@ -242,11 +264,11 @@ pub fn handshake_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, rx: Receiver<Hands
                             if resp_len > 0 {
                                 // update timers after sending handshake response
                                 debug!("{} : handshake worker, handshake response sent", wg);
-                                peer.opaque().sent_handshake_response();
+                                peer.opaque().sent_handshake_response().await;
                             } else {
                                 // update timers after receiving handshake response
                                 debug!("{} : handshake worker, handshake response was received", wg);
-                                peer.opaque().timers_handshake_complete();
+                                peer.opaque().timers_handshake_complete().await;
                             }
 
                             // add any new keypair to peer
@@ -254,10 +276,10 @@ pub fn handshake_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, rx: Receiver<Hands
                                 debug!("{} : handshake worker, new keypair for {}", wg, peer);
 
                                 // this means that a handshake response was processed or sent
-                                peer.opaque().timers_session_derived();
+                                peer.opaque().timers_session_derived().await;
 
                                 // free any unused ids
-                                for id in peer.add_keypair(kp) {
+                                for id in peer.add_keypair(kp).await {
                                     device.release(id);
                                 }
                             };
@@ -267,18 +289,18 @@ pub fn handshake_worker<T: Tun, B: UDP>(wg: &WireGuard<T, B>, rx: Receiver<Hands
                 }
             }
             HandshakeJob::New(pk) => {
-                if let Some(peer) = wg.peers.read().get(&pk) {
+                if let Some(peer) = wg.peers.read().await.get(&pk) {
                     debug!("{} : handshake worker, new handshake requested for {}", wg, peer);
-                    let device = wg.peers.read();
-                    let _ = device.begin(&mut OsRng, &pk).map(|msg| {
-                        let _ = peer.send_raw(&msg[..]).map_err(|e| {
+                    let device = wg.peers.read().await;
+                    if let Ok(msg) = device.begin(&mut OsRng, &pk) {
+                        let _ = peer.send_raw(&msg[..]).await.map_err(|e| {
                             debug!(
                                 "{} : handshake worker, failed to send handshake initiation, error = {}",
                                 wg, e
                             )
                         });
-                        peer.opaque().sent_handshake_initiation();
-                    });
+                        peer.opaque().sent_handshake_initiation().await;
+                    }
                     peer.opaque().handshake_queued.store(false, Ordering::SeqCst);
                 }
             }

@@ -1,8 +1,10 @@
-use super::super::uapi::*;
-
+use async_trait::async_trait;
 use std::fs;
 use std::io;
-use std::os::unix::net::{UnixListener, UnixStream};
+
+use super::super::uapi::*;
+
+use crate::net::{UnixListener, UnixStream};
 
 const SOCK_DIR: &str = "/var/run/wireguard/";
 
@@ -20,12 +22,13 @@ impl PlatformUAPI for AndroidUAPI {
     }
 }
 
+#[async_trait]
 impl BindUAPI for UnixListener {
     type Stream = UnixStream;
     type Error = io::Error;
 
-    fn connect(&self) -> Result<UnixStream, io::Error> {
-        let (stream, _) = self.accept()?;
+    async fn connect(&self) -> Result<UnixStream, io::Error> {
+        let (stream, _) = self.accept().await?;
         Ok(stream)
     }
 }

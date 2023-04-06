@@ -1,12 +1,19 @@
-use cfg_if::cfg_if;
+use async_trait::async_trait;
+
 use std::net::IpAddr;
 use std::ops::Deref;
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use rand::Rng;
+
+use tokio::{
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Mutex,
+    },
+    time,
+};
 
 use super::*;
 
@@ -26,27 +33,31 @@ struct EventTracker<E> {
 
 impl<E> EventTracker<E> {
     fn new() -> Self {
-        let (tx, rx) = channel();
+        let (tx, rx) = channel(1);
         EventTracker {
             rx: Mutex::new(rx),
             tx: Mutex::new(tx),
         }
     }
 
-    fn log(&self, e: E) {
-        self.tx.lock().unwrap().send(e).unwrap();
-    }
-
-    fn wait(&self, timeout: Duration) -> Option<E> {
-        match self.rx.lock().unwrap().recv_timeout(timeout) {
-            Ok(v) => Some(v),
-            Err(RecvTimeoutError::Timeout) => None,
-            Err(RecvTimeoutError::Disconnected) => panic!("Disconnect"),
+    async fn log(&self, e: E) {
+        if let Err(_err) = self.tx.lock().await.send(e).await {
+            panic!("EventTracer send error");
         }
     }
 
-    fn now(&self) -> Option<E> {
-        self.wait(Duration::from_millis(0))
+    async fn wait(&self, timeout: Duration) -> Option<E> {
+        let mut rx = self.rx.lock().await;
+
+        match time::timeout(timeout, rx.recv()).await {
+            Err(_err) => None,
+            Ok(Some(v)) => Some(v),
+            Ok(None) => panic!("Disconnect"),
+        }
+    }
+
+    async fn now(&self) -> Option<E> {
+        self.wait(Duration::from_millis(0)).await
     }
 }
 
@@ -88,36 +99,41 @@ impl Opaque {
 
 macro_rules! no_events {
     ($opq:expr) => {
-        assert_eq!($opq.send.now(), None, "unexpected send event");
-        assert_eq!($opq.recv.now(), None, "unexpected recv event");
-        assert_eq!($opq.need_key.now(), None, "unexpected need_key event");
-        assert_eq!($opq.key_confirmed.now(), None, "unexpected key_confirmed event");
+        assert_eq!($opq.send.now().await, None, "unexpected send event");
+        assert_eq!($opq.recv.now().await, None, "unexpected recv event");
+        assert_eq!($opq.need_key.now().await, None, "unexpected need_key event");
+        assert_eq!(
+            $opq.key_confirmed.now().await,
+            None,
+            "unexpected key_confirmed event"
+        );
     };
 }
 
+#[async_trait]
 impl Callbacks for TestCallbacks {
     type Opaque = Opaque;
 
-    fn send(t: &Self::Opaque, size: usize, sent: bool, _keypair: &Arc<KeyPair>, _counter: u64) {
-        t.send.log((size, sent))
+    async fn send(t: &Self::Opaque, size: usize, sent: bool, _keypair: &Arc<KeyPair>, _counter: u64) {
+        t.send.log((size, sent)).await
     }
 
-    fn recv(t: &Self::Opaque, size: usize, sent: bool, _keypair: &Arc<KeyPair>) {
-        t.recv.log((size, sent))
+    async fn recv(t: &Self::Opaque, size: usize, sent: bool, _keypair: &Arc<KeyPair>) {
+        t.recv.log((size, sent)).await
     }
 
-    fn need_key(t: &Self::Opaque) {
-        t.need_key.log(());
+    async fn need_key(t: &Self::Opaque) {
+        t.need_key.log(()).await;
     }
 
-    fn key_confirmed(t: &Self::Opaque) {
-        t.key_confirmed.log(());
+    async fn key_confirmed(t: &Self::Opaque) {
+        t.key_confirmed.log(()).await;
     }
 }
 
-#[test]
-#[traced_test]
-fn test_outbound() {
+#[tokio::test]
+// #[traced_test]
+async fn test_outbound() {
     // create device
     let (_fake, _reader, tun_writer, _mtu) = dummy::TunTest::create(false);
     let router: Device<_, TestCallbacks, _, _> = Device::new(1, tun_writer);
@@ -162,7 +178,7 @@ fn test_outbound() {
 
                 // confirm using keepalive
                 if set_key && (!confirm_with_staged_packet) {
-                    peer.add_keypair(dummy_keypair(true));
+                    peer.add_keypair(dummy_keypair(true)).await;
                 }
 
                 // map subnet to peer
@@ -177,18 +193,18 @@ fn test_outbound() {
                 let msg = make_packet(SIZE_MSG, src, dst, 0);
 
                 // crypto-key route the IP packet
-                let res = router.send(pad(&msg));
+                let res = router.send(pad(&msg)).await;
                 assert_eq!(res.is_ok(), okay, "crypto-routing / destination lookup failure");
 
                 // confirm using staged packet
                 if set_key && confirm_with_staged_packet {
-                    peer.add_keypair(dummy_keypair(true));
+                    peer.add_keypair(dummy_keypair(true)).await;
                 }
 
                 // check for key-material request
                 if need_key {
                     assert_eq!(
-                        opaque.need_key.wait(TIMEOUT),
+                        opaque.need_key.wait(TIMEOUT).await,
                         Some(()),
                         "should have requested a new key, if no encryption state was set"
                     );
@@ -197,7 +213,7 @@ fn test_outbound() {
                 // check for keepalive
                 if send_keepalive {
                     assert_eq!(
-                        opaque.send.wait(TIMEOUT),
+                        opaque.send.wait(TIMEOUT).await,
                         Some((SIZE_KEEPALIVE, false)),
                         "keepalive should be sent before transport message"
                     );
@@ -206,7 +222,7 @@ fn test_outbound() {
                 // check for encryption of payload
                 if send_payload {
                     assert_eq!(
-                        opaque.send.wait(TIMEOUT),
+                        opaque.send.wait(TIMEOUT).await,
                         Some((SIZE_KEEPALIVE + msg.len(), false)),
                         "message buffer should be encrypted"
                     )
@@ -219,9 +235,9 @@ fn test_outbound() {
     }
 }
 
-#[test]
-#[traced_test]
-fn test_bidirectional() {
+#[tokio::test]
+// #[traced_test]
+async fn test_bidirectional() {
     const MAX_SIZE_BODY: usize = 1 << 15;
 
     let tests = [
@@ -280,7 +296,7 @@ fn test_bidirectional() {
                 let (mask, len, _ip, _okay) = p1;
                 let mask: IpAddr = mask.parse().unwrap();
                 peer1.add_allowed_ip(mask, *len);
-                peer1.add_keypair(dummy_keypair(false));
+                peer1.add_keypair(dummy_keypair(false)).await;
             }
 
             {
@@ -306,11 +322,11 @@ fn test_bidirectional() {
                 confirm_packet_size = msg.len() + SIZE_KEEPALIVE;
 
                 // stage packet for sending
-                router2.send(pad(&msg)).expect("failed to sent staged packet");
+                router2.send(pad(&msg)).await.expect("failed to sent staged packet");
 
                 // a new key should have been requested from the handshake machine
                 assert_eq!(
-                    opaque2.need_key.wait(TIMEOUT),
+                    opaque2.need_key.wait(TIMEOUT).await,
                     Some(()),
                     "a new key should be requested since a packet was attempted transmitted"
                 );
@@ -322,11 +338,11 @@ fn test_bidirectional() {
 
             // add a keypair
             assert_eq!(peer1.get_endpoint(), None, "no endpoint has yet been set");
-            peer2.add_keypair(dummy_keypair(true));
+            peer2.add_keypair(dummy_keypair(true)).await;
 
             // this should cause a key-confirmation packet (keepalive or staged packet)
             assert_eq!(
-                opaque2.send.wait(TIMEOUT),
+                opaque2.send.wait(TIMEOUT).await,
                 Some((confirm_packet_size, true)),
                 "expected successful transmission of a confirmation packet"
             );
@@ -337,24 +353,27 @@ fn test_bidirectional() {
 
             // read confirming message received by the other end ("across the internet")
             let mut buf = vec![0u8; SIZE_MSG * 2];
-            let (len, from) = bind_reader1.read(&mut buf).unwrap();
+            let (len, from) = bind_reader1.read(&mut buf).await.unwrap();
             buf.truncate(len);
 
             assert_eq!(len, confirm_packet_size, "unexpected size of confirmation message");
 
             // pass to the router for processing
-            router1.recv(from, buf).expect("failed to receive confirmation message");
+            router1
+                .recv(from, buf)
+                .await
+                .expect("failed to receive confirmation message");
 
             // check that a receive event is fired
             assert_eq!(
-                opaque1.recv.wait(TIMEOUT),
+                opaque1.recv.wait(TIMEOUT).await,
                 Some((confirm_packet_size, true)),
                 "we expect processing to be successful"
             );
 
             // the key is confirmed
             assert_eq!(
-                opaque1.key_confirmed.wait(TIMEOUT),
+                opaque1.key_confirmed.wait(TIMEOUT).await,
                 Some(()),
                 "confirmation message should confirm the key"
             );
@@ -393,11 +412,14 @@ fn test_bidirectional() {
                 // calculate encrypted size
                 let encrypted_size = msg.len() + SIZE_KEEPALIVE;
 
-                router1.send(pad(&msg)).expect("we expect routing to be successful");
+                router1
+                    .send(pad(&msg))
+                    .await
+                    .expect("we expect routing to be successful");
 
                 // encryption succeeds and the correct size is logged
                 assert_eq!(
-                    opaque1.send.wait(TIMEOUT),
+                    opaque1.send.wait(TIMEOUT).await,
                     Some((encrypted_size, true)),
                     "expected send event for peer1 -> peer2 payload"
                 );
@@ -408,13 +430,13 @@ fn test_bidirectional() {
 
                 // receive ("across the internet") on the other end
                 let mut buf = vec![0u8; MAX_SIZE_BODY + 512];
-                let (len, from) = bind_reader2.read(&mut buf).unwrap();
+                let (len, from) = bind_reader2.read(&mut buf).await.unwrap();
                 buf.truncate(len);
-                router2.recv(from, buf).unwrap();
+                router2.recv(from, buf).await.unwrap();
 
                 // check that decryption succeeds
                 assert_eq!(
-                    opaque2.recv.wait(TIMEOUT),
+                    opaque2.recv.wait(TIMEOUT).await,
                     Some((msg.len() + SIZE_KEEPALIVE, true)),
                     "decryption and routing should succeed"
                 );

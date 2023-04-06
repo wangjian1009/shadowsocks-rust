@@ -69,9 +69,9 @@ pub fn make_packet(size: usize, src: IpAddr, dst: IpAddr, id: u64) -> Vec<u8> {
  * - All packets up to MTU are delivered
  * - All packets are delivered in-order
  */
-#[test]
+#[tokio::test]
 #[traced_test]
-fn test_pure_wireguard() {
+async fn test_pure_wireguard() {
     // create WG instances for dummy TUN devices
     use crate::net::ConnectOpts;
 
@@ -89,8 +89,8 @@ fn test_pure_wireguard() {
         #[cfg(feature = "rate-limit")]
         Arc::new(RateLimiter::new(None).unwrap()),
     );
-    wg1.add_tun_reader(tun_reader1);
-    wg1.up(1500);
+    wg1.add_tun_reader(tun_reader1).await;
+    wg1.up(1500).await;
 
     let (fake2, tun_reader2, tun_writer2, _) = dummy::TunTest::create(true);
     let wg2: WireGuard<dummy::TunTest, dummy::PairBind> = WireGuard::new(
@@ -99,8 +99,8 @@ fn test_pure_wireguard() {
         #[cfg(feature = "rate-limit")]
         Arc::new(RateLimiter::new(None).unwrap()),
     );
-    wg2.add_tun_reader(tun_reader2);
-    wg2.up(1500);
+    wg2.add_tun_reader(tun_reader2).await;
+    wg2.up(1500).await;
 
     // create pair bind to connect the interfaces "over the internet"
 
@@ -128,17 +128,17 @@ fn test_pure_wireguard() {
 
     let pk2 = PublicKey::from(&sk2);
 
-    wg1.add_peer(pk2);
-    wg2.add_peer(pk1);
+    wg1.add_peer(pk2).await;
+    wg2.add_peer(pk1).await;
 
-    wg1.set_key(Some(sk1));
-    wg2.set_key(Some(sk2));
+    wg1.set_key(Some(sk1)).await;
+    wg2.set_key(Some(sk2)).await;
 
     // configure crypto-key router
 
     {
-        let peers1 = wg1.peers.read();
-        let peers2 = wg2.peers.read();
+        let peers1 = wg1.peers.read().await;
+        let peers2 = wg2.peers.read().await;
 
         let peer2 = peers1.get(&pk2).unwrap();
         let peer1 = peers2.get(&pk1).unwrap();
@@ -172,13 +172,13 @@ fn test_pure_wireguard() {
 
         while let Some(p) = packets.pop() {
             println!("send");
-            fake1.write(p);
+            fake1.write(p).await;
         }
 
         while let Some(p) = backup.pop() {
             println!("read");
             assert_eq!(
-                hex::encode(fake2.read()),
+                hex::encode(fake2.read().await),
                 hex::encode(p),
                 "Failed to receive valid IPv4 packet unmodified and in-order"
             );
@@ -202,12 +202,12 @@ fn test_pure_wireguard() {
         let mut backup = packets.clone();
 
         while let Some(p) = packets.pop() {
-            fake2.write(p);
+            fake2.write(p).await;
         }
 
         while let Some(p) = backup.pop() {
             assert_eq!(
-                hex::encode(fake1.read()),
+                hex::encode(fake1.read().await),
                 hex::encode(p),
                 "Failed to receive valid IPv4 packet unmodified and in-order"
             );

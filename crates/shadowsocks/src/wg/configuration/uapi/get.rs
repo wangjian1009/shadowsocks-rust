@@ -1,52 +1,56 @@
-use std::io;
+use tokio::io::{self, AsyncWrite, AsyncWriteExt};
 
 use super::Configuration;
 
-pub fn serialize<C: Configuration, W: io::Write>(writer: &mut W, config: &C) -> io::Result<()> {
-    let mut write = |key: &'static str, value: String| {
-        debug_assert!(value.is_ascii());
-        debug_assert!(key.is_ascii());
-        tracing::trace!("UAPI: return : {}={}", key, value);
-        writer.write_all(key.as_ref())?;
-        writer.write_all(b"=")?;
-        writer.write_all(value.as_ref())?;
-        writer.write_all(b"\n")
-    };
+pub async fn write<W: AsyncWrite + Unpin>(writer: &mut W, key: &'static str, value: String) -> io::Result<()> {
+    debug_assert!(value.is_ascii());
+    debug_assert!(key.is_ascii());
+    tracing::trace!("UAPI: return : {}={}", key, value);
+    writer.write_all(key.as_ref()).await?;
+    writer.write_all(b"=").await?;
+    writer.write_all(value.as_ref()).await?;
+    writer.write_all(b"\n").await
+}
 
+pub async fn serialize<C: Configuration, W: AsyncWrite + Unpin>(writer: &mut W, config: &C) -> io::Result<()> {
     // serialize interface
-    config
-        .get_private_key()
-        .map(|sk| write("private_key", hex::encode(sk.to_bytes())));
+    if let Some(sk) = config.get_private_key().await {
+        write(writer, "private_key", hex::encode(sk.to_bytes())).await?;
+    }
 
-    config
-        .get_listen_port()
-        .map(|port| write("listen_port", port.to_string()));
+    if let Some(port) = config.get_listen_port().await {
+        write(writer, "listen_port", port.to_string()).await?;
+    }
 
-    config.get_fwmark().map(|fwmark| write("fwmark", fwmark.to_string()));
+    if let Some(fwmark) = config.get_fwmark().await {
+        write(writer, "fwmark", fwmark.to_string()).await?;
+    }
 
     // serialize all peers
-    let mut peers = config.get_peers();
+    let mut peers = config.get_peers().await;
     while let Some(p) = peers.pop() {
-        write("public_key", hex::encode(p.public_key.as_bytes()))?;
-        write("preshared_key", hex::encode(p.preshared_key))?;
-        write("rx_bytes", p.rx_bytes.to_string())?;
-        write("tx_bytes", p.tx_bytes.to_string())?;
+        write(writer, "public_key", hex::encode(p.public_key.as_bytes())).await?;
+        write(writer, "preshared_key", hex::encode(p.preshared_key)).await?;
+        write(writer, "rx_bytes", p.rx_bytes.to_string()).await?;
+        write(writer, "tx_bytes", p.tx_bytes.to_string()).await?;
         write(
+            writer,
             "persistent_keepalive_interval",
             p.persistent_keepalive_interval.to_string(),
-        )?;
+        )
+        .await?;
 
         if let Some((secs, nsecs)) = p.last_handshake_time {
-            write("last_handshake_time_sec", secs.to_string())?;
-            write("last_handshake_time_nsec", nsecs.to_string())?;
+            write(writer, "last_handshake_time_sec", secs.to_string()).await?;
+            write(writer, "last_handshake_time_nsec", nsecs.to_string()).await?;
         }
 
         if let Some(endpoint) = p.endpoint {
-            write("endpoint", endpoint.to_string())?;
+            write(writer, "endpoint", endpoint.to_string()).await?;
         }
 
         for (ip, cidr) in p.allowed_ips {
-            write("allowed_ip", ip.to_string() + "/" + &cidr.to_string())?;
+            write(writer, "allowed_ip", ip.to_string() + "/" + &cidr.to_string()).await?;
         }
     }
 

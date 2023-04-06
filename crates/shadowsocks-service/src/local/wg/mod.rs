@@ -1,5 +1,5 @@
-use std::os::unix::io::RawFd;
 use tokio::io::{self, AsyncWriteExt};
+use tun::{AsyncDevice, Configuration as TunConfiguration, Error as TunError, Layer};
 
 use shadowsocks::wg::{plt, set_configuration, Config as WgConfig, Configuration, WireGuard, WireGuardConfig};
 
@@ -13,6 +13,8 @@ pub(super) async fn create_wg_server(
     local: Vec<LocalInstanceConfig>,
     wg_config: &WgConfig,
 ) -> io::Result<()> {
+    tracing::error!("xxxxx create_wg_server: {:?}", wg_config);
+
     if local.len() != 1 {
         return Err(io::Error::new(
             io::ErrorKind::Other,
@@ -29,10 +31,10 @@ pub(super) async fn create_wg_server(
         ));
     }
 
-    let fd = read_tun_fd(local_config).await?;
+    let device = read_tun_device(local_config).await?;
 
     // create TUN device
-    let (mut readers, writer) = plt::Tun::new_from_fd(fd).map_err(|e| {
+    let (mut readers, writer) = plt::Tun::new_from_device(device).map_err(|e| {
         tracing::error!(err = ?e, "Failed to create TUN device");
         io::Error::new(io::ErrorKind::Other, "Failed to create TUN device")
     })?;
@@ -47,32 +49,24 @@ pub(super) async fn create_wg_server(
 
     // add all Tun readers
     while let Some(reader) = readers.pop() {
-        wg.add_tun_reader(reader);
+        wg.add_tun_reader(reader).await;
     }
+
+    // wrap in configuration interface
+    let mut cfg = WireGuardConfig::new(wg.clone());
+
+    let mtu = wg_config.itf.mtu.unwrap_or(1500);
+    tracing::info!("Tun up (mtu = {})", mtu);
+    let _ = cfg.up(mtu).await; // TODO: handle
 
     let uapi_context = wg_config.uapi_configuration();
     tracing::trace!("uapi-config: {}", uapi_context);
 
-    // wrap in configuration interface
-    let mut cfg = WireGuardConfig::new(wg.clone());
-    if let Err(err) = set_configuration(&mut cfg, uapi_context.as_str()) {
+    if let Err(err) = set_configuration(&mut cfg, uapi_context.as_str()).await {
         tracing::error!(err = ?err, "Failed to create TUN device");
         return Err(io::Error::new(io::ErrorKind::Other, "Failed to configure device"));
     }
-
-    let mtu = wg_config.itf.mtu.unwrap_or(1500);
-
-    // block until all tun readers closed
-    let _thread_wait = {
-        let cfg = cfg.clone();
-        std::thread::spawn(move || loop {
-            tracing::info!("Tun up (mtu = {})", mtu);
-            let _ = cfg.up(mtu); // TODO: handle
-
-            wg.wait();
-            tracing::error!("wg_wait: end");
-        })
-    };
+    tracing::trace!("uapi-config: process success");
 
     let flow_state = context.flow_stat();
     vfut.push(ServerHandle(tokio::spawn(async move {
@@ -80,7 +74,7 @@ pub(super) async fn create_wg_server(
         let mut last_rx = 0;
         loop {
             let _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            for peer in cfg.get_peers() {
+            for peer in cfg.get_peers().await {
                 if peer.rx_bytes > last_rx {
                     flow_state.incr_rx(peer.rx_bytes - last_rx);
                     last_rx = peer.rx_bytes;
@@ -100,7 +94,7 @@ pub(super) async fn create_wg_server(
                     let fake_mode = context.fake_mode();
                     match fake_mode {
                         FakeMode::ParamError => {
-                            cfg.remove_peer(&peer.public_key);
+                            cfg.remove_peer(&peer.public_key).await;
                             // tracing::error!("xxxxxxx: remove {:?}", peer.public_key);
                         }
                         _ => {}
@@ -113,9 +107,22 @@ pub(super) async fn create_wg_server(
     Ok(())
 }
 
-async fn read_tun_fd(config: &LocalInstanceConfig) -> io::Result<RawFd> {
+async fn read_tun_device(config: &LocalInstanceConfig) -> io::Result<AsyncDevice> {
+    let mut tun_config = TunConfiguration::default();
+
+    if let Some(addr) = config.config.tun_interface_address {
+        tun_config.address(addr.addr()).netmask(addr.netmask());
+    }
+    if let Some(addr) = config.config.tun_interface_destination {
+        tun_config.destination(addr.addr());
+    }
+    if let Some(name) = &config.config.tun_interface_name {
+        tun_config.name(name);
+    }
+
+    #[cfg(unix)]
     if let Some(fd) = config.config.tun_device_fd {
-        return Ok(fd);
+        tun_config.raw_fd(fd);
     } else if let Some(ref fd_path) = config.config.tun_device_fd_from_path {
         use shadowsocks::net::UnixListener;
         use std::fs;
@@ -155,7 +162,8 @@ async fn read_tun_fd(config: &LocalInstanceConfig) -> io::Result<RawFd> {
                         tracing::error!(err = ?err, "client {:?} send recv fd success error", peer_addr);
                     }
 
-                    return Ok(fd_buffer[0]);
+                    tun_config.raw_fd(fd_buffer[0]);
+                    break;
                 }
                 Err(err) => {
                     tracing::error!(
@@ -170,4 +178,20 @@ async fn read_tun_fd(config: &LocalInstanceConfig) -> io::Result<RawFd> {
         tracing::error!("no tun fd setted");
         return Err(io::Error::new(io::ErrorKind::Other, "no tun fd setted"));
     }
+
+    tun_config.layer(Layer::L3).up();
+
+    #[cfg(any(target_os = "linux"))]
+    tun_config.platform(|tun_config| {
+        // IFF_NO_PI preventing excessive buffer reallocating
+        tun_config.packet_information(false);
+    });
+
+    let device = match tun::create_as_async(&tun_config) {
+        Ok(d) => d,
+        Err(TunError::Io(err)) => return Err(err),
+        Err(err) => return Err(io::Error::new(io::ErrorKind::Other, err)),
+    };
+
+    Ok(device)
 }

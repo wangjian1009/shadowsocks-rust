@@ -1,17 +1,23 @@
 use super::super::tun::*;
 
+use async_trait::async_trait;
 use std::error::Error;
 use std::fmt;
-use std::os::unix::io::RawFd;
+use tun::AsyncDevice;
+
+use tokio::{
+    io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
+    sync::Mutex,
+};
 
 pub struct AndroidTun {}
 
 pub struct AndroidTunReader {
-    fd: RawFd,
+    device: Mutex<ReadHalf<AsyncDevice>>,
 }
 
 pub struct AndroidTunWriter {
-    fd: RawFd,
+    device: Mutex<WriteHalf<AsyncDevice>>,
 }
 
 pub struct AndroidTunStatus {
@@ -55,18 +61,27 @@ impl Error for AndroidTunError {
     }
 }
 
+#[async_trait]
 impl Reader for AndroidTunReader {
     type Error = AndroidTunError;
 
-    fn read(&self, buf: &mut [u8], offset: usize) -> Result<usize, Self::Error> {
+    async fn read(&self, buf: &mut [u8], offset: usize) -> Result<usize, Self::Error> {
         /*
         debug_assert!(
             offset < buf.len(),
             "There is no space for the body of the read"
         );
-        */
-        let n: isize = unsafe { libc::read(self.fd, buf[offset..].as_mut_ptr() as _, buf.len() - offset) };
-        if n < 0 {
+         */
+
+        let n = match self.device.lock().await.read(&mut buf[offset..]).await {
+            Ok(n) => n,
+            Err(err) => {
+                tracing::error!(err = ?err, "tun read error");
+                return Err(AndroidTunError::NetlinkFailure);
+            }
+        };
+
+        if n == 0 {
             Err(AndroidTunError::Closed)
         } else {
             // conversion is safe
@@ -75,28 +90,42 @@ impl Reader for AndroidTunReader {
     }
 }
 
+#[async_trait]
 impl Writer for AndroidTunWriter {
     type Error = AndroidTunError;
 
-    fn write(&self, src: &[u8]) -> Result<(), Self::Error> {
-        match unsafe { libc::write(self.fd, src.as_ptr() as _, src.len() as _) } {
-            -1 => Err(AndroidTunError::Closed),
-            _ => Ok(()),
+    async fn write(&self, src: &[u8]) -> Result<(), Self::Error> {
+        let n = match self.device.lock().await.write(src).await {
+            Ok(n) => n,
+            Err(err) => {
+                tracing::error!(err = ?err, "tun write error");
+                return Err(AndroidTunError::NetlinkFailure);
+            }
+        };
+
+        if n == 0 {
+            Err(AndroidTunError::Closed)
+        } else if n != src.len() {
+            tracing::error!("write {} bytes, but only write {}", src.len(), n);
+            return Err(AndroidTunError::NetlinkFailure);
+        } else {
+            Ok(())
         }
     }
 }
 
+#[async_trait]
 impl Status for AndroidTunStatus {
     type Error = AndroidTunError;
 
-    fn event(&mut self) -> Result<TunEvent, Self::Error> {
+    async fn event(&mut self) -> Result<TunEvent, Self::Error> {
         loop {
             // attempt to return a buffered event
             if let Some(event) = self.events.pop() {
                 return Ok(event);
             }
 
-            std::thread::park();
+            tokio::task::yield_now().await;
         }
     }
 }
@@ -109,11 +138,11 @@ impl Tun for AndroidTun {
 
 impl AndroidTun {
     #[allow(clippy::type_complexity)]
-    pub fn new_from_fd(fd: RawFd) -> Result<(Vec<AndroidTunReader>, AndroidTunWriter), AndroidTunError> {
-        // create PlatformTunMTU instance
+    pub fn new_from_device(device: AsyncDevice) -> Result<(Vec<AndroidTunReader>, AndroidTunWriter), AndroidTunError> {
+        let (r, w) = split(device);
         Ok((
-            vec![AndroidTunReader { fd }], // TODO: use multi-queue for Android
-            AndroidTunWriter { fd },
+            vec![AndroidTunReader { device: Mutex::new(r) }],
+            AndroidTunWriter { device: Mutex::new(w) },
         ))
     }
 }

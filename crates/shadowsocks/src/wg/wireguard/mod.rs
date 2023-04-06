@@ -11,6 +11,7 @@ mod handshake;
 mod peer;
 mod queue;
 mod router;
+mod timer;
 mod timers;
 mod types;
 mod workers;

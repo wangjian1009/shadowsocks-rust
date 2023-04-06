@@ -1,7 +1,6 @@
 use std::collections::hash_map;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Mutex;
 
 use byteorder::{ByteOrder, LittleEndian};
 use dashmap::mapref::entry::Entry;
@@ -14,6 +13,8 @@ use clear_on_drop::clear::Clear;
 
 use x25519_dalek::PublicKey;
 use x25519_dalek::StaticSecret;
+
+use tokio::sync::Mutex;
 
 use super::macs;
 use super::messages::{CookieReply, Initiation, Response};
@@ -296,7 +297,7 @@ impl<O> Device<O> {
     /// # Arguments
     ///
     /// * `msg` - Byte slice containing the message (untrusted input)
-    pub fn process<'a, R: RngCore + CryptoRng>(
+    pub async fn process<'a, R: RngCore + CryptoRng>(
         &'a self,
         rng: &mut R,             // rng instance to sample randomness from
         msg: &[u8],              // message buffer
@@ -337,7 +338,7 @@ impl<O> Device<O> {
                     }
 
                     // check ratelimiter
-                    if !self.limiter.lock().unwrap().allow(&src.ip()) {
+                    if !self.limiter.lock().await.allow(&src.ip()) {
                         return Err(HandshakeError::RateLimited);
                     }
                 }
@@ -381,7 +382,7 @@ impl<O> Device<O> {
                     }
 
                     // check ratelimiter
-                    if !self.limiter.lock().unwrap().allow(&src.ip()) {
+                    if !self.limiter.lock().await.allow(&src.ip()) {
                         return Err(HandshakeError::RateLimited);
                     }
                 }

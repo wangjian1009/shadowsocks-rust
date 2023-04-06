@@ -218,17 +218,14 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> PeerInner<E, 
     /// # Returns
     ///
     /// Unit if packet was sent, or an error indicating why sending failed
-    pub fn send_raw(&self, msg: &[u8]) -> Result<(), RouterError> {
+    pub async fn send_raw(&self, msg: &[u8]) -> Result<(), RouterError> {
         // send to endpoint (if known)
         match self.endpoint.lock().as_mut() {
             Some(endpoint) => {
                 let outbound = self.device.outbound.read();
                 if outbound.0 {
-                    outbound
-                        .1
-                        .as_ref()
-                        .ok_or(RouterError::SendError)
-                        .and_then(|w| w.write(msg, endpoint).map_err(|_| RouterError::SendError))
+                    let w = outbound.1.as_ref().ok_or(RouterError::SendError)?;
+                    w.write(msg, endpoint).await.map_err(|_| RouterError::SendError)
                 } else {
                     Ok(())
                 }
@@ -245,7 +242,7 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> Peer<E, C, T,
     ///
     /// - `msg` : A padded vector holding the message (allows in-place construction of the transport header)
     /// - `stage`: Should the message be staged if no key is available
-    pub(super) fn send(&self, msg: Vec<u8>, stage: bool) {
+    pub(super) async fn send(&self, msg: Vec<u8>, stage: bool) {
         // check if key available
         let (job, need_key) = {
             let mut enc_key = self.enc_key.lock();
@@ -283,17 +280,17 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> Peer<E, C, T,
         if need_key {
             tracing::debug!("request new key");
             debug_assert!(job.is_none());
-            C::need_key(&self.opaque);
+            C::need_key(&self.opaque).await;
         };
 
         if let Some(job) = job {
             tracing::debug!("schedule outbound job");
-            self.device.work.send(JobUnion::Outbound(job))
+            self.device.work.send(JobUnion::Outbound(job)).await
         }
     }
 
     // Transmit all staged packets
-    fn send_staged(&self) -> bool {
+    async fn send_staged(&self) -> bool {
         tracing::trace!("peer.send_staged");
         let mut sent = false;
         let mut staged = self.staged_packets.lock();
@@ -301,14 +298,14 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> Peer<E, C, T,
             match staged.pop_front() {
                 Some(msg) => {
                     sent = true;
-                    self.send(msg, false);
+                    self.send(msg, false).await;
                 }
                 None => break sent,
             }
         }
     }
 
-    pub(super) fn confirm_key(&self, keypair: &Arc<KeyPair>) {
+    pub(super) async fn confirm_key(&self, keypair: &Arc<KeyPair>) {
         tracing::trace!("peer.confirm_key");
         {
             // take lock and check keypair = keys.next
@@ -333,14 +330,14 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> Peer<E, C, T,
             mem::swap(&mut keys.previous, &mut swap);
 
             // tell the world outside the router that a key was confirmed
-            C::key_confirmed(&self.opaque);
+            C::key_confirmed(&self.opaque).await;
 
             // set new key for encryption
             *self.enc_key.lock() = ekey;
         }
 
         // start transmission of staged packets
-        self.send_staged();
+        self.send_staged().await;
     }
 }
 
@@ -428,7 +425,7 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> PeerHandle<E,
     /// The number of ids to be released can be at most 3,
     /// since the only way to add additional keys to the peer is by using this method
     /// and a peer can have at most 3 keys allocated in the router at any time.
-    pub fn add_keypair(&self, new: KeyPair) -> Vec<u32> {
+    pub async fn add_keypair(&self, new: KeyPair) -> Vec<u32> {
         tracing::trace!("Router, add_keypair: {:?}", new);
 
         let initiator = new.initiator;
@@ -474,9 +471,9 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> PeerHandle<E,
             debug_assert!(self.peer.enc_key.lock().is_some());
             tracing::trace!("peer.add_keypair: is initiator, must confirm the key");
             // attempt to confirm using staged packets
-            if !self.peer.send_staged() {
+            if !self.peer.send_staged().await {
                 // fall back to keepalive packet
-                self.send_keepalive();
+                self.send_keepalive().await;
                 tracing::debug!("peer.add_keypair: keepalive for confirmation",);
             }
             tracing::trace!("peer.add_keypair: key attempted confirmed");
@@ -486,9 +483,9 @@ impl<E: Endpoint, C: Callbacks, T: tun::Writer, B: udp::Writer<E>> PeerHandle<E,
         release
     }
 
-    pub fn send_keepalive(&self) {
+    pub async fn send_keepalive(&self) {
         tracing::trace!("peer.send_keepalive");
-        self.peer.send(vec![0u8; SIZE_MESSAGE_PREFIX], false)
+        self.peer.send(vec![0u8; SIZE_MESSAGE_PREFIX], false).await
     }
 
     /// Map a subnet to the peer

@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 use super::KeyPair;
 
 use core::fmt;
@@ -26,12 +28,13 @@ pub trait KeyCallback<T>: Fn(&T) + Sync + Send + 'static {}
 
 impl<T, F> KeyCallback<T> for F where F: Fn(&T) + Sync + Send + 'static {}
 
+#[async_trait]
 pub trait Callbacks: Send + Sync + 'static {
     type Opaque: Opaque;
-    fn send(opaque: &Self::Opaque, size: usize, sent: bool, keypair: &Arc<KeyPair>, counter: u64);
-    fn recv(opaque: &Self::Opaque, size: usize, sent: bool, keypair: &Arc<KeyPair>);
-    fn need_key(opaque: &Self::Opaque);
-    fn key_confirmed(opaque: &Self::Opaque);
+    async fn send(opaque: &Self::Opaque, size: usize, sent: bool, keypair: &Arc<KeyPair>, counter: u64);
+    async fn recv(opaque: &Self::Opaque, size: usize, sent: bool, keypair: &Arc<KeyPair>);
+    async fn need_key(opaque: &Self::Opaque);
+    async fn key_confirmed(opaque: &Self::Opaque);
 }
 
 #[derive(Debug)]

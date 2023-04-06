@@ -31,3 +31,9 @@ cfg_if! {
         pub use apple as plt;
     }
 }
+
+cfg_if! {
+    if #[cfg(any(target_os = "android", target_os = "macos", target_os = "ios"))] {
+        pub mod general;
+    }
+}
