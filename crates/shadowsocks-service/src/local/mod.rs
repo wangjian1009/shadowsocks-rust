@@ -41,7 +41,9 @@ use self::{
     loadbalancing::{PingBalancer, PingBalancerBuilder},
 };
 
+#[cfg(feature = "local-api")]
 pub mod api;
+
 pub mod context;
 #[cfg(feature = "local-dns")]
 pub mod dns;

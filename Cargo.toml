@@ -110,7 +110,7 @@ default = [
 
 # Enable local server
 local = ["shadowsocks-service/local"]
-local-url = ["local", "hyper", "url"]
+local-url = ["local", "hyper", "url", "shadowsocks-service/local-api"]
 local-maintain = ["shadowsocks-service/local-maintain"]
 local-signed-info = ["shadowsocks-service/local-signed-info"]
 local-fake-mode = ["shadowsocks-service/local-fake-mode"]
@@ -303,4 +303,3 @@ tokio-test = "*"
 [patch.crates-io]
 quinn = { path = "depends/quinn/quinn" }
 tracing-oslog = { path = "depends/tracing-oslog" }
-x25519-dalek =  { path = "depends/x25519-dalek" }
