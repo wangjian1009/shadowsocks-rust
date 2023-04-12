@@ -65,6 +65,7 @@ strip = true
 [features]
 default = [
     "logging",
+    "tokio-console",
     "logging-console",
     "logging-oslog",
     "logging-file",
@@ -161,6 +162,8 @@ logging-oslog = ["logging", "tracing-oslog"]
 logging-file = ["logging", "tracing-appender"]
 logging-apm = ["logging", "url", "tracing-elastic-apm", "sysinfo"]
 logging-jaeger = ["logging", "url", "tracing-opentelemetry", "opentelemetry", "opentelemetry-jaeger"]
+
+tokio-console = ["tokio/tracing", "console-subscriber"]
 
 # Enable metrics
 statistics=["metrics", "shadowsocks-service/statistics"]
@@ -271,6 +274,7 @@ rand = "0.8"
 
 futures = "0.3"
 tokio = { version = "*", features = ["rt", "signal", "io-std", "fs"] }
+console-subscriber = { version = "0.1.8", optional = true }
 num_cpus = "1.15"
 
 governor = { version = "0.3.2", optional = true }

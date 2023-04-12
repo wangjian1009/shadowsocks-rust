@@ -65,6 +65,21 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
 
     let subscriber = tracing_subscriber::registry();
 
+    // tokio-console
+    cfg_if! {
+        if #[cfg(feature = "tokio-console")] {
+            let subscriber = subscriber.with({
+                console_subscriber::ConsoleLayer::builder()
+                // set how long the console will retain data from completed tasks
+                    .retention(tokio::time::Duration::from_secs(60))
+                // set the address the server is bound to
+                    .server_addr(([0, 0, 0, 0], 5555))
+                // ... other configurations ...
+                    .spawn()
+            });
+        }
+    }
+
     // 控制台输出
     cfg_if! {
         if #[cfg(feature = "logging-console")] {

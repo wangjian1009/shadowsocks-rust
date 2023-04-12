@@ -13,7 +13,7 @@ pub(super) async fn create_wg_server(
     local: Vec<LocalInstanceConfig>,
     wg_config: &WgConfig,
 ) -> io::Result<()> {
-    tracing::error!("xxxxx create_wg_server: {:?}", wg_config);
+    // tracing::error!("xxxxx create_wg_server: {:?}", wg_config);
 
     if local.len() != 1 {
         return Err(io::Error::new(
@@ -68,6 +68,8 @@ pub(super) async fn create_wg_server(
     }
     tracing::trace!("uapi-config: process success");
 
+    // let test_assert = tokio::time::Instant::now() + tokio::time::Duration::from_secs(30);
+
     let flow_state = context.flow_stat();
     vfut.push(ServerHandle(tokio::spawn(async move {
         let mut last_tx = 0;
@@ -86,6 +88,10 @@ pub(super) async fn create_wg_server(
                 }
 
                 // tracing::error!("xxxxx: tx={}, rx={}", peer.rx_bytes, peer.tx_bytes);
+
+                // if tokio::time::Instant::now() > test_assert {
+                //     panic!("test core assert");
+                // }
 
                 #[cfg(feature = "local-fake-mode")]
                 {

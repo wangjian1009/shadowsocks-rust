@@ -47,7 +47,7 @@ pub mod api;
 pub mod context;
 #[cfg(feature = "local-dns")]
 pub mod dns;
-#[cfg(feature = "local-http")]
+#[cfg(any(feature = "local-http", feature = "local-api"))]
 pub mod http;
 pub mod loadbalancing;
 pub mod net;

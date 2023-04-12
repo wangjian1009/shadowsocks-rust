@@ -81,7 +81,9 @@ impl MaintainServerContext {
                 bound_width
             );
             self.service_context.rate_limiter().set_rate_limit(bound_width)?;
-        };
+        } else {
+            tracing::info!("maintain-service: speed-limit {:?} not changed", bound_width);
+        }
 
         #[allow(unused_mut)]
         let mut response_code = StatusCode::OK;

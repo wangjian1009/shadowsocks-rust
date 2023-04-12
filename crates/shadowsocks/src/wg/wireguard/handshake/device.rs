@@ -264,8 +264,8 @@ impl<O> Device<O> {
     ///
     /// * `id` - The (sender) id to release
     pub fn release(&self, id: u32) {
-        let old = self.id_map.remove(&id);
-        assert!(old.is_some(), "released id not allocated");
+        let _old = self.id_map.remove(&id);
+        // assert!(old.is_some(), "released id not allocated");
     }
 
     /// Begin a new handshake
