@@ -4,7 +4,7 @@ use std::{
     str::FromStr,
 };
 
-pub const WG_KEY_LEN: usize = 32;
+use super::KeyBytes;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
@@ -15,7 +15,7 @@ pub struct Config {
 impl Config {
     pub fn uapi_configuration(&self) -> String {
         let mut wg_settings: Vec<String> = Vec::new();
-        wg_settings.push(format!("private_key={}", hex::encode(self.itf.private_key).as_str()));
+        wg_settings.push(format!("private_key={}", self.itf.private_key.hex()));
 
         if let Some(listen_port) = self.itf.listen_port {
             wg_settings.push(format!("listen_port={}", listen_port));
@@ -25,9 +25,9 @@ impl Config {
         }
 
         for peer in &self.peers {
-            wg_settings.push(format!("public_key={}", hex::encode(peer.public_key)));
-            if let Some(pre_shared_key) = peer.pre_shared_key {
-                wg_settings.push(format!("preshared_key={}", hex::encode(pre_shared_key).as_str()));
+            wg_settings.push(format!("public_key={}", peer.public_key.hex()));
+            if let Some(pre_shared_key) = peer.pre_shared_key.as_ref() {
+                wg_settings.push(format!("preshared_key={}", pre_shared_key.hex()));
             }
 
             if let Some(endpoint) = peer.endpoint {
@@ -52,7 +52,7 @@ impl Config {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ItfConfig {
-    pub private_key: [u8; WG_KEY_LEN],
+    pub private_key: KeyBytes,
     pub addresses: Vec<IPAddressRange>,
     pub listen_port: Option<usize>,
     pub mtu: Option<usize>,
@@ -62,8 +62,8 @@ pub struct ItfConfig {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PeerConfig {
-    pub public_key: [u8; WG_KEY_LEN],
-    pub pre_shared_key: Option<[u8; WG_KEY_LEN]>,
+    pub public_key: KeyBytes,
+    pub pre_shared_key: Option<KeyBytes>,
     pub allowed_ips: Vec<IPAddressRange>,
     pub endpoint: Option<SocketAddr>,
     pub persistent_keep_alive: Option<usize>,

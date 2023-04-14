@@ -1,17 +1,35 @@
-use tokio::io::{self, AsyncWriteExt};
+use cfg_if::cfg_if;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tun::{AsyncDevice, Configuration as TunConfiguration, Error as TunError, Layer};
 
-use shadowsocks::wg::{plt, set_configuration, Config as WgConfig, Configuration, WireGuard, WireGuardConfig};
+use shadowsocks::net::{FlowStat, UdpSocket};
+use shadowsocks::wg;
+
+cfg_if! {
+    if #[cfg(feature = "rate-limit")] {
+        use nonzero_ext::*;
+        use shadowsocks::transport::{NegativeMultiDecision};
+    }
+}
+
+use tokio::time::{Duration, Instant};
+
+use crate::config::{LocalInstanceConfig, ProtocolType};
 
 use super::{ServerHandle, ServiceContext};
 
-use crate::config::{LocalInstanceConfig, ProtocolType};
+const MAX_UDP_SIZE: usize = (1 << 16) - 1;
+const HANDSHAKE_RATE_LIMIT: u64 = 10;
+const TICK_DURATION: Duration = Duration::from_millis(100);
+const RATE_LIMITER_RESET_DURATION: Duration = Duration::from_secs(1);
 
 pub(super) async fn create_wg_server(
     context: ServiceContext,
     vfut: &mut Vec<ServerHandle>,
     local: Vec<LocalInstanceConfig>,
-    wg_config: &WgConfig,
+    wg_config: &wg::Config,
 ) -> io::Result<()> {
     // tracing::error!("xxxxx create_wg_server: {:?}", wg_config);
 
@@ -31,79 +49,147 @@ pub(super) async fn create_wg_server(
         ));
     }
 
-    let device = read_tun_device(local_config).await?;
-
-    // create TUN device
-    let (mut readers, writer) = plt::Tun::new_from_device(device).map_err(|e| {
-        tracing::error!(err = ?e, "Failed to create TUN device");
-        io::Error::new(io::ErrorKind::Other, "Failed to create TUN device")
-    })?;
-
-    // create WireGuard device
-    let wg: WireGuard<plt::Tun, plt::UDP> = WireGuard::new(
-        writer,
-        context.connect_opts_ref().clone(),
-        #[cfg(feature = "rate-limit")]
-        context.rate_limiter(),
-    );
-
-    // add all Tun readers
-    while let Some(reader) = readers.pop() {
-        wg.add_tun_reader(reader).await;
+    if wg_config.peers.len() != 1 {
+        return Err(io::Error::new(io::ErrorKind::Other, "wireguard only support one peer"));
     }
+    let peer_config = &wg_config.peers[0];
 
-    // wrap in configuration interface
-    let mut cfg = WireGuardConfig::new(wg.clone());
+    let itf_private_key: wg::Secret = wg_config.itf.private_key.clone().into();
+    let itf_public_key = wg::PublicKey::from(&itf_private_key);
+    let peer_public_key: wg::PublicKey = peer_config.public_key.clone().into();
+
+    // 读取设备
+    let mut tun_device = read_tun_device(local_config).await?;
+
+    let wg_rate_limiter = Arc::new(wg::RateLimiter::new(&itf_public_key, HANDSHAKE_RATE_LIMIT));
+
+    // 创建 tunnel
+    let tunnel = match wg::Tunn::new(
+        itf_private_key.clone(),
+        peer_public_key.clone(),
+        peer_config.pre_shared_key.as_ref().map(|e| e.clone().into()),
+        peer_config.persistent_keep_alive.map(|e| e as u16),
+        0,
+        Some(wg_rate_limiter.clone()),
+    ) {
+        Ok(t) => t,
+        Err(_err) => {
+            tracing::error!(err = ?_err, "wg: create Tunn error");
+            return Err(io::Error::new(io::ErrorKind::Other, "wireguard create Tunn error"));
+        }
+    };
+
+    // 创建udp socket
+    let udp_remote_addr = match peer_config.endpoint.as_ref() {
+        Some(addr) => addr.clone(),
+        None => {
+            tracing::error!("wg: no target error");
+            return Err(io::Error::new(io::ErrorKind::Other, "wireguard no target error"));
+        }
+    };
+
+    let udp_socket = match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
+        Ok(sock) => sock,
+        Err(err) => {
+            tracing::error!(err = ?err, "wg: create udp socket error");
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "wireguard create udp socket error",
+            ));
+        }
+    };
 
     let mtu = wg_config.itf.mtu.unwrap_or(1500);
-    tracing::info!("Tun up (mtu = {})", mtu);
-    let _ = cfg.up(mtu).await; // TODO: handle
 
-    let uapi_context = wg_config.uapi_configuration();
-    tracing::trace!("uapi-config: {}", uapi_context);
-
-    if let Err(err) = set_configuration(&mut cfg, uapi_context.as_str()).await {
-        tracing::error!(err = ?err, "Failed to create TUN device");
-        return Err(io::Error::new(io::ErrorKind::Other, "Failed to configure device"));
-    }
-    tracing::trace!("uapi-config: process success");
-
-    // let test_assert = tokio::time::Instant::now() + tokio::time::Duration::from_secs(30);
-
-    let flow_state = context.flow_stat();
     vfut.push(ServerHandle(tokio::spawn(async move {
-        let mut last_tx = 0;
-        let mut last_rx = 0;
+        #[cfg(feature = "local-fake-mode")]
+        let mut fake_updated = false;
+
+        let cancel_waiter = context.cancel_waiter();
+        let rate_limit = context.rate_limiter();
+
+        // 流量统计
+        let flow_state = context.flow_stat();
+        let (mut last_tx, mut last_rx) = (0, 0);
+
+        // 读写缓存
+        let mut dst_buf = vec![0; MAX_UDP_SIZE];
+        let mut tun_src_buf = vec![0; mtu];
+        let mut udp_src_buf = vec![0; MAX_UDP_SIZE];
+
+        let mut next_tick = Instant::now();
+        let mut next_rate_limiter_rest = Instant::now() + RATE_LIMITER_RESET_DURATION;
         loop {
-            let _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            for peer in cfg.get_peers().await {
-                if peer.rx_bytes > last_rx {
-                    flow_state.incr_rx(peer.rx_bytes - last_rx);
-                    last_rx = peer.rx_bytes;
+            let tun_processed = tokio::select! {
+                _ = tokio::time::sleep_until(next_tick) => {
+                    next_tick = Instant::now() + TICK_DURATION; // tick 时间扣除处理实现
+
+                    let tun_writed = wireguard_tick(&tunnel, &udp_socket, &mut dst_buf[..]).await?;
+
+                    (last_tx, last_rx) = update_traffic(&tunnel, &flow_state, last_tx, last_rx);
+
+                    // tracing::error!("xxxxx: tx={}, rx={}", peer.rx_bytes, peer.tx_bytes);
+
+                    #[cfg(feature = "local-fake-mode")]
+                    if !fake_updated {
+                        fake_updated = sync_fake_mode(&context, &tunnel).await;
+                    }
+
+                    tun_writed
                 }
-
-                if peer.tx_bytes > last_tx {
-                    flow_state.incr_tx(peer.tx_bytes - last_tx);
-                    last_tx = peer.tx_bytes;
-                }
-
-                // tracing::error!("xxxxx: tx={}, rx={}", peer.rx_bytes, peer.tx_bytes);
-
-                // if tokio::time::Instant::now() > test_assert {
-                //     panic!("test core assert");
-                // }
-
-                #[cfg(feature = "local-fake-mode")]
-                {
-                    use crate::local::context::FakeMode;
-
-                    let fake_mode = context.fake_mode();
-                    match fake_mode {
-                        FakeMode::ParamError => {
-                            cfg.remove_peer(&peer.public_key).await;
-                            // tracing::error!("xxxxxxx: remove {:?}", peer.public_key);
+                r = tun_device.read(&mut tun_src_buf[..]) => {
+                    let src = match r {
+                        Ok(n) => &tun_src_buf[..n],
+                        Err(err) => {
+                            tracing::error!(err = ?err, "wg: tun read error");
+                            return Err(err);
                         }
-                        _ => {}
+                    };
+
+                    wireguard_tun_input(&tunnel, &udp_socket, &mut dst_buf[..], src).await?;
+
+                    src.len()
+                }
+                r = udp_socket.recv(&mut udp_src_buf[..]) => {
+                    let src = match r {
+                        Ok(n) => &udp_src_buf[..n],
+                        Err(err) => {
+                            tracing::error!(err = ?err, "wg: udp read error");
+                            return Err(err);
+                        }
+                    };
+
+                    let tun_writed = wireguard_udp_input(&tunnel, &mut tun_device, &udp_socket, &udp_remote_addr, &mut dst_buf[..], src, &wg_rate_limiter).await?;
+                    tun_writed
+                }
+                _ = tokio::time::sleep_until(next_rate_limiter_rest) => {
+                    next_rate_limiter_rest = Instant::now() + RATE_LIMITER_RESET_DURATION;
+                    wg_rate_limiter.reset_count();
+                    0
+                }
+                _ = cancel_waiter.wait() => {
+                    tracing::info!("wg: canceled");
+                    return Ok(()); 
+                }
+            };
+
+            #[cfg(feature = "rate-limit")]
+            if tun_processed > 0 {
+                if let Err(err) = rate_limit.check_n((tun_processed as u32).into_nonzero().unwrap()) {
+                    match err {
+                        NegativeMultiDecision::BatchNonConforming(duration) => {
+                            tokio::select! {
+                                _ = tokio::time::sleep(duration) => {}
+                                _ = cancel_waiter.wait() => {
+                                    tracing::info!("wg: canceled");
+                                    return Ok(()); 
+                                }
+                            }
+                        },
+                        NegativeMultiDecision::InsufficientCapacity => {
+                            // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个情况
+                            tracing::error!("wg: tun processed {}, rate-limit unexpected", tun_processed);
+                        }
                     }
                 }
             }
@@ -111,6 +197,176 @@ pub(super) async fn create_wg_server(
     })));
 
     Ok(())
+}
+
+#[inline]
+async fn wireguard_tick(tunnel: &wg::Tunn, udp_socket: &UdpSocket, dst_buf: &mut [u8]) -> io::Result<usize> {
+    match tunnel.update_timers(&mut dst_buf[..]) {
+        wg::TunnResult::Done => Ok(0),
+        wg::TunnResult::Err(wg::WireGuardError::ConnectionExpired) => {
+            tracing::error!("wg: tick: Tun closed");
+            Err(io::Error::new(io::ErrorKind::Other, "Tun closed"))
+        }
+        wg::TunnResult::Err(e) => {
+            tracing::error!(error = ?e, "wg: tick: Timer error");
+            Ok(0)
+        }
+        wg::TunnResult::WriteToNetwork(packet) => match udp_socket.send(&packet).await {
+            Err(err) => {
+                tracing::error!(err = ?err, "wg: tick: udp send packet error");
+                Err(err)
+            }
+            Ok(_) => Ok(0),
+        },
+        _ => {
+            tracing::error!("wg: tick: Unexpected result from update_timers");
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Unexpected result from update_timers",
+            ))
+        }
+    }
+}
+
+#[inline]
+async fn wireguard_tun_input(
+    tunnel: &wg::Tunn,
+    udp_socket: &UdpSocket,
+    dst_buf: &mut [u8],
+    src: &[u8],
+) -> io::Result<()> {
+    match tunnel.encapsulate(src, dst_buf) {
+        wg::TunnResult::Done => Ok(()),
+        wg::TunnResult::Err(e) => {
+            tracing::error!(error = ?e, "wg: tun_input: Encapsulate error");
+            Ok(())
+        }
+        wg::TunnResult::WriteToNetwork(packet) => match udp_socket.send(&packet).await {
+            Err(err) => {
+                tracing::error!(err = ?err, "wg: tun_input: udp send error");
+                Err(err)
+            }
+            Ok(_) => Ok(()),
+        },
+        _ => {
+            tracing::error!("wg: tun_input: Unexpected result from encapsulate");
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Unexpected result from encapsulate",
+            ))
+        }
+    }
+}
+
+#[inline]
+async fn wireguard_udp_input(
+    tunnel: &wg::Tunn,
+    tun_device: &mut AsyncDevice,
+    udp_socket: &UdpSocket,
+    udp_remtoe_addr: &SocketAddr,
+    dst_buf: &mut [u8],
+    packet: &[u8],
+    rate_limiter: &wg::RateLimiter,
+) -> io::Result<usize> {
+    // The rate limiter initially checks mac1 and mac2, and optionally asks to send a cookie
+    let parsed_packet = match rate_limiter.verify_packet(Some(udp_remtoe_addr.ip()), packet, dst_buf) {
+        Ok(packet) => packet,
+        Err(wg::TunnResult::WriteToNetwork(cookie)) => {
+            if let Err(err) = udp_socket.send(cookie).await {
+                tracing::error!(err = ?err, "wg: udp_input: udp send cookie error");
+            }
+            return Ok(0);
+        }
+        Err(err) => {
+            tracing::error!(err = ?err, "wg: udp_input: verify packet error");
+            return Ok(0);
+        }
+    };
+
+    let mut tun_write = 0;
+
+    // We found a peer, use it to decapsulate the message+
+    let mut flush = false; // Are there packets to send from the queue?
+    match tunnel.handle_verified_packet(parsed_packet, dst_buf) {
+        wg::TunnResult::Done => {}
+        wg::TunnResult::Err(err) => {
+            tracing::error!(err = ?err, "wg: udp_input: handle packet error");
+            return Ok(0);
+        }
+        wg::TunnResult::WriteToNetwork(packet) => {
+            flush = true;
+            if let Err(err) = udp_socket.send(packet).await {
+                tracing::error!(err = ?err, "wg: udp_input: udp send error");
+            }
+        }
+        wg::TunnResult::WriteToTunnelV4(packet, _addr) => match tun_device.write(packet).await {
+            Err(err) => {
+                tracing::error!(err = ?err, "wg: udp_input: tun write packet(v4) error");
+            }
+            Ok(n) => {
+                tun_write += n;
+            }
+        },
+        wg::TunnResult::WriteToTunnelV6(packet, _addr) => match tun_device.write(packet).await {
+            Err(err) => {
+                tracing::error!(err = ?err, "wg: udp_input: tun write packet(v6) error");
+            }
+            Ok(n) => {
+                tun_write += n;
+            }
+        },
+    };
+
+    if flush {
+        // Flush pending queue
+        while let wg::TunnResult::WriteToNetwork(packet) = tunnel.decapsulate(None, &[], dst_buf) {
+            if let Err(err) = udp_socket.send(packet).await {
+                tracing::error!(err = ?err, "wg: flush: udp send error");
+            }
+        }
+    }
+
+    Ok(tun_write)
+}
+
+#[inline]
+fn update_traffic(tunnel: &wg::Tunn, flow_state: &FlowStat, last_tx: usize, last_rx: usize) -> (usize, usize) {
+    let (_time, tx_bytes, rx_bytes, _estimated_loss, _estimated_rtt) = tunnel.stats();
+    if rx_bytes > last_rx {
+        flow_state.incr_rx((rx_bytes - last_rx) as u64);
+    }
+
+    if tx_bytes > last_tx {
+        flow_state.incr_tx((tx_bytes - last_tx) as u64);
+    }
+    (tx_bytes, rx_bytes)
+}
+
+#[cfg(feature = "local-fake-mode")]
+#[inline]
+async fn sync_fake_mode(context: &ServiceContext, tunnel: &wg::Tunn) -> bool {
+    use crate::local::context::FakeMode;
+    use rand::rngs::OsRng;
+
+    let fake_mode = context.fake_mode();
+    match fake_mode {
+        FakeMode::ParamError => {
+            match tunnel.set_static_private(
+                wg::KeyBytes::random_from_rng(OsRng).into(),
+                wg::KeyBytes::random_from_rng(OsRng).into(),
+                None,
+            ) {
+                Ok(()) => {
+                    tracing::info!("wg: fake update success");
+                }
+                Err(err) => {
+                    tracing::error!(err = ?err, "wg: fake update error");
+                }
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 async fn read_tun_device(config: &LocalInstanceConfig) -> io::Result<AsyncDevice> {

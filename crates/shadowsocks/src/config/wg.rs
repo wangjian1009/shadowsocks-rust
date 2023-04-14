@@ -1,12 +1,8 @@
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    ptr,
-};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use super::*;
 
-pub use crate::wg::{IPAddressRange, ItfConfig, PeerConfig, WG_KEY_LEN};
+pub use crate::wg::{IPAddressRange, ItfConfig, KeyBytes, PeerConfig};
 
 impl ServerConfig {
     pub(crate) fn from_url_wg(parsed: &Url) -> Result<ServerConfig, UrlParseError> {
@@ -77,19 +73,10 @@ impl ServerConfig {
         };
 
         let itf_key = match Self::from_url_get_arg(&query, "itf-key") {
-            Some(v) => match STANDARD.decode(v) {
-                Ok(key) => {
-                    if key.len() == 32 {
-                        let mut buf = [0u8; WG_KEY_LEN];
-                        unsafe { ptr::copy(key.as_ptr(), buf.as_mut_ptr(), 32) };
-                        buf
-                    } else {
-                        error!("url to config: wg: itf-key decode error");
-                        return Err(UrlParseError::InvalidQueryString);
-                    }
-                }
+            Some(v) => match v.parse::<KeyBytes>() {
+                Ok(key) => key,
                 Err(err) => {
-                    error!(err = ?err, "url to config: wg: itf-key decode error");
+                    error!(err = ?err, "url to config: wg: itf-key format error");
                     return Err(UrlParseError::InvalidQueryString);
                 }
             },
@@ -100,17 +87,8 @@ impl ServerConfig {
         };
 
         let peer_key = match Self::from_url_get_arg(&query, "peer-key") {
-            Some(v) => match STANDARD.decode(v) {
-                Ok(key) => {
-                    if key.len() == 32 {
-                        let mut buf = [0u8; WG_KEY_LEN];
-                        unsafe { ptr::copy(key.as_ptr(), buf.as_mut_ptr(), 32) };
-                        buf
-                    } else {
-                        error!("url to config: wg: peer-key decode error");
-                        return Err(UrlParseError::InvalidQueryString);
-                    }
-                }
+            Some(v) => match v.parse::<KeyBytes>() {
+                Ok(key) => key,
                 Err(err) => {
                     error!(err = ?err, "url to config: wg: peer-key decode error");
                     return Err(UrlParseError::InvalidQueryString);

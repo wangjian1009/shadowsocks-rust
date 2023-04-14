@@ -1,13 +1,15 @@
-#![cfg_attr(feature = "unstable", feature(test))]
-
-extern crate alloc;
+#[cfg(not(any(target_os = "windows", target_os = "android", target_os = "ios")))]
+pub mod device;
 
 mod config;
-mod configuration;
-mod platform;
-mod wireguard;
 
-pub use config::{Config, IPAddressRange, ItfConfig, PeerConfig, WG_KEY_LEN};
-pub use configuration::{set_configuration, Configuration, WireGuardConfig};
-pub use platform::plt;
-pub use wireguard::WireGuard;
+mod noise;
+
+mod serialization;
+
+pub use config::{Config, IPAddressRange, ItfConfig, PeerConfig};
+pub use noise::{
+    errors::WireGuardError, handshake::parse_handshake_anon, rate_limiter::RateLimiter, Packet, Tunn, TunnResult,
+};
+pub use serialization::KeyBytes;
+pub use x25519_dalek::{PublicKey, StaticSecret as Secret};

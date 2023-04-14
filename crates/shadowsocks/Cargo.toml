@@ -52,7 +52,7 @@ security-replay-attack-detect = ["bloomfilter"]
 
 transport = []
 transport-ws = ["transport", "tokio-tungstenite"]
-transport-tls = ["transport", "tokio-rustls", "webpki", "rustls-native-certs", "rustls-pemfile"]
+transport-tls = ["transport", "tokio-rustls", "webpki", "rustls", "rustls-native-certs", "rustls-pemfile"]
 transport-mkcp = ["transport", "arc-swap", "rand"]
 transport-skcp = ["transport"]
 transport-restls = ["anyhow", "tokio-util", "hmac", "sha1"]
@@ -62,9 +62,7 @@ statistics = ["metrics"]
 trojan = ["rand"]
 vless = ["rand", "hex"]
 tuic = ["byteorder", "quinn", "parking_lot", "crossbeam-utils", "rustls", "rustls-native-certs", "rustls-pemfile"]
-wireguard = ["byteorder", "dashmap", "parking_lot", "digest", "generic-array", "hex", "aead", "arraydeque", "blake2",
-             "chacha20poly1305", "clear_on_drop", "crossbeam-channel", "hjul", "rand", "ring", "zerocopy",
-             "x25519-dalek", "subtle", "treebitmap", "hmac", "rustls", "tun"]
+wireguard = ["parking_lot", "hex", "chacha20poly1305", "ring", "ip_network_table", "ip_network", "x25519-dalek",  "blake2", "hmac"]
 
 rate-limit = ["governor", "nonzero_ext", "futures-timer", "quanta", "lazy_static", "regex"]
 
@@ -86,21 +84,14 @@ thiserror = "1.0"
 rand = { version = "0.8", optional = true }
 lru_time_cache = { version = "0.11", optional = true }
 
-aead = { version = "^0.3", optional = true }
-arraydeque = { version = "0.4.5", optional = true }
-blake2 = { version = "^0.9", optional = true }
-chacha20poly1305 = { version = "^0.7", optional = true }
-clear_on_drop = { version = "0.2.3", optional = true }
-crossbeam-channel = { version = "^0.5", optional = true }
-dashmap = { version = "^4.0", optional = true }
-digest = { version = "^0.9", optional = true }
-generic-array = { version = "^0.14", optional = true }
-hjul = { version = "0.2.2", optional = true }
+untrusted = { version = "0.9.0", optional  = true }
+ip_network = { version = "0.4.1", optional = true }
+ip_network_table = { version = "0.2.0", optional = true }
 ring = { version = "0.16", optional = true }
-zerocopy = { version = "0.3", optional = true }
-x25519-dalek = { path = "../../depends/x25519-dalek" , optional = true }
-subtle = { version = "^2.4", optional = true }
-treebitmap = { package = "ip_network_table-deps-treebitmap", version = "0.5.0", optional = true }
+x25519-dalek = { version = "2.0.0-pre.2", features = ["reusable_secrets", "static_secrets"], optional = true }
+blake2 = { version = "^0.10", optional = true }
+chacha20poly1305 = { version = "0.10.0-pre.1", optional = true }
+aead = "0.5.0-pre.2"
 
 hex = { version = "0.4.3", optional = true }
 
@@ -122,7 +113,7 @@ tokio-rustls = { version = "0.23.4", optional = true }
 tokio-util = { version = "*", features = ["codec"], optional = true}
 webpki = { version = "0.22", optional = true }
 anyhow = { version = "1.0.68", optional = true }
-hmac = { version = "^0.10", optional = true }
+hmac = { version = "^0.12", optional = true }
 sha1 = { version = "^0.10.5", optional = true }
 
 governor = { version = "0.3.2", optional = true }
@@ -146,7 +137,6 @@ quinn = { version = "0.8", optional = true }
 rustls = { version = "0.20", features = ["quic", "dangerous_configuration"], default-features = false, optional = true }
 rustls-native-certs = { version = "0.6", optional = true }
 rustls-pemfile = { version = "1.0", optional = true }
-tun = { version = "0.5.3", optional = true, features = ["async"] }
 # chrono = "*"
 
 sha2 = { version = "0.10"}
@@ -163,6 +153,9 @@ windows-sys = { version = "0.45", features = ["Win32_Foundation", "Win32_Network
 
 [target.'cfg(unix)'.dependencies]
 sendfd = { version = "0.4", features = ["tokio"] }
+
+[target.'cfg(target_os="macos")'.dependencies]
+nix = "0.24.1"
 
 [dev-dependencies]
 tracing-test = "*"
