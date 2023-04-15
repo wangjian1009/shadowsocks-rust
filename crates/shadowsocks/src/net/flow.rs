@@ -1,6 +1,6 @@
 //! Server flow statistic
 
-use std::sync::atomic::Ordering;
+use std::{fmt, sync::atomic::Ordering};
 
 #[cfg(target_has_atomic = "64")]
 type FlowCounter = std::sync::atomic::AtomicU64;
@@ -46,5 +46,11 @@ impl FlowStat {
     /// Increase received bytes
     pub fn incr_rx(&self, n: u64) {
         self.rx.fetch_add(n as _, Ordering::AcqRel);
+    }
+}
+
+impl fmt::Debug for FlowStat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Traffic(tx={}, rx={})", self.tx(), self.rx())
     }
 }

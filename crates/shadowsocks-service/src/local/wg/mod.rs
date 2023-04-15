@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tun::{AsyncDevice, Configuration as TunConfiguration, Error as TunError, Layer};
 
-use shadowsocks::net::{FlowStat, UdpSocket};
+use shadowsocks::net::UdpSocket;
 use shadowsocks::wg;
 
 cfg_if! {
@@ -22,7 +22,7 @@ use super::{ServerHandle, ServiceContext};
 
 const MAX_UDP_SIZE: usize = (1 << 16) - 1;
 const HANDSHAKE_RATE_LIMIT: u64 = 10;
-const TICK_DURATION: Duration = Duration::from_millis(100);
+const TICK_DURATION: Duration = Duration::from_millis(250);
 const RATE_LIMITER_RESET_DURATION: Duration = Duration::from_secs(1);
 
 pub(super) async fn create_wg_server(
@@ -110,7 +110,6 @@ pub(super) async fn create_wg_server(
 
         // 流量统计
         let flow_state = context.flow_stat();
-        let (mut last_tx, mut last_rx) = (0, 0);
 
         // 读写缓存
         let mut dst_buf = vec![0; MAX_UDP_SIZE];
@@ -124,18 +123,14 @@ pub(super) async fn create_wg_server(
                 _ = tokio::time::sleep_until(next_tick) => {
                     next_tick = Instant::now() + TICK_DURATION; // tick 时间扣除处理实现
 
-                    let tun_writed = wireguard_tick(&tunnel, &udp_socket, &mut dst_buf[..]).await?;
-
-                    (last_tx, last_rx) = update_traffic(&tunnel, &flow_state, last_tx, last_rx);
-
-                    // tracing::error!("xxxxx: tx={}, rx={}", peer.rx_bytes, peer.tx_bytes);
+                    wireguard_tick(&tunnel, &udp_socket, &mut dst_buf[..]).await?;
 
                     #[cfg(feature = "local-fake-mode")]
                     if !fake_updated {
                         fake_updated = sync_fake_mode(&context, &tunnel).await;
                     }
 
-                    tun_writed
+                    0
                 }
                 r = tun_device.read(&mut tun_src_buf[..]) => {
                     let src = match r {
@@ -147,6 +142,9 @@ pub(super) async fn create_wg_server(
                     };
 
                     wireguard_tun_input(&tunnel, &udp_socket, &mut dst_buf[..], src).await?;
+                    
+                    flow_state.incr_rx(src.len() as u64);
+                    // tracing::error!("xxxxx: traffic={:?}", flow_state);
 
                     src.len()
                 }
@@ -160,6 +158,10 @@ pub(super) async fn create_wg_server(
                     };
 
                     let tun_writed = wireguard_udp_input(&tunnel, &mut tun_device, &udp_socket, &udp_remote_addr, &mut dst_buf[..], src, &wg_rate_limiter).await?;
+
+                    flow_state.incr_tx(tun_writed as u64);
+                    // tracing::error!("xxxxx: traffic={:?}", flow_state);
+
                     tun_writed
                 }
                 _ = tokio::time::sleep_until(next_rate_limiter_rest) => {
@@ -178,6 +180,7 @@ pub(super) async fn create_wg_server(
                 if let Err(err) = rate_limit.check_n((tun_processed as u32).into_nonzero().unwrap()) {
                     match err {
                         NegativeMultiDecision::BatchNonConforming(duration) => {
+                            // tracing::error!("xxxxx: rate_limit: {:?}", duration);
                             tokio::select! {
                                 _ = tokio::time::sleep(duration) => {}
                                 _ = cancel_waiter.wait() => {
@@ -200,23 +203,23 @@ pub(super) async fn create_wg_server(
 }
 
 #[inline]
-async fn wireguard_tick(tunnel: &wg::Tunn, udp_socket: &UdpSocket, dst_buf: &mut [u8]) -> io::Result<usize> {
+async fn wireguard_tick(tunnel: &wg::Tunn, udp_socket: &UdpSocket, dst_buf: &mut [u8]) -> io::Result<()> {
     match tunnel.update_timers(&mut dst_buf[..]) {
-        wg::TunnResult::Done => Ok(0),
+        wg::TunnResult::Done => Ok(()),
         wg::TunnResult::Err(wg::WireGuardError::ConnectionExpired) => {
             tracing::error!("wg: tick: Tun closed");
             Err(io::Error::new(io::ErrorKind::Other, "Tun closed"))
         }
         wg::TunnResult::Err(e) => {
             tracing::error!(error = ?e, "wg: tick: Timer error");
-            Ok(0)
+            Ok(())
         }
         wg::TunnResult::WriteToNetwork(packet) => match udp_socket.send(&packet).await {
             Err(err) => {
                 tracing::error!(err = ?err, "wg: tick: udp send packet error");
                 Err(err)
             }
-            Ok(_) => Ok(0),
+            Ok(_) => Ok(()),
         },
         _ => {
             tracing::error!("wg: tick: Unexpected result from update_timers");
@@ -273,12 +276,12 @@ async fn wireguard_udp_input(
         Ok(packet) => packet,
         Err(wg::TunnResult::WriteToNetwork(cookie)) => {
             if let Err(err) = udp_socket.send(cookie).await {
-                tracing::error!(err = ?err, "wg: udp_input: udp send cookie error");
+                tracing::trace!(err = ?err, "wg: udp_input: udp send cookie error");
             }
             return Ok(0);
         }
         Err(err) => {
-            tracing::error!(err = ?err, "wg: udp_input: verify packet error");
+            tracing::trace!(err = ?err, "wg: udp_input: verify packet error");
             return Ok(0);
         }
     };
@@ -290,7 +293,7 @@ async fn wireguard_udp_input(
     match tunnel.handle_verified_packet(parsed_packet, dst_buf) {
         wg::TunnResult::Done => {}
         wg::TunnResult::Err(err) => {
-            tracing::error!(err = ?err, "wg: udp_input: handle packet error");
+            tracing::trace!(err = ?err, "wg: udp_input: handle packet error");
             return Ok(0);
         }
         wg::TunnResult::WriteToNetwork(packet) => {
@@ -329,18 +332,20 @@ async fn wireguard_udp_input(
     Ok(tun_write)
 }
 
-#[inline]
-fn update_traffic(tunnel: &wg::Tunn, flow_state: &FlowStat, last_tx: usize, last_rx: usize) -> (usize, usize) {
-    let (_time, tx_bytes, rx_bytes, _estimated_loss, _estimated_rtt) = tunnel.stats();
-    if rx_bytes > last_rx {
-        flow_state.incr_rx((rx_bytes - last_rx) as u64);
-    }
+// #[inline]
+// fn update_traffic(tunnel: &wg::Tunn, flow_state: &FlowStat, last_tx: usize, last_rx: usize) -> (usize, usize) {
+//     let (_time, tx_bytes, rx_bytes, _estimated_loss, _estimated_rtt) = tunnel.stats();
+//     if rx_bytes > last_rx {
+//         flow_state.incr_rx((rx_bytes - last_rx) as u64);
+//     }
 
-    if tx_bytes > last_tx {
-        flow_state.incr_tx((tx_bytes - last_tx) as u64);
-    }
-    (tx_bytes, rx_bytes)
-}
+//     if tx_bytes > last_tx {
+//         flow_state.incr_tx((tx_bytes - last_tx) as u64);
+//     }
+
+    
+//     (tx_bytes, rx_bytes)
+// }
 
 #[cfg(feature = "local-fake-mode")]
 #[inline]
@@ -351,9 +356,12 @@ async fn sync_fake_mode(context: &ServiceContext, tunnel: &wg::Tunn) -> bool {
     let fake_mode = context.fake_mode();
     match fake_mode {
         FakeMode::ParamError => {
+            let dummy_private_key : wg::Secret = wg::KeyBytes::random_from_rng(OsRng).into();
+            let dummy_public_key = wg::PublicKey::from(&dummy_private_key);
+
             match tunnel.set_static_private(
-                wg::KeyBytes::random_from_rng(OsRng).into(),
-                wg::KeyBytes::random_from_rng(OsRng).into(),
+                dummy_private_key,
+                dummy_public_key,
                 None,
             ) {
                 Ok(()) => {
