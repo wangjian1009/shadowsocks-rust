@@ -3865,7 +3865,7 @@ dependencies = [
 
 [[package]]
 name = "shadowsocks"
-version = "1.15.2"
+version = "1.15.3"
 dependencies = [
  "aead 0.5.1",
  "aes 0.8.2",
@@ -3967,7 +3967,7 @@ dependencies = [
 
 [[package]]
 name = "shadowsocks-rust"
-version = "1.15.2"
+version = "1.15.3"
 dependencies = [
  "base64 0.21.0",
  "build-time",
@@ -4025,7 +4025,7 @@ dependencies = [
 
 [[package]]
 name = "shadowsocks-service"
-version = "1.15.2"
+version = "1.15.3"
 dependencies = [
  "aes 0.7.5",
  "arc-swap",
@@ -5010,9 +5010,9 @@ checksum = "3528ecfd12c466c6f163363caf2d02a71161dd5e1cc6ae7b34207ea2d42d81ed"
 
 [[package]]
 name = "tun"
-version = "0.5.4"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ad14dc69c82f850bc4c0dc6e7c902893b72827fb34d256fa78e81630a5da86c"
+checksum = "cbc25e23adc6cac7dd895ce2780f255902290fc39b00e1ae3c33e89f3d20fa66"
 dependencies = [
  "byteorder",
  "bytes",
