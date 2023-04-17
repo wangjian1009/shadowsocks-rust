@@ -88,7 +88,7 @@ pub(super) async fn create_wg_server(
         }
     };
 
-    let udp_socket = match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
+    let mut udp_socket = match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
         Ok(sock) => sock,
         Err(err) => {
             tracing::error!(err = ?err, "wg: create udp socket error");
@@ -123,7 +123,20 @@ pub(super) async fn create_wg_server(
                 _ = tokio::time::sleep_until(next_tick) => {
                     next_tick = Instant::now() + TICK_DURATION; // tick 时间扣除处理实现
 
-                    wireguard_tick(&tunnel, &udp_socket, &mut dst_buf[..]).await?;
+                    match wireguard_tick(&tunnel, &udp_socket, &mut dst_buf[..]).await? {
+                        TickResult::Noop => {},
+                        TickResult::ReConnect => {
+                            match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
+                                Ok(sock) => {
+                                    udp_socket = sock;
+                                    tracing::info!("wg: tick: udp_sock recreated");
+                                }
+                                Err(err) => {
+                                    tracing::error!(err = ?err, "wg: re create udp socket error");
+                                }
+                            };
+                        },
+                    };
 
                     #[cfg(feature = "local-fake-mode")]
                     if !fake_updated {
@@ -202,24 +215,33 @@ pub(super) async fn create_wg_server(
     Ok(())
 }
 
+enum TickResult {
+    Noop,
+    ReConnect,
+}
+
+/// Return: need reconnect
 #[inline]
-async fn wireguard_tick(tunnel: &wg::Tunn, udp_socket: &UdpSocket, dst_buf: &mut [u8]) -> io::Result<()> {
+async fn wireguard_tick(tunnel: &wg::Tunn, udp_socket: &UdpSocket, dst_buf: &mut [u8]) -> io::Result<TickResult> {
     match tunnel.update_timers(&mut dst_buf[..]) {
-        wg::TunnResult::Done => Ok(()),
+        wg::TunnResult::Done => Ok(TickResult::Noop),
         wg::TunnResult::Err(wg::WireGuardError::ConnectionExpired) => {
-            tracing::error!("wg: tick: Tun closed");
-            Err(io::Error::new(io::ErrorKind::Other, "Tun closed"))
+            tracing::info!("wg: tick: Connection Expired");
+            Ok(TickResult::ReConnect)
         }
         wg::TunnResult::Err(e) => {
-            tracing::error!(error = ?e, "wg: tick: Timer error");
-            Ok(())
+            tracing::error!(error = ?e, "wg: tick: update_timers error");
+            Ok(TickResult::Noop)
         }
         wg::TunnResult::WriteToNetwork(packet) => match udp_socket.send(&packet).await {
             Err(err) => {
                 tracing::error!(err = ?err, "wg: tick: udp send packet error");
                 Err(err)
             }
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // tracing::error!("wg: tick: xxxx: send2 {}", packet.len());
+                Ok(TickResult::Noop)
+            },
         },
         _ => {
             tracing::error!("wg: tick: Unexpected result from update_timers");
