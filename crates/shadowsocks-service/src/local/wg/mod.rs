@@ -156,7 +156,7 @@ pub(super) async fn create_wg_server(
 
                     wireguard_tun_input(&tunnel, &udp_socket, &mut dst_buf[..], src).await?;
                     
-                    flow_state.incr_rx(src.len() as u64);
+                    flow_state.incr_tx(src.len() as u64);
                     // tracing::error!("xxxxx: traffic={:?}", flow_state);
 
                     src.len()
@@ -172,7 +172,7 @@ pub(super) async fn create_wg_server(
 
                     let tun_writed = wireguard_udp_input(&tunnel, &mut tun_device, &udp_socket, &udp_remote_addr, &mut dst_buf[..], src, &wg_rate_limiter).await?;
 
-                    flow_state.incr_tx(tun_writed as u64);
+                    flow_state.incr_rx(tun_writed as u64);
                     // tracing::error!("xxxxx: traffic={:?}", flow_state);
 
                     tun_writed
@@ -353,21 +353,6 @@ async fn wireguard_udp_input(
 
     Ok(tun_write)
 }
-
-// #[inline]
-// fn update_traffic(tunnel: &wg::Tunn, flow_state: &FlowStat, last_tx: usize, last_rx: usize) -> (usize, usize) {
-//     let (_time, tx_bytes, rx_bytes, _estimated_loss, _estimated_rtt) = tunnel.stats();
-//     if rx_bytes > last_rx {
-//         flow_state.incr_rx((rx_bytes - last_rx) as u64);
-//     }
-
-//     if tx_bytes > last_tx {
-//         flow_state.incr_tx((tx_bytes - last_tx) as u64);
-//     }
-
-    
-//     (tx_bytes, rx_bytes)
-// }
 
 #[cfg(feature = "local-fake-mode")]
 #[inline]
