@@ -74,22 +74,36 @@ impl MaintainServerContext {
         let rate_limiter = self.service_context.rate_limiter();
 
         let old_bound_width = rate_limiter.rate_limit();
-        if old_bound_width != bound_width {
+        let r = if old_bound_width != bound_width {
             tracing::info!(
                 "maintain-service: speed-limit {:?} => {:?}",
                 old_bound_width,
                 bound_width
             );
-            self.service_context.rate_limiter().set_rate_limit(bound_width)?;
+            self.service_context.rate_limiter().set_rate_limit(bound_width)
         } else {
-            tracing::info!("maintain-service: speed-limit {:?} not changed", bound_width);
-        }
+            tracing::info!(
+                "maintain-service: speed-limit {:?} => {:?} not changed",
+                old_bound_width,
+                bound_width
+            );
+            Ok(())
+        };
+
+        tracing::info!(
+            "maintain-service: current speed-limit = {:?}",
+            self.service_context.rate_limiter()
+        );
 
         #[allow(unused_mut)]
-        let mut response_code = StatusCode::OK;
+        let mut response_code = if r.is_ok() {
+            StatusCode::OK
+        } else {
+            StatusCode::BAD_REQUEST
+        };
 
         #[cfg(feature = "local-android-protect")]
-        {
+        if response_code == StatusCode::OK {
             use crate::local::android;
 
             let check_result = android::validate_sign();
