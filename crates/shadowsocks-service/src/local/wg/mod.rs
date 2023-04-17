@@ -20,7 +20,7 @@ use crate::config::{LocalInstanceConfig, ProtocolType};
 
 use super::{ServerHandle, ServiceContext};
 
-const MAX_UDP_SIZE: usize = (1 << 16) - 1;
+const MAX_UDP_SIZE: usize = 1500; // (1 << 16) - 1;
 const HANDSHAKE_RATE_LIMIT: u64 = 10;
 const TICK_DURATION: Duration = Duration::from_millis(250);
 const RATE_LIMITER_RESET_DURATION: Duration = Duration::from_secs(1);
@@ -235,8 +235,8 @@ async fn wireguard_tick(tunnel: &wg::Tunn, udp_socket: &UdpSocket, dst_buf: &mut
         }
         wg::TunnResult::WriteToNetwork(packet) => match udp_socket.send(&packet).await {
             Err(err) => {
-                tracing::error!(err = ?err, "wg: tick: udp send packet error");
-                Err(err)
+                tracing::error!(err = ?err, "wg: tick: udp send packet error, len={}", packet.len());
+                Ok(TickResult::Noop)
             }
             Ok(_) => {
                 // tracing::error!("wg: tick: xxxx: send2 {}", packet.len());
@@ -268,7 +268,7 @@ async fn wireguard_tun_input(
         }
         wg::TunnResult::WriteToNetwork(packet) => match udp_socket.send(&packet).await {
             Err(err) => {
-                tracing::error!(err = ?err, "wg: tun_input: udp send error");
+                tracing::error!(err = ?err, "wg: tun_input: udp send error, len={}", packet.len());
                 Err(err)
             }
             Ok(_) => Ok(()),
@@ -298,7 +298,7 @@ async fn wireguard_udp_input(
         Ok(packet) => packet,
         Err(wg::TunnResult::WriteToNetwork(cookie)) => {
             if let Err(err) = udp_socket.send(cookie).await {
-                tracing::trace!(err = ?err, "wg: udp_input: udp send cookie error");
+                tracing::trace!(err = ?err, "wg: udp_input: udp send cookie error, len={}", cookie.len());
             }
             return Ok(0);
         }
@@ -321,7 +321,7 @@ async fn wireguard_udp_input(
         wg::TunnResult::WriteToNetwork(packet) => {
             flush = true;
             if let Err(err) = udp_socket.send(packet).await {
-                tracing::error!(err = ?err, "wg: udp_input: udp send error");
+                tracing::error!(err = ?err, "wg: udp_input: udp send error, len={}", packet.len());
             }
         }
         wg::TunnResult::WriteToTunnelV4(packet, _addr) => match tun_device.write(packet).await {
