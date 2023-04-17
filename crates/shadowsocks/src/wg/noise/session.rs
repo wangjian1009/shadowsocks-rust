@@ -184,7 +184,11 @@ impl Session {
     /// returns the size of the formatted packet
     pub(super) fn format_packet_data<'a>(&self, src: &[u8], dst: &'a mut [u8]) -> &'a mut [u8] {
         if dst.len() < src.len() + super::DATA_OVERHEAD_SZ {
-            panic!("The destination buffer is too small");
+            panic!(
+                "The destination buffer is too small, src={}, dst={}",
+                src.len(),
+                dst.len()
+            );
         }
 
         let sending_key_counter = self.sending_key_counter.fetch_add(1, Ordering::Relaxed) as u64;

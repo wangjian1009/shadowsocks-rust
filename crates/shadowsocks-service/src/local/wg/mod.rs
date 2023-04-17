@@ -20,7 +20,7 @@ use crate::config::{LocalInstanceConfig, ProtocolType};
 
 use super::{ServerHandle, ServiceContext};
 
-const MAX_UDP_SIZE: usize = 1500; // (1 << 16) - 1;
+const MAX_UDP_SIZE: usize = 1472; // (1 << 16) - 1;
 const HANDSHAKE_RATE_LIMIT: u64 = 10;
 const TICK_DURATION: Duration = Duration::from_millis(250);
 const RATE_LIMITER_RESET_DURATION: Duration = Duration::from_secs(1);
@@ -99,8 +99,8 @@ pub(super) async fn create_wg_server(
         }
     };
 
-    let mtu = wg_config.itf.mtu.unwrap_or(1500);
-
+    let mtu = wg_config.itf.mtu.unwrap_or(1420);
+    
     vfut.push(ServerHandle(tokio::spawn(async move {
         #[cfg(feature = "local-fake-mode")]
         let mut fake_updated = false;
@@ -269,7 +269,7 @@ async fn wireguard_tun_input(
         wg::TunnResult::WriteToNetwork(packet) => match udp_socket.send(&packet).await {
             Err(err) => {
                 tracing::error!(err = ?err, "wg: tun_input: udp send error, len={}", packet.len());
-                Err(err)
+                Ok(())
             }
             Ok(_) => Ok(()),
         },
@@ -346,7 +346,7 @@ async fn wireguard_udp_input(
         // Flush pending queue
         while let wg::TunnResult::WriteToNetwork(packet) = tunnel.decapsulate(None, &[], dst_buf) {
             if let Err(err) = udp_socket.send(packet).await {
-                tracing::error!(err = ?err, "wg: flush: udp send error");
+                tracing::error!(err = ?err, "wg: udp_input: flush: udp send error, len={}", packet.len());
             }
         }
     }
