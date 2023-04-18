@@ -25,6 +25,10 @@ const HANDSHAKE_RATE_LIMIT: u64 = 10;
 const TICK_DURATION: Duration = Duration::from_millis(250);
 const RATE_LIMITER_RESET_DURATION: Duration = Duration::from_secs(1);
 
+enum ProcessError {
+    UdpReconnect,
+}
+
 pub(super) async fn create_wg_server(
     context: ServiceContext,
     vfut: &mut Vec<ServerHandle>,
@@ -100,6 +104,12 @@ pub(super) async fn create_wg_server(
     };
 
     let mtu = wg_config.itf.mtu.unwrap_or(1420);
+    if mtu > MAX_UDP_SIZE - 32 {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("wireguard mtu {} overflow, max-mtu={}", mtu, MAX_UDP_SIZE - 32)
+        ));
+    }
     
     vfut.push(ServerHandle(tokio::spawn(async move {
         #[cfg(feature = "local-fake-mode")]
@@ -119,31 +129,17 @@ pub(super) async fn create_wg_server(
         let mut next_tick = Instant::now();
         let mut next_rate_limiter_rest = Instant::now() + RATE_LIMITER_RESET_DURATION;
         loop {
-            let tun_processed = tokio::select! {
+            let mut tun_processed = 0;
+            let r = tokio::select! {
                 _ = tokio::time::sleep_until(next_tick) => {
                     next_tick = Instant::now() + TICK_DURATION; // tick 时间扣除处理实现
-
-                    match wireguard_tick(&tunnel, &udp_socket, &mut dst_buf[..]).await? {
-                        TickResult::Noop => {},
-                        TickResult::ReConnect => {
-                            match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
-                                Ok(sock) => {
-                                    udp_socket = sock;
-                                    tracing::info!("wg: tick: udp_sock recreated");
-                                }
-                                Err(err) => {
-                                    tracing::error!(err = ?err, "wg: re create udp socket error");
-                                }
-                            };
-                        },
-                    };
 
                     #[cfg(feature = "local-fake-mode")]
                     if !fake_updated {
                         fake_updated = sync_fake_mode(&context, &tunnel).await;
                     }
-
-                    0
+                    
+                    wireguard_tick(&tunnel, &udp_socket, &mut dst_buf[..]).await
                 }
                 r = tun_device.read(&mut tun_src_buf[..]) => {
                     let src = match r {
@@ -153,13 +149,10 @@ pub(super) async fn create_wg_server(
                             return Err(err);
                         }
                     };
-
-                    wireguard_tun_input(&tunnel, &udp_socket, &mut dst_buf[..], src).await?;
-                    
                     flow_state.incr_tx(src.len() as u64);
-                    // tracing::error!("xxxxx: traffic={:?}", flow_state);
-
-                    src.len()
+                    tun_processed += src.len();
+                    
+                    wireguard_tun_input(&tunnel, &udp_socket, &mut dst_buf[..], src).await
                 }
                 r = udp_socket.recv(&mut udp_src_buf[..]) => {
                     let src = match r {
@@ -170,17 +163,21 @@ pub(super) async fn create_wg_server(
                         }
                     };
 
-                    let tun_writed = wireguard_udp_input(&tunnel, &mut tun_device, &udp_socket, &udp_remote_addr, &mut dst_buf[..], src, &wg_rate_limiter).await?;
+                    let r = wireguard_udp_input(&tunnel, &mut tun_device, &udp_socket, &udp_remote_addr, &mut dst_buf[..], src, &wg_rate_limiter).await;
 
-                    flow_state.incr_rx(tun_writed as u64);
-                    // tracing::error!("xxxxx: traffic={:?}", flow_state);
-
-                    tun_writed
+                    match r {
+                        Ok(tun_writed) => {
+                            flow_state.incr_rx(tun_writed as u64);
+                            tun_processed = tun_writed;
+                            Ok(())
+                        }
+                        Err(err) => Err(err),
+                    }
                 }
                 _ = tokio::time::sleep_until(next_rate_limiter_rest) => {
                     next_rate_limiter_rest = Instant::now() + RATE_LIMITER_RESET_DURATION;
                     wg_rate_limiter.reset_count();
-                    0
+                    Ok(())
                 }
                 _ = cancel_waiter.wait() => {
                     tracing::info!("wg: canceled");
@@ -188,6 +185,28 @@ pub(super) async fn create_wg_server(
                 }
             };
 
+            if let Err(err) = r {
+                match err {
+                    ProcessError::UdpReconnect => {
+                        match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
+                            Ok(sock) => {
+                                udp_socket = sock;
+                                tracing::info!("wg: tick: udp_sock recreated");
+                            }
+                            Err(err) => {
+                                if err.kind() == io::ErrorKind::NotFound {
+                                    tracing::error!(err = ?err, "wg: re create udp socket error, app exited");
+                                    return Err(err);
+                                }
+                                else {
+                                    tracing::error!(err = ?err, "wg: re create udp socket error");
+                                }
+                            }
+                        };
+                    }
+                }
+            }
+            
             #[cfg(feature = "rate-limit")]
             if tun_processed > 0 {
                 if let Err(err) = rate_limit.check_n((tun_processed as u32).into_nonzero().unwrap()) {
@@ -215,40 +234,23 @@ pub(super) async fn create_wg_server(
     Ok(())
 }
 
-enum TickResult {
-    Noop,
-    ReConnect,
-}
-
 /// Return: need reconnect
 #[inline]
-async fn wireguard_tick(tunnel: &wg::Tunn, udp_socket: &UdpSocket, dst_buf: &mut [u8]) -> io::Result<TickResult> {
+async fn wireguard_tick(tunnel: &wg::Tunn, udp_socket: &UdpSocket, dst_buf: &mut [u8]) -> Result<(), ProcessError> {
     match tunnel.update_timers(&mut dst_buf[..]) {
-        wg::TunnResult::Done => Ok(TickResult::Noop),
+        wg::TunnResult::Done => Ok(()),
         wg::TunnResult::Err(wg::WireGuardError::ConnectionExpired) => {
             tracing::info!("wg: tick: Connection Expired");
-            Ok(TickResult::ReConnect)
+            Err(ProcessError::UdpReconnect)
         }
         wg::TunnResult::Err(e) => {
             tracing::error!(error = ?e, "wg: tick: update_timers error");
-            Ok(TickResult::Noop)
+            Ok(())
         }
-        wg::TunnResult::WriteToNetwork(packet) => match udp_socket.send(&packet).await {
-            Err(err) => {
-                tracing::error!(err = ?err, "wg: tick: udp send packet error, len={}", packet.len());
-                Ok(TickResult::Noop)
-            }
-            Ok(_) => {
-                // tracing::error!("wg: tick: xxxx: send2 {}", packet.len());
-                Ok(TickResult::Noop)
-            },
-        },
+        wg::TunnResult::WriteToNetwork(packet) => udp_send(udp_socket, &packet).await,
         _ => {
             tracing::error!("wg: tick: Unexpected result from update_timers");
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Unexpected result from update_timers",
-            ))
+            Ok(())
         }
     }
 }
@@ -259,26 +261,17 @@ async fn wireguard_tun_input(
     udp_socket: &UdpSocket,
     dst_buf: &mut [u8],
     src: &[u8],
-) -> io::Result<()> {
+) -> Result<(), ProcessError> {
     match tunnel.encapsulate(src, dst_buf) {
         wg::TunnResult::Done => Ok(()),
         wg::TunnResult::Err(e) => {
             tracing::error!(error = ?e, "wg: tun_input: Encapsulate error");
             Ok(())
         }
-        wg::TunnResult::WriteToNetwork(packet) => match udp_socket.send(&packet).await {
-            Err(err) => {
-                tracing::error!(err = ?err, "wg: tun_input: udp send error, len={}", packet.len());
-                Ok(())
-            }
-            Ok(_) => Ok(()),
-        },
+        wg::TunnResult::WriteToNetwork(packet) => udp_send(udp_socket, &packet).await,
         _ => {
             tracing::error!("wg: tun_input: Unexpected result from encapsulate");
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Unexpected result from encapsulate",
-            ))
+            Ok(())
         }
     }
 }
@@ -292,14 +285,12 @@ async fn wireguard_udp_input(
     dst_buf: &mut [u8],
     packet: &[u8],
     rate_limiter: &wg::RateLimiter,
-) -> io::Result<usize> {
+) -> Result<usize, ProcessError> {
     // The rate limiter initially checks mac1 and mac2, and optionally asks to send a cookie
     let parsed_packet = match rate_limiter.verify_packet(Some(udp_remtoe_addr.ip()), packet, dst_buf) {
         Ok(packet) => packet,
         Err(wg::TunnResult::WriteToNetwork(cookie)) => {
-            if let Err(err) = udp_socket.send(cookie).await {
-                tracing::trace!(err = ?err, "wg: udp_input: udp send cookie error, len={}", cookie.len());
-            }
+            udp_send(udp_socket, cookie).await?;
             return Ok(0);
         }
         Err(err) => {
@@ -320,9 +311,7 @@ async fn wireguard_udp_input(
         }
         wg::TunnResult::WriteToNetwork(packet) => {
             flush = true;
-            if let Err(err) = udp_socket.send(packet).await {
-                tracing::error!(err = ?err, "wg: udp_input: udp send error, len={}", packet.len());
-            }
+            udp_send(udp_socket, packet).await?;
         }
         wg::TunnResult::WriteToTunnelV4(packet, _addr) => match tun_device.write(packet).await {
             Err(err) => {
@@ -345,9 +334,7 @@ async fn wireguard_udp_input(
     if flush {
         // Flush pending queue
         while let wg::TunnResult::WriteToNetwork(packet) = tunnel.decapsulate(None, &[], dst_buf) {
-            if let Err(err) = udp_socket.send(packet).await {
-                tracing::error!(err = ?err, "wg: udp_input: flush: udp send error, len={}", packet.len());
-            }
+            udp_send(udp_socket, packet).await?;
         }
     }
 
@@ -471,4 +458,23 @@ async fn read_tun_device(config: &LocalInstanceConfig) -> io::Result<AsyncDevice
     };
 
     Ok(device)
+}
+
+#[inline]
+async fn udp_send(
+    udp_socket: &UdpSocket,
+    packet: &[u8],
+) -> Result<(), ProcessError> {
+    match udp_socket.send(&packet).await {
+        Err(err) => {
+            tracing::error!(err = ?err, "wg: udp send error, len={}", packet.len());
+            Err(ProcessError::UdpReconnect)
+        }
+        Ok(_) => {
+            // if packet.len() > 1400 {
+            //     tracing::info!("wg: udp send success, len={}", packet.len());
+            // }
+            Ok(())
+        },
+    }
 }
