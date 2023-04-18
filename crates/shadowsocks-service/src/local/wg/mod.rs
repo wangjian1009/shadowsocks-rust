@@ -90,14 +90,6 @@ pub(super) async fn create_wg_server(
         }
     };
 
-    let mut udp_socket = match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
-        Ok(sock) => Some(sock),
-        Err(err) => {
-            tracing::error!(err = ?err, "wg: create udp socket error");
-            None
-        }
-    };
-
     let mtu = wg_config.itf.mtu.unwrap_or(1420);
     if mtu > MAX_UDP_SIZE - 32 {
         return Err(io::Error::new(
@@ -105,13 +97,23 @@ pub(super) async fn create_wg_server(
             format!("wireguard mtu {} overflow, max-mtu={}", mtu, MAX_UDP_SIZE - 32)
         ));
     }
-    
+
     vfut.push(ServerHandle(tokio::spawn(async move {
         #[cfg(feature = "local-fake-mode")]
         let mut fake_updated = false;
 
         let cancel_waiter = context.cancel_waiter();
         let rate_limit = context.rate_limiter();
+
+        // Socket 重建
+        let mut udp_socket_create_time = Instant::now();
+        let mut udp_socket = match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
+            Ok(sock) => Some(sock),
+            Err(err) => {
+                tracing::error!(err = ?err, "wg: create udp socket error");
+                None
+            }
+        };
 
         // 流量统计
         let flow_state = context.flow_stat();
@@ -179,21 +181,24 @@ pub(super) async fn create_wg_server(
             if let Err(err) = r {
                 match err {
                     ProcessError::UdpReconnect => {
-                        match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
-                            Ok(sock) => {
-                                udp_socket = Some(sock);
-                                tracing::info!("wg: tick: udp_sock recreated");
-                            }
-                            Err(err) => {
-                                if err.kind() == io::ErrorKind::NotFound {
-                                    tracing::error!(err = ?err, "wg: re create udp socket error, app exited");
-                                    return Err(err);
+                        if udp_socket_create_time.elapsed() > Duration::from_secs(1) {
+                            udp_socket_create_time = Instant::now();
+                            match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
+                                Ok(sock) => {
+                                    udp_socket = Some(sock);
+                                    tracing::info!("wg: tick: udp_sock recreated");
                                 }
-                                else {
-                                    tracing::error!(err = ?err, "wg: re create udp socket error");
+                                Err(err) => {
+                                    if err.kind() == io::ErrorKind::NotFound {
+                                        tracing::error!(err = ?err, "wg: re create udp socket error, app exited");
+                                        return Err(err);
+                                    }
+                                    else {
+                                        tracing::error!(err = ?err, "wg: re create udp socket error");
+                                    }
                                 }
-                            }
-                        };
+                            };
+                        }
                     }
                 }
             }
