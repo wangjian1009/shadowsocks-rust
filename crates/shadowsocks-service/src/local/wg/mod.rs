@@ -1,7 +1,7 @@
 use cfg_if::cfg_if;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, time::{self, Duration, Instant}};
 use tun::{AsyncDevice, Configuration as TunConfiguration, Error as TunError, Layer};
 
 use shadowsocks::net::UdpSocket;
@@ -13,8 +13,6 @@ cfg_if! {
         use shadowsocks::transport::{NegativeMultiDecision};
     }
 }
-
-use tokio::time::{Duration, Instant};
 
 use crate::config::{LocalInstanceConfig, ProtocolType};
 
@@ -93,13 +91,10 @@ pub(super) async fn create_wg_server(
     };
 
     let mut udp_socket = match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
-        Ok(sock) => sock,
+        Ok(sock) => Some(sock),
         Err(err) => {
             tracing::error!(err = ?err, "wg: create udp socket error");
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "wireguard create udp socket error",
-            ));
+            None
         }
     };
 
@@ -131,7 +126,7 @@ pub(super) async fn create_wg_server(
         loop {
             let mut tun_processed = 0;
             let r = tokio::select! {
-                _ = tokio::time::sleep_until(next_tick) => {
+                _ = time::sleep_until(next_tick) => {
                     next_tick = Instant::now() + TICK_DURATION; // tick 时间扣除处理实现
 
                     #[cfg(feature = "local-fake-mode")]
@@ -139,7 +134,7 @@ pub(super) async fn create_wg_server(
                         fake_updated = sync_fake_mode(&context, &tunnel).await;
                     }
                     
-                    wireguard_tick(&tunnel, &udp_socket, &mut dst_buf[..]).await
+                    wireguard_tick(&tunnel, &mut udp_socket, &mut dst_buf[..]).await
                 }
                 r = tun_device.read(&mut tun_src_buf[..]) => {
                     let src = match r {
@@ -151,30 +146,26 @@ pub(super) async fn create_wg_server(
                     };
                     flow_state.incr_tx(src.len() as u64);
                     tun_processed += src.len();
-                    
-                    wireguard_tun_input(&tunnel, &udp_socket, &mut dst_buf[..], src).await
+
+                    wireguard_tun_input(&tunnel, &mut udp_socket, &mut dst_buf[..], src).await
                 }
-                r = udp_socket.recv(&mut udp_src_buf[..]) => {
-                    let src = match r {
-                        Ok(n) => &udp_src_buf[..n],
-                        Err(err) => {
-                            tracing::error!(err = ?err, "wg: udp read error");
-                            return Err(err);
-                        }
-                    };
-
-                    let r = wireguard_udp_input(&tunnel, &mut tun_device, &udp_socket, &udp_remote_addr, &mut dst_buf[..], src, &wg_rate_limiter).await;
-
+                r = udp_recv(&mut udp_socket, &mut udp_src_buf[..]) => {
                     match r {
-                        Ok(tun_writed) => {
-                            flow_state.incr_rx(tun_writed as u64);
-                            tun_processed = tun_writed;
-                            Ok(())
+                        Ok(src) => {
+                            let r = wireguard_udp_input(&tunnel, &mut tun_device, &udp_socket, &udp_remote_addr, &mut dst_buf[..], src, &wg_rate_limiter).await;
+                            match r {
+                                Ok(tun_writed) => {
+                                    flow_state.incr_rx(tun_writed as u64);
+                                    tun_processed = tun_writed;
+                                    Ok(())
+                                }
+                                Err(err) => Err(err),
+                            }
                         }
                         Err(err) => Err(err),
                     }
                 }
-                _ = tokio::time::sleep_until(next_rate_limiter_rest) => {
+                _ = time::sleep_until(next_rate_limiter_rest) => {
                     next_rate_limiter_rest = Instant::now() + RATE_LIMITER_RESET_DURATION;
                     wg_rate_limiter.reset_count();
                     Ok(())
@@ -190,7 +181,7 @@ pub(super) async fn create_wg_server(
                     ProcessError::UdpReconnect => {
                         match UdpSocket::connect_with_opts(&udp_remote_addr, context.connect_opts_ref()).await {
                             Ok(sock) => {
-                                udp_socket = sock;
+                                udp_socket = Some(sock);
                                 tracing::info!("wg: tick: udp_sock recreated");
                             }
                             Err(err) => {
@@ -236,7 +227,7 @@ pub(super) async fn create_wg_server(
 
 /// Return: need reconnect
 #[inline]
-async fn wireguard_tick(tunnel: &wg::Tunn, udp_socket: &UdpSocket, dst_buf: &mut [u8]) -> Result<(), ProcessError> {
+async fn wireguard_tick(tunnel: &wg::Tunn, udp_socket: &mut Option<UdpSocket>, dst_buf: &mut [u8]) -> Result<(), ProcessError> {
     match tunnel.update_timers(&mut dst_buf[..]) {
         wg::TunnResult::Done => Ok(()),
         wg::TunnResult::Err(wg::WireGuardError::ConnectionExpired) => {
@@ -258,7 +249,7 @@ async fn wireguard_tick(tunnel: &wg::Tunn, udp_socket: &UdpSocket, dst_buf: &mut
 #[inline]
 async fn wireguard_tun_input(
     tunnel: &wg::Tunn,
-    udp_socket: &UdpSocket,
+    udp_socket: &Option<UdpSocket>,
     dst_buf: &mut [u8],
     src: &[u8],
 ) -> Result<(), ProcessError> {
@@ -280,14 +271,14 @@ async fn wireguard_tun_input(
 async fn wireguard_udp_input(
     tunnel: &wg::Tunn,
     tun_device: &mut AsyncDevice,
-    udp_socket: &UdpSocket,
-    udp_remtoe_addr: &SocketAddr,
+    udp_socket: &Option<UdpSocket>,
+    udp_remote_addr: &SocketAddr,
     dst_buf: &mut [u8],
     packet: &[u8],
     rate_limiter: &wg::RateLimiter,
 ) -> Result<usize, ProcessError> {
     // The rate limiter initially checks mac1 and mac2, and optionally asks to send a cookie
-    let parsed_packet = match rate_limiter.verify_packet(Some(udp_remtoe_addr.ip()), packet, dst_buf) {
+    let parsed_packet = match rate_limiter.verify_packet(Some(udp_remote_addr.ip()), packet, dst_buf) {
         Ok(packet) => packet,
         Err(wg::TunnResult::WriteToNetwork(cookie)) => {
             udp_send(udp_socket, cookie).await?;
@@ -461,10 +452,37 @@ async fn read_tun_device(config: &LocalInstanceConfig) -> io::Result<AsyncDevice
 }
 
 #[inline]
+async fn udp_recv<'a>(
+    udp_socket: & Option<UdpSocket>,
+    buf: &'a mut [u8],
+) -> Result<&'a [u8], ProcessError> {
+    match udp_socket.as_ref() {
+        Some(udp_socket) => {
+            match udp_socket.recv(buf).await {
+                Ok(n) => Ok(&buf[..n]),
+                Err(err) => {
+                    tracing::error!(err = ?err, "wg: udp read error");
+                    Err(ProcessError::UdpReconnect)
+                }
+            }
+        }
+        None => {
+            time::sleep(Duration::from_secs(1)).await; // 等待一秒后触发重连
+            Err(ProcessError::UdpReconnect)
+        }
+    }
+}
+
+#[inline]
 async fn udp_send(
-    udp_socket: &UdpSocket,
+    udp_socket: &Option<UdpSocket>,
     packet: &[u8],
 ) -> Result<(), ProcessError> {
+    if udp_socket.is_none() {
+        return Err(ProcessError::UdpReconnect);
+    }
+
+    let udp_socket = udp_socket.as_ref().unwrap();
     match udp_socket.send(&packet).await {
         Err(err) => {
             tracing::error!(err = ?err, "wg: udp send error, len={}", packet.len());
