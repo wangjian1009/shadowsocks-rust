@@ -17,7 +17,7 @@ use shadowsocks::{
     net::{AcceptOpts, ConnectOpts},
     relay::socks5::Address,
 };
-use tokio::task::JoinHandle;
+use tokio::{io::AsyncWriteExt, task::JoinHandle};
 use tracing::{info, info_span, trace, warn, Instrument};
 
 #[cfg(feature = "local-flow-stat")]
@@ -509,6 +509,10 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
 
                                 info!("got file descriptor {} for tun from {:?}", fd_buffer[0], peer_addr);
 
+                                if let Err(err) = stream.write_u8(0).await {
+                                    tracing::error!(err = ?err, "client {:?} send recv fd success error", peer_addr);
+                                }
+
                                 builder = builder.file_descriptor(fd_buffer[0]);
                                 break;
                             }
@@ -548,7 +552,7 @@ async fn flow_report_task(
 ) -> io::Result<()> {
     use std::slice;
 
-    use tokio::{io::AsyncWriteExt, time};
+    use tokio::time;
     use tracing::debug;
 
     // Local flow statistic report RPC

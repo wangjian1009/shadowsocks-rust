@@ -160,7 +160,7 @@ pub(super) async fn create_wg_server(
                 r = udp_recv(&mut udp_socket, &mut udp_src_buf[..]) => {
                     match r {
                         Ok(src) => {
-                            tracing::error!("wg: udp recv, len={}", src.len());
+                            // tracing::error!("wg: udp recv, len={}", src.len());
                             let r = wireguard_udp_input(&tunnel, &mut tun_device, &udp_socket, &udp_remote_addr, &mut dst_buf[..], src, &wg_rate_limiter).await;
                             match r {
                                 Ok(tun_writed) => {
@@ -504,7 +504,7 @@ async fn udp_send(
         }
         Ok(_) => {
             // if packet.len() > 1400 {
-            tracing::error!("wg: udp send success, len={}", packet.len());
+            //     tracing::error!("wg: udp send success, len={}", packet.len());
             // }
             Ok(())
         },

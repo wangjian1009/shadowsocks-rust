@@ -34,7 +34,7 @@ impl UdpTun {
         capacity: Option<usize>,
     ) -> (UdpTun, UdpAssociationCloseReceiver) {
         let (tun_tx, tun_rx) = mpsc::channel(64);
-        let (mut manager, mut close_rx) = UdpAssociationManager::new(
+        let (manager, close_rx) = UdpAssociationManager::new(
             context,
             UdpTunInboundWriter::new(tun_tx),
             time_to_live,
