@@ -17,7 +17,7 @@ use shadowsocks::{
     net::{AcceptOpts, ConnectOpts},
     relay::socks5::Address,
 };
-use tokio::{io::AsyncWriteExt, task::JoinHandle};
+use tokio::task::JoinHandle;
 use tracing::{info, info_span, trace, warn, Instrument};
 
 #[cfg(feature = "local-flow-stat")]
@@ -437,7 +437,7 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
                 };
 
                 let mut server = {
-                    let local_addr = local_config.local_dns_addr.expect("missing local_dns_addr");
+                    let local_addr = local_config.local_dns_addr;
                     let remote_addr = local_config.remote_dns_addr.expect("missing remote_dns_addr");
 
                     Dns::with_context(context.clone(), local_addr.clone(), Address::from(remote_addr.clone()))
@@ -451,6 +451,7 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
             #[cfg(feature = "local-tun")]
             ProtocolType::Tun => {
                 use shadowsocks::net::UnixListener;
+                use tokio::io::AsyncWriteExt;
 
                 use self::tun::TunBuilder;
 
@@ -526,10 +527,11 @@ pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<S
                         }
                     }
                 }
-                let server = builder.build().await?;
-                vfut.push(ServerHandle(tokio::spawn(
-                    async move { server.run().await }.instrument(info_span!("tun")),
-                )));
+                let span = info_span!("tun");
+                let server = builder.build().instrument(span.clone()).await?;
+                vfut.push(ServerHandle(tokio::spawn(async move {
+                    server.run().instrument(span).await
+                })));
             }
             #[cfg(all(not(feature = "local-tun"), feature = "wireguard"))]
             ProtocolType::Tun => {
@@ -579,6 +581,7 @@ async fn flow_report_task(
         match stat_addr {
             #[cfg(unix)]
             LocalFlowStatAddress::UnixStreamPath(ref stat_path) => {
+                use tokio::io::AsyncWriteExt;
                 use tokio::net::UnixStream;
 
                 let mut stream = match time::timeout(timeout, UnixStream::connect(stat_path)).await {
@@ -604,6 +607,7 @@ async fn flow_report_task(
                 }
             }
             LocalFlowStatAddress::TcpStreamAddr(stat_addr) => {
+                use tokio::io::AsyncWriteExt;
                 use tokio::net::TcpStream;
 
                 let mut stream = match time::timeout(timeout, TcpStream::connect(stat_addr)).await {

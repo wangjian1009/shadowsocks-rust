@@ -960,10 +960,11 @@ impl LocalConfig {
         match self.protocol {
             #[cfg(feature = "local-dns")]
             ProtocolType::Dns => {
-                if self.local_dns_addr.is_none() || self.remote_dns_addr.is_none() {
+                // self.local_dns_addr.is_none()
+                if self.remote_dns_addr.is_none() {
                     let err = Error::new(
                         ErrorKind::MissingField,
-                        "missing `local_dns_addr` or `remote_dns_addr` in configuration",
+                        "missing `remote_dns_addr` in configuration",
                         None,
                     );
                     return Err(err);

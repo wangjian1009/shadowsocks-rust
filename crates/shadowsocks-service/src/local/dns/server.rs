@@ -46,23 +46,23 @@ use super::{client_cache::DnsClientCache, config::NameServerAddr};
 pub struct Dns {
     context: Arc<ServiceContext>,
     mode: Mode,
-    local_addr: Arc<NameServerAddr>,
+    local_addr: Option<Arc<NameServerAddr>>,
     remote_addr: Arc<Address>,
 }
 
 impl Dns {
     /// Create a new DNS Relay server
-    pub fn new(local_addr: NameServerAddr, remote_addr: Address) -> Dns {
+    pub fn new(local_addr: Option<NameServerAddr>, remote_addr: Address) -> Dns {
         let context = ServiceContext::default();
         Dns::with_context(Arc::new(context), local_addr, remote_addr)
     }
 
     /// Create with an existed `context`
-    pub fn with_context(context: Arc<ServiceContext>, local_addr: NameServerAddr, remote_addr: Address) -> Dns {
+    pub fn with_context(context: Arc<ServiceContext>, local_addr: Option<NameServerAddr>, remote_addr: Address) -> Dns {
         Dns {
             context,
             mode: Mode::UdpOnly,
-            local_addr: Arc::new(local_addr),
+            local_addr: local_addr.map(|addr| Arc::new(addr)),
             remote_addr: Arc::new(remote_addr),
         }
     }
@@ -99,8 +99,8 @@ impl Dns {
         };
 
         info!(
-            local_dns = self.local_addr.to_string(),
-            remote_dns = self.remote_addr.to_string(),
+            local_dns = ?self.local_addr,
+            remote_dns = ?self.remote_addr,
             "shadowsocks dns TCP listening on {}",
             listener.local_addr()?,
         );
@@ -142,7 +142,7 @@ impl Dns {
     async fn handle_tcp_stream(
         client: Arc<DnsClient>,
         mut stream: TcpStream,
-        local_addr: Arc<NameServerAddr>,
+        local_addr: Option<Arc<NameServerAddr>>,
         remote_addr: Arc<Address>,
     ) -> io::Result<()> {
         let mut length_buf = [0u8; 2];
@@ -183,7 +183,10 @@ impl Dns {
                 }
             };
 
-            let respond_message = match client.resolve(message, &local_addr, &remote_addr).await {
+            let respond_message = match client
+                .resolve(message, local_addr.as_ref().map(|e| e.as_ref()), &remote_addr)
+                .await
+            {
                 Ok(m) => m,
                 Err(err) => {
                     error!(error = ?err, "lookup error");
@@ -218,8 +221,8 @@ impl Dns {
         let socket: UdpSocket = socket.into();
 
         info!(
-            local_dns = self.local_addr.to_string(),
-            remote_dns = self.remote_addr.to_string(),
+            local_dns = ?self.local_addr,
+            remote_dns = ?self.remote_addr,
             "shadowsocks dns UDP listening on {}",
             socket.local_addr()?,
         );
@@ -278,10 +281,13 @@ impl Dns {
         listener: Arc<UdpSocket>,
         peer_addr: SocketAddr,
         message: Message,
-        local_addr: Arc<NameServerAddr>,
+        local_addr: Option<Arc<NameServerAddr>>,
         remote_addr: Arc<Address>,
     ) -> io::Result<()> {
-        let respond_message = match client.resolve(message, &local_addr, &remote_addr).await {
+        let respond_message = match client
+            .resolve(message, local_addr.as_ref().map(|e| e.as_ref()), &remote_addr)
+            .await
+        {
             Ok(m) => m,
             Err(err) => {
                 error!(error = ?err, "lookup failed");
@@ -353,6 +359,8 @@ fn check_name_in_proxy_list(acl: &AccessControl, name: &Name) -> Option<bool> {
 
 /// given the query, determine whether remote/local query should be used, or inconclusive
 fn should_forward_by_query(context: &ServiceContext, balancer: &PingBalancer, query: &Query) -> Option<bool> {
+    error!("DNS xxxxxx aaaa");
+
     // No server was configured, then always resolve with local
     if balancer.is_empty() {
         return Some(false);
@@ -378,14 +386,20 @@ fn should_forward_by_query(context: &ServiceContext, balancer: &PingBalancer, qu
         }
     }
 
+    error!("DNS xxxxxx 11: {}", query.name());
     if let Some(acl) = context.acl() {
+        error!("DNS xxxxxx 22");
         if query.query_class() != DNSClass::IN {
+            error!("DNS xxxxxx 33");
             // unconditionally use default for all non-IN queries
             Some(acl.is_default_in_proxy_list())
         } else if query.query_type() == RecordType::PTR {
+            error!("DNS xxxxxx 44");
             Some(should_forward_by_ptr_name(acl, query.name()))
         } else {
+            error!("DNS xxxxxx 55");
             let result = check_name_in_proxy_list(acl, query.name());
+            error!("DNS xxxxxx 66: {:?}", result);
             if result.is_none() && acl.is_ip_empty() && acl.is_host_empty() {
                 Some(acl.is_default_in_proxy_list())
             } else {
@@ -500,7 +514,7 @@ impl DnsClient {
     async fn resolve(
         &self,
         request: Message,
-        local_addr: &NameServerAddr,
+        local_addr: Option<&NameServerAddr>,
         remote_addr: &Address,
     ) -> io::Result<Message> {
         let mut message = Message::new();
@@ -509,6 +523,7 @@ impl DnsClient {
         message.set_recursion_available(true);
         message.set_message_type(MessageType::Response);
 
+        tracing::error!("xxxxxx: resolve");
         if !request.recursion_desired() {
             // RD is required by default. Otherwise it may not get valid respond from remote servers
 
@@ -545,7 +560,7 @@ impl DnsClient {
     async fn acl_lookup(
         &self,
         query: &Query,
-        local_addr: &NameServerAddr,
+        local_addr: Option<&NameServerAddr>,
         remote_addr: &Address,
     ) -> (io::Result<Message>, bool) {
         // 原版的检查对于域名没有在acl配置中的，交由默认处理
@@ -726,7 +741,7 @@ impl DnsClient {
             .unwrap_or(true)
     }
 
-    async fn lookup_local(&self, query: &Query, local_addr: &NameServerAddr) -> io::Result<Message> {
+    async fn lookup_local(&self, query: &Query, local_addr: Option<&NameServerAddr>) -> io::Result<Message> {
         let mut last_err = io::Error::new(ErrorKind::InvalidData, "resolve empty");
 
         for _ in 0..self.attempts {
@@ -741,7 +756,18 @@ impl DnsClient {
         Err(last_err)
     }
 
-    async fn lookup_local_inner(&self, query: &Query, local_addr: &NameServerAddr) -> io::Result<Message> {
+    async fn lookup_local_inner(&self, query: &Query, local_addr: Option<&NameServerAddr>) -> io::Result<Message> {
+        let local_addr = match local_addr {
+            Some(local_addr) => local_addr,
+            None => {
+                let mut response = Message::new();
+                response.set_recursion_desired(true);
+                response.set_recursion_available(true);
+                response.set_message_type(MessageType::Response);
+                return Ok(response);
+            }
+        };
+
         let mut message = Message::new();
         message.set_id(thread_rng().gen());
         message.set_recursion_desired(true);

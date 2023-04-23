@@ -27,7 +27,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     sync::mpsc,
 };
-use tracing::{error, trace};
+use tracing::{error, info_span, trace, Instrument};
 
 use crate::{
     local::{
@@ -291,7 +291,10 @@ impl TcpTun {
         let manager_handle = {
             let manager_running = manager_running.clone();
 
+            let span = info_span!("manager");
             thread::spawn(move || {
+                let _span = span.enter();
+
                 let TcpSocketManager {
                     ref mut device,
                     ref mut iface,
@@ -509,11 +512,14 @@ impl TcpTun {
             // establish a tunnel
             let context = self.context.clone();
             let balancer = self.balancer.clone();
-            tokio::spawn(async move {
-                if let Err(err) = handle_redir_client(context, balancer, connection, src_addr, dst_addr).await {
-                    error!("TCP tunnel failure, {} <-> {}, error: {}", src_addr, dst_addr, err);
+            tokio::spawn(
+                async move {
+                    if let Err(err) = handle_redir_client(context, balancer, connection, src_addr, dst_addr).await {
+                        error!("TCP tunnel failure, {} <-> {}, error: {}", src_addr, dst_addr, err);
+                    }
                 }
-            });
+                .in_current_span(),
+            );
         }
 
         Ok(())
@@ -555,6 +561,7 @@ async fn establish_client_tcp_redir<'a>(
     let svr_cfg = server.server_config();
 
     let mut remote = AutoProxyClientStream::connect(&context, server.as_ref(), addr).await?;
+    tracing::info!("connect successed");
 
     establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
 }
@@ -575,5 +582,7 @@ async fn handle_redir_client(
         }
     }
     let target_addr = Address::from(daddr);
-    establish_client_tcp_redir(context, balancer, s, peer_addr, &target_addr).await
+    establish_client_tcp_redir(context, balancer, s, peer_addr, &target_addr)
+        .instrument(info_span!("tcp", target = ?target_addr))
+        .await
 }
