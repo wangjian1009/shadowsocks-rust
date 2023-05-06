@@ -23,6 +23,8 @@ const HANDSHAKE_RATE_LIMIT: u64 = 10;
 const TICK_DURATION: Duration = Duration::from_millis(250);
 const RATE_LIMITER_RESET_DURATION: Duration = Duration::from_secs(1);
 
+use super::tun_sys::{IFF_PI_PREFIX_LEN, write_packet_with_pi};
+
 enum ProcessError {
     UdpReconnect,
 }
@@ -145,7 +147,14 @@ pub(super) async fn create_wg_server(
                 }
                 r = tun_device.read(&mut tun_src_buf[..]) => {
                     let src = match r {
-                        Ok(n) => &tun_src_buf[..n],
+                        Ok(n) => {
+                            if n <= IFF_PI_PREFIX_LEN {
+                                tracing::error!("wg: tun packet too short, packet: {:?}", &tun_src_buf[..n]);
+                                continue;
+                            }
+
+                            &tun_src_buf[IFF_PI_PREFIX_LEN..n]
+                        },
                         Err(err) => {
                             tracing::error!(err = ?err, "wg: tun read error");
                             return Err(err);
@@ -317,20 +326,22 @@ async fn wireguard_udp_input(
             flush = true;
             udp_send(udp_socket, udp_remote_addr, packet).await?;
         }
-        wg::TunnResult::WriteToTunnelV4(packet, _addr) => match tun_device.write(packet).await {
+        wg::TunnResult::WriteToTunnelV4(packet, _addr) => match write_packet_with_pi(tun_device, packet).await {
             Err(err) => {
                 tracing::error!(err = ?err, "wg: udp_input: tun write packet(v4) error");
             }
-            Ok(n) => {
-                tun_write += n;
+            Ok(()) => {
+                // tracing::error!("wg: udp_input: tun write packet(v4) {}", packet.len());
+                tun_write += packet.len();
             }
         },
-        wg::TunnResult::WriteToTunnelV6(packet, _addr) => match tun_device.write(packet).await {
+        wg::TunnResult::WriteToTunnelV6(packet, _addr) => match write_packet_with_pi(tun_device, packet).await {
             Err(err) => {
                 tracing::error!(err = ?err, "wg: udp_input: tun write packet(v6) error");
             }
-            Ok(n) => {
-                tun_write += n;
+            Ok(()) => {
+                // tracing::error!("wg: udp_input: tun write packet(v6) {}", packet.len());
+                tun_write += packet.len();
             }
         },
     };
@@ -471,8 +482,10 @@ async fn udp_recv<'a>(
 ) -> Result<&'a [u8], ProcessError> {
     match udp_socket.as_ref() {
         Some(udp_socket) => {
-            match udp_socket.recv(buf).await {
-                Ok(n) => Ok(&buf[..n]),
+            match udp_socket.recv_from(buf).await {
+                Ok((n, _addr)) => {
+                    Ok(&buf[..n])
+                },
                 Err(err) => {
                     tracing::error!(err = ?err, "wg: udp read error");
                     Err(ProcessError::UdpReconnect)

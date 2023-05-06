@@ -62,6 +62,9 @@ pub mod utils;
 #[cfg(feature = "wireguard")]
 mod wg;
 
+#[cfg(any(feature = "local-tun", feature = "wireguard"))]
+mod tun_sys;
+
 use cfg_if::cfg_if;
 cfg_if! {
     if #[cfg(feature = "sniffer")] {

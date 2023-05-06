@@ -27,10 +27,11 @@ use self::{
 };
 
 mod ip_packet;
-mod sys;
 mod tcp;
 mod udp;
 mod virt_device;
+
+use super::tun_sys as sys;
 
 pub struct TunBuilder {
     context: Arc<ServiceContext>,
