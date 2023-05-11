@@ -359,8 +359,6 @@ fn check_name_in_proxy_list(acl: &AccessControl, name: &Name) -> Option<bool> {
 
 /// given the query, determine whether remote/local query should be used, or inconclusive
 fn should_forward_by_query(context: &ServiceContext, balancer: &PingBalancer, query: &Query) -> Option<bool> {
-    error!("DNS xxxxxx aaaa");
-
     // No server was configured, then always resolve with local
     if balancer.is_empty() {
         return Some(false);
@@ -386,20 +384,14 @@ fn should_forward_by_query(context: &ServiceContext, balancer: &PingBalancer, qu
         }
     }
 
-    error!("DNS xxxxxx 11: {}", query.name());
     if let Some(acl) = context.acl() {
-        error!("DNS xxxxxx 22");
         if query.query_class() != DNSClass::IN {
-            error!("DNS xxxxxx 33");
             // unconditionally use default for all non-IN queries
             Some(acl.is_default_in_proxy_list())
         } else if query.query_type() == RecordType::PTR {
-            error!("DNS xxxxxx 44");
             Some(should_forward_by_ptr_name(acl, query.name()))
         } else {
-            error!("DNS xxxxxx 55");
             let result = check_name_in_proxy_list(acl, query.name());
-            error!("DNS xxxxxx 66: {:?}", result);
             if result.is_none() && acl.is_ip_empty() && acl.is_host_empty() {
                 Some(acl.is_default_in_proxy_list())
             } else {
@@ -523,7 +515,6 @@ impl DnsClient {
         message.set_recursion_available(true);
         message.set_message_type(MessageType::Response);
 
-        tracing::error!("xxxxxx: resolve");
         if !request.recursion_desired() {
             // RD is required by default. Otherwise it may not get valid respond from remote servers
 

@@ -104,6 +104,17 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                 .help("result output file"),
         );
 
+    #[cfg(target_os = "android")]
+    {
+        app = app.arg(
+            Arg::new("VPN_PROTECT_PATH")
+                .long("vpn-protect-path")
+                .num_args(1)
+                .action(ArgAction::Set)
+                .help("result output file"),
+        );
+    }
+
     app
 }
 
@@ -146,7 +157,19 @@ pub fn main(matches: &ArgMatches, init_log: bool) -> ExitCode {
         let canceler = Canceler::new();
 
         let context = Context::new_shared(ServerType::Local);
-        let service_context = Arc::new(ServiceContext::new(context, canceler.waiter()));
+
+        #[allow(unused_mut)]
+        let mut service_context = ServiceContext::new(context, canceler.waiter());
+
+        #[cfg(target_os = "android")]
+        if let Some(vpn_protect_path) = matches.get_one::<String>("VPN_PROTECT_PATH") {
+            let mut connect_opts = service_context.connect_opts_ref().clone();
+            connect_opts.vpn_protect_path = Some(vpn_protect_path.into());
+            service_context.set_connect_opts(connect_opts);
+        }
+
+        let service_context = Arc::new(service_context);
+
         let server = match ServerIdent::new(service_context.clone(), svr_cfg, Duration::MAX, Duration::MAX) {
             Ok(server) => Arc::new(server),
             Err(err) => {
