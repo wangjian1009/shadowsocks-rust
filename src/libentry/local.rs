@@ -39,7 +39,7 @@ use futures::{
 #[no_mangle]
 pub extern "C" fn lib_local_run(
     c_config: *const c_char,
-    c_log_level: c_char,
+    #[cfg(feature = "logging")] c_log_level: c_char,
     c_acl_path: *const c_char,
     #[cfg(feature = "local-flow-stat")] c_stat_path: *const c_char,
     control_port: c_ushort,
@@ -51,7 +51,6 @@ pub extern "C" fn lib_local_run(
     // let collector = tracing_subscriber::registry().with(OsLogger::new("moe.absolucy.test", "default"));
     // tracing::subscriber::set_global_default(collector).expect("failed to set global subscriber");
 
-    // tracing::error!("xxxxx lib_local_run 1");
     let str_config = unsafe { CStr::from_ptr(c_config).to_string_lossy().to_owned() };
 
     let acl_path = if !c_acl_path.is_null() {

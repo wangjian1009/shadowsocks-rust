@@ -26,5 +26,9 @@ pub extern "C" fn lib_url_run(argc: c_int, argv: *const *const c_char) {
         }
     };
 
-    url::main(&matches, false);
+    url::main(
+        &matches,
+        #[cfg(feature = "logging")]
+        false,
+    );
 }

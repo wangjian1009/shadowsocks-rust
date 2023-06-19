@@ -156,7 +156,9 @@ pub fn init_with_config(bin_name: &'static str, config: &LogConfig) -> Guard {
     //     metrics_layer.with_filter(filter::filter_fn(|metadata| metadata.target().starts_with("metrics"))),
     // )
 
-    subscriber.init();
+    if let Err(err) = subscriber.try_init() {
+        tracing::info!(err = ?err, "logging init error");
+    }
 
     guard
 }

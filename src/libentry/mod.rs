@@ -12,5 +12,3 @@ mod local;
 
 #[cfg(feature = "local-url")]
 mod url;
-
-mod log;
