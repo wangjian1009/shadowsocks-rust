@@ -295,7 +295,7 @@ tower = { version = "*", optional = true }
 shadowsocks-service = { version = "1.15.0", path = "./crates/shadowsocks-service", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
-daemonize = "0.4"
+daemonize = "0.5"
 
 [dev-dependencies]
 byteorder = "1.3"

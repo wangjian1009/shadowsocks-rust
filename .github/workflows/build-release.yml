@@ -32,16 +32,15 @@ jobs:
           - mipsel-unknown-linux-musl
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          target: ${{ matrix.target }}
-          toolchain: stable
-          default: true
-          override: true
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable
+          rustup default stable
+          rustup override set stable
+          rustup target add --toolchain stable ${{ matrix.target }}
 
       - name: Install cross
         run: cargo install cross
@@ -56,7 +55,7 @@ jobs:
           fi
 
           if [[ "$compile_target" == "mips-"* || "$compile_target" == "mipsel-"* || "$compile_target" == "mips64-"* || "$compile_target" == "mips64el-"* ]]; then
-            wget -q https://github.com/upx/upx/releases/download/v4.0.2/upx-4.0.2-amd64_linux.tar.xz -O /tmp/upx-4.0.2.tar.xz&&mkdir -p /tmp/upx&&xz -d -c /tmp/upx-4.0.2.tar.xz | tar -x -C /tmp/upx; chmod +x /tmp/upx/upx-4.0.2-amd64_linux/upx&&export PATH=/tmp/upx/upx-4.0.2-amd64_linux:$PATH;
+            sudo apt-get update -y && sudo apt-get install -y upx;
             if [[ "$?" == "0" ]]; then
               compile_compress="-u"
             fi
@@ -86,7 +85,7 @@ jobs:
           - x86_64-apple-darwin
           - aarch64-apple-darwin
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Install GNU tar
         if: runner.os == 'macOS'
@@ -96,13 +95,12 @@ jobs:
           echo "/usr/local/opt/gnu-tar/libexec/gnubin" >> $GITHUB_PATH
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          target: ${{ matrix.target }}
-          toolchain: stable
-          default: true
-          override: true
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable
+          rustup default stable
+          rustup override set stable
+          rustup target add --toolchain stable ${{ matrix.target }}
 
       - name: Build release
         shell: bash
@@ -123,15 +121,14 @@ jobs:
       RUSTFLAGS: "-C target-feature=+crt-static"
       RUST_BACKTRACE: full
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          default: true
-          override: true
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable
+          rustup default stable
+          rustup override set stable
 
       - name: Build release
         run: |
