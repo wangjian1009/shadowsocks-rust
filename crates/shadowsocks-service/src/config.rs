@@ -167,6 +167,9 @@ struct SSConfig {
     dns: Option<SSDnsConfig>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    dns_cache_size: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -650,20 +653,15 @@ impl FromStr for ManagerServerHost {
 }
 
 /// Mode of Manager's server
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub enum ManagerServerMode {
     /// Run shadowsocks server in the same process of manager
+    #[default]
     Builtin,
 
     /// Run shadowsocks server in standalone (process) mode
     #[cfg(unix)]
     Standalone,
-}
-
-impl Default for ManagerServerMode {
-    fn default() -> ManagerServerMode {
-        ManagerServerMode::Builtin
-    }
 }
 
 /// Parsing ManagerServerMode error
@@ -749,8 +747,9 @@ impl ManagerConfig {
 }
 
 /// Protocol of local server
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 pub enum ProtocolType {
+    #[default]
     Socks,
     #[cfg(feature = "local-http")]
     Http,
@@ -762,12 +761,6 @@ pub enum ProtocolType {
     Dns,
     #[cfg(any(feature = "local-tun", feature = "wireguard"))]
     Tun,
-}
-
-impl Default for ProtocolType {
-    fn default() -> ProtocolType {
-        ProtocolType::Socks
-    }
 }
 
 impl ProtocolType {
@@ -1025,19 +1018,14 @@ impl LocalConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum DnsConfig {
+    #[default]
     System,
     #[cfg(feature = "trust-dns")]
     TrustDns(ResolverConfig),
     #[cfg(feature = "local-dns")]
     LocalDns(NameServerAddr),
-}
-
-impl Default for DnsConfig {
-    fn default() -> DnsConfig {
-        DnsConfig::System
-    }
 }
 
 /// Security Config
@@ -1123,6 +1111,7 @@ pub struct Config {
     /// - `cloudflare`, `cloudflare_tls`, `cloudflare_https`
     /// - `quad9`, `quad9_tls`
     pub dns: DnsConfig,
+    pub dns_cache_size: Option<usize>,
     /// Uses IPv6 addresses first
     ///
     /// Set to `true` if you want to query IPv6 addresses before IPv4
@@ -1298,6 +1287,7 @@ impl Config {
             local: Vec::new(),
 
             dns: DnsConfig::default(),
+            dns_cache_size: None,
             ipv6_first: false,
             ipv6_only: false,
 
@@ -2048,6 +2038,7 @@ impl Config {
                 Some(SSDnsConfig::TrustDns(c)) => nconfig.dns = DnsConfig::TrustDns(c),
                 None => nconfig.dns = DnsConfig::System,
             }
+            nconfig.dns_cache_size = config.dns_cache_size;
         }
 
         // TCP nodelay

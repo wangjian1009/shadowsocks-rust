@@ -1255,13 +1255,14 @@ impl From<PathBuf> for ManagerAddr {
 }
 
 /// Policy for handling replay attack requests
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub enum ReplayAttackPolicy {
     /// Default strategy based on protocol
     ///
     /// SIP022 (AEAD-2022): Reject
     /// SIP004 (AEAD): Ignore
     /// Stream: Ignore
+    #[default]
     Default,
     /// Ignore it completely
     Ignore,
@@ -1269,12 +1270,6 @@ pub enum ReplayAttackPolicy {
     Detect,
     /// Try to detect replay attack and reject the request
     Reject,
-}
-
-impl Default for ReplayAttackPolicy {
-    fn default() -> ReplayAttackPolicy {
-        ReplayAttackPolicy::Default
-    }
 }
 
 impl Display for ReplayAttackPolicy {

@@ -21,9 +21,7 @@ use tracing::{debug, error, warn};
 use crate::net::{
     sys::{set_common_sockopt_after_connect, set_common_sockopt_for_connect, socket_bind_dual_stack},
     udp::{BatchRecvMessage, BatchSendMessage},
-    AcceptOpts,
-    AddrFamily,
-    ConnectOpts,
+    AcceptOpts, AddrFamily, ConnectOpts,
 };
 
 /// A `TcpStream` that supports TFO (TCP Fast Open)
@@ -111,9 +109,7 @@ impl TcpStream {
 
                 stream.ready(Interest::WRITABLE).await?;
 
-                if let Err(err) = stream.take_error() {
-                    return Err(err);
-                }
+                stream.take_error()?;
 
                 stream
             } else {
@@ -344,7 +340,7 @@ pub async fn bind_outbound_udp_socket(bind_addr: &SocketAddr, config: &ConnectOp
         UdpSocket::bind(bind_addr).await?
     } else {
         let socket = Socket::new(Domain::for_address(*bind_addr), Type::DGRAM, Some(Protocol::UDP))?;
-        socket_bind_dual_stack(&socket, &bind_addr, false)?;
+        socket_bind_dual_stack(&socket, bind_addr, false)?;
 
         // UdpSocket::from_std requires socket to be non-blocked
         socket.set_nonblocking(true)?;
@@ -411,7 +407,7 @@ pub fn batch_recvmsg<S: AsRawFd>(sock: &S, msgs: &mut [BatchRecvMessage<'_>]) ->
         return Ok(0);
     }
 
-    if !SUPPORT_BATCH_SEND_RECV_MSG.load(Ordering::Acquire) {
+    if !SUPPORT_BATCH_SEND_RECV_MSG.load(Ordering::Relaxed) {
         recvmsg_fallback(sock, &mut msgs[0])?;
         return Ok(1);
     }
@@ -441,7 +437,7 @@ pub fn batch_recvmsg<S: AsRawFd>(sock: &S, msgs: &mut [BatchRecvMessage<'_>]) ->
         let err = io::Error::last_os_error();
         if let Some(libc::ENOSYS) = err.raw_os_error() {
             debug!("recvmsg_x is not supported, fallback to recvmsg, error: {:?}", err);
-            SUPPORT_BATCH_SEND_RECV_MSG.store(false, Ordering::Release);
+            SUPPORT_BATCH_SEND_RECV_MSG.store(false, Ordering::Relaxed);
 
             recvmsg_fallback(sock, &mut msgs[0])?;
             return Ok(1);
@@ -486,7 +482,7 @@ pub fn batch_sendmsg<S: AsRawFd>(sock: &S, msgs: &mut [BatchSendMessage<'_>]) ->
         return Ok(0);
     }
 
-    if !SUPPORT_BATCH_SEND_RECV_MSG.load(Ordering::Acquire) {
+    if !SUPPORT_BATCH_SEND_RECV_MSG.load(Ordering::Relaxed) {
         sendmsg_fallback(sock, &mut msgs[0])?;
         return Ok(1);
     }
@@ -515,7 +511,7 @@ pub fn batch_sendmsg<S: AsRawFd>(sock: &S, msgs: &mut [BatchSendMessage<'_>]) ->
         let err = io::Error::last_os_error();
         if let Some(libc::ENOSYS) = err.raw_os_error() {
             debug!("sendmsg_x is not supported, fallback to sendmsg, error: {:?}", err);
-            SUPPORT_BATCH_SEND_RECV_MSG.store(false, Ordering::Release);
+            SUPPORT_BATCH_SEND_RECV_MSG.store(false, Ordering::Relaxed);
 
             sendmsg_fallback(sock, &mut msgs[0])?;
             return Ok(1);

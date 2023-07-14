@@ -329,7 +329,7 @@ impl Manager {
 
     #[cfg(unix)]
     fn server_pid_path(&self, port: u16) -> PathBuf {
-        let pid_file_name = format!("shadowsocks-server-{}.pid", port);
+        let pid_file_name = format!("shadowsocks-server-{port}.pid");
         let mut pid_path = self.svr_cfg.server_working_directory.clone();
         pid_path.push(&pid_file_name);
         pid_path
@@ -337,7 +337,7 @@ impl Manager {
 
     #[cfg(unix)]
     fn server_config_path(&self, port: u16) -> PathBuf {
-        let config_file_name = format!("shadowsocks-server-{}.json", port);
+        let config_file_name = format!("shadowsocks-server-{port}.json");
         let mut config_file_path = self.svr_cfg.server_working_directory.clone();
         config_file_path.push(&config_file_name);
         config_file_path
@@ -355,7 +355,7 @@ impl Manager {
         if pid_path.exists() {
             if let Ok(mut pid_file) = File::open(&pid_path) {
                 let mut pid_content = String::new();
-                if let Ok(..) = pid_file.read_to_string(&mut pid_content) {
+                if pid_file.read_to_string(&mut pid_content).is_ok() {
                     let pid_content = pid_content.trim();
 
                     match pid_content.parse::<libc::pid_t>() {
@@ -415,7 +415,7 @@ impl Manager {
 
         trace!("created standalone server with config {:?}", config);
 
-        let config_file_content = format!("{}", config);
+        let config_file_content = format!("{config}");
 
         match OpenOptions::new().write(true).create(true).open(&config_file_path) {
             Err(err) => {
@@ -484,7 +484,7 @@ impl Manager {
                 Err(..) => {
                     error!("unrecognized method \"{}\", req: {:?}", m, req);
 
-                    let err = format!("unrecognized method \"{}\"", m);
+                    let err = format!("unrecognized method \"{m}\"");
                     return Ok(AddResponse(err));
                 }
             },
@@ -526,7 +526,7 @@ impl Manager {
                 Err(..) => {
                     error!("unrecognized mode \"{}\", req: {:?}", mode, req);
 
-                    let err = format!("unrecognized mode \"{}\"", mode);
+                    let err = format!("unrecognized mode \"{mode}\"");
                     return Ok(AddResponse(err));
                 }
             },
