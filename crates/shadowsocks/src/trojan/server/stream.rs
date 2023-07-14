@@ -75,22 +75,22 @@ pub(super) async fn serve_tcp(
 
             let mut incoming = MonTraffic::new(incoming, server_policy.create_connection_flow_state_tcp());
 
-            let (down, up, r) = copy_bidirectional(&mut target, &mut incoming, Some(idle_timeout)).await;
-            match r {
-                Ok(()) => {
+            // let (down, up) = copy_bidirectional(&mut target, &mut incoming, Some(idle_timeout)).await;
+            match copy_bidirectional(&mut target, &mut incoming, Some(idle_timeout)).await {
+                Ok((down, up)) => {
                     debug!(up, down, "transfer finished");
                     CloseReason::SockClosed
                 }
                 Err(err) if err.kind() == io::ErrorKind::ConnectionReset => {
-                    debug!(up, down, error = ?err, "transfer reset");
+                    debug!(error = ?err, "transfer reset");
                     CloseReason::SockClosed
                 }
                 Err(err) if err.kind() == io::ErrorKind::TimedOut => {
-                    debug!(up, down, "transfer timeout");
+                    debug!("transfer timeout");
                     CloseReason::IdleTimeout
                 }
                 Err(err) => {
-                    error!(up, down, error = ?err, "transfer error");
+                    error!(error = ?err, "transfer error");
                     CloseReason::SockError
                 }
             }

@@ -140,7 +140,8 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         C: Connector,
         F: FnOnce(C::TS) -> S,
     {
-        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.external_addr(), opts)).await {
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.tcp_external_addr(), opts)).await
+        {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => return Err(e),
             Err(..) => {
@@ -154,7 +155,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         trace!(
             "connected tcp remote {} (outbound: {}) with {:?}",
             svr_cfg.addr(),
-            svr_cfg.external_addr(),
+            svr_cfg.tcp_external_addr(),
             opts
         );
 

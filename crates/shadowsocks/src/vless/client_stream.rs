@@ -77,7 +77,8 @@ impl<S: StreamConnection> ClientStream<S> {
         C: Connector,
         F: FnOnce(C::TS) -> S,
     {
-        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.external_addr(), opts)).await {
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.tcp_external_addr(), opts)).await
+        {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => return Err(e),
             Err(..) => {
@@ -92,7 +93,7 @@ impl<S: StreamConnection> ClientStream<S> {
             "connected vless {} remote {}{} (outbound: {}) with {:?}",
             command,
             svr_cfg.addr(),
-            svr_cfg.external_addr(),
+            svr_cfg.tcp_external_addr(),
             svr_cfg.acceptor_transport_tag(),
             opts
         );

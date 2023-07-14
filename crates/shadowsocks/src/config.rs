@@ -544,19 +544,28 @@ impl ServerConfig {
         &self.addr
     }
 
-    /// Get server's external address
-    pub fn external_addr(&self) -> &ServerAddr {
-        match &self.protocol {
-            ServerProtocol::SS(config) => config.plugin_addr().unwrap_or(&self.addr),
-            #[cfg(feature = "trojan")]
-            ServerProtocol::Trojan(..) => &self.addr,
-            #[cfg(feature = "vless")]
-            ServerProtocol::Vless(..) => &self.addr,
-            #[cfg(feature = "tuic")]
-            ServerProtocol::Tuic(..) => &self.addr,
-            #[cfg(feature = "wireguard")]
-            ServerProtocol::WG(..) => &self.addr,
+    /// Get server's TCP external address
+    pub fn tcp_external_addr(&self) -> &ServerAddr {
+        if let ServerProtocol::SS(ss_config) = &self.protocol {
+            if let Some(plugin) = ss_config.plugin() {
+                if plugin.plugin_mode.enable_tcp() {
+                    return ss_config.plugin_addr().unwrap_or(&self.addr);
+                }
+            }
         }
+        &self.addr
+    }
+
+    /// Get server's UDP external address
+    pub fn udp_external_addr(&self) -> &ServerAddr {
+        if let ServerProtocol::SS(ss_config) = &self.protocol {
+            if let Some(plugin) = ss_config.plugin() {
+                if plugin.plugin_mode.enable_udp() {
+                    return ss_config.plugin_addr().unwrap_or(&self.addr);
+                }
+            }
+        }
+        &self.addr
     }
 
     /// Set timeout
@@ -843,6 +852,7 @@ impl ServerConfig {
                             plugin: p.to_owned(),
                             plugin_opts: vsp.next().map(ToOwned::to_owned),
                             plugin_args: Vec::new(), // SIP002 doesn't have arguments for plugins
+                            plugin_mode: Mode::TcpOnly, // SIP002 doesn't support SIP003u
                         };
                         svrconfig.must_be_ss_mut(|c| c.set_plugin(plugin));
                     }

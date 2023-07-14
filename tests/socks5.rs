@@ -8,7 +8,7 @@ use tokio::{
     time::{self, Duration},
 };
 
-// use tracing_subscriber::util::SubscriberInitExt;
+use tracing::{info_span, Instrument};
 use tracing_test::traced_test;
 
 use shadowsocks_service::{
@@ -111,7 +111,7 @@ impl Socks5TestServer {
         tokio::spawn(run_server(CancelWaiter::none(), svr_cfg));
 
         let client_cfg = self.cli_config.clone();
-        tokio::spawn(run_local(client_cfg, CancelWaiter::none()));
+        tokio::spawn(run_local(client_cfg, CancelWaiter::none()).instrument(info_span!("local")));
 
         let mut last_err = None;
 
@@ -564,11 +564,11 @@ async fn socks5_relay_aead() {
 
     let svr = Socks5TestServer::new(
         SERVER_ADDR,
-        ServerProtocol::SS(ShadowsocksConfig::new(PASSWORD, CipherKind::AES_256_GCM)),
+        ServerProtocol::SS(ShadowsocksConfig::new(PASSWORD, METHOD)),
         #[cfg(feature = "transport")]
         None,
         LOCAL_ADDR,
-        ServerProtocol::SS(ShadowsocksConfig::new(PASSWORD, CipherKind::AES_256_GCM)),
+        ServerProtocol::SS(ShadowsocksConfig::new(PASSWORD, METHOD)),
         #[cfg(feature = "transport")]
         None,
         Mode::TcpOnly,

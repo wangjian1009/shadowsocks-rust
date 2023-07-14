@@ -73,127 +73,192 @@ cfg_if! {
     }
 }
 
+enum TcpServerData {
+    Native(TcpAcceptor),
+    #[cfg(feature = "transport-ws")]
+    Ws(WebSocketAcceptor<TcpAcceptor>),
+    #[cfg(feature = "transport-tls")]
+    Tls(TlsAcceptor<TcpAcceptor>),
+    #[cfg(feature = "transport-restls")]
+    Restls(RestlsAcceptor<TcpAcceptor>),
+    #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+    Wss(WebSocketAcceptor<TlsAcceptor<TcpAcceptor>>),
+    #[cfg(feature = "transport-mkcp")]
+    Mkcp(MkcpAcceptor),
+    #[cfg(feature = "transport-skcp")]
+    Skcp(SkcpAcceptor),
+    #[cfg(feature = "tuic")]
+    Tuic(shadowsocks::tuic::server::Server),
+}
+
 pub struct TcpServer {
     context: Arc<ServiceContext>,
     connector: Arc<TcpConnector>,
-    accept_opts: AcceptOpts,
+    svr_cfg: ServerConfig,
+    listener: TcpServerData,
 }
 
 impl TcpServer {
-    pub fn new(context: Arc<ServiceContext>, connector: Arc<TcpConnector>, accept_opts: AcceptOpts) -> TcpServer {
-        TcpServer {
-            context,
-            connector,
-            accept_opts,
-        }
-    }
-
-    pub async fn run(self, svr_cfg: &ServerConfig) -> io::Result<()> {
+    pub(crate) async fn new(
+        context: Arc<ServiceContext>,
+        connector: Arc<TcpConnector>,
+        svr_cfg: ServerConfig,
+        accept_opts: AcceptOpts,
+    ) -> io::Result<TcpServer> {
         #[cfg(feature = "tuic")]
         if let ServerProtocol::Tuic(tuic_config) = svr_cfg.protocol() {
-            return self.serve_tuic(svr_cfg, tuic_config).await;
+            let server = Self::create_tuic_server(context.clone(), &svr_cfg, tuic_config, &accept_opts).await?;
+
+            return Ok(TcpServer {
+                context,
+                connector,
+                svr_cfg,
+                listener: TcpServerData::Tuic(server),
+            });
         }
 
         #[cfg(feature = "transport")]
-        match svr_cfg.acceptor_transport().as_ref() {
+        let listener = match svr_cfg.acceptor_transport().as_ref() {
             Some(ref transport) => match transport {
                 #[cfg(feature = "transport-ws")]
                 &TransportAcceptorConfig::Ws(ws_config) => {
                     let listener = TcpAcceptor::bind_server_with_opts(
-                        self.context.context().as_ref(),
-                        svr_cfg.external_addr(),
-                        self.accept_opts.clone(),
+                        context.context().as_ref(),
+                        svr_cfg.tcp_external_addr(),
+                        accept_opts.clone(),
                     )
                     .await?;
-                    let listener = WebSocketAcceptor::new(ws_config, listener);
-                    self.run_with_acceptor(listener, svr_cfg).await
+                    TcpServerData::Ws(WebSocketAcceptor::new(ws_config, listener))
                 }
                 #[cfg(feature = "transport-tls")]
                 &TransportAcceptorConfig::Tls(tls_config) => {
                     let listener = TcpAcceptor::bind_server_with_opts(
-                        self.context.context().as_ref(),
-                        svr_cfg.external_addr(),
-                        self.accept_opts.clone(),
+                        context.context().as_ref(),
+                        svr_cfg.tcp_external_addr(),
+                        accept_opts.clone(),
                     )
                     .await?;
-                    let listener = TlsAcceptor::new(tls_config, listener).await?;
-                    self.run_with_acceptor(listener, svr_cfg).await
+                    TcpServerData::Tls(TlsAcceptor::new(tls_config, listener).await?)
                 }
                 #[cfg(feature = "transport-restls")]
                 &TransportAcceptorConfig::Restls(restls_config) => {
                     let listener = TcpAcceptor::bind_server_with_opts(
-                        self.context.context().as_ref(),
-                        svr_cfg.external_addr(),
-                        self.accept_opts.clone(),
+                        context.context().as_ref(),
+                        svr_cfg.tcp_external_addr(),
+                        accept_opts.clone(),
                     )
                     .await?;
-                    let listener = RestlsAcceptor::new(self.context.context(), restls_config, listener).await?;
-                    self.run_with_acceptor(listener, svr_cfg).await
+                    TcpServerData::Tls(RestlsAcceptor::new(context.context.context(), restls_config, listener).await?);
                 }
                 #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
                 &TransportAcceptorConfig::Wss(ws_config, tls_config) => {
                     let listener = TcpAcceptor::bind_server_with_opts(
-                        self.context.context().as_ref(),
-                        svr_cfg.external_addr(),
-                        self.accept_opts.clone(),
+                        context.context().as_ref(),
+                        svr_cfg.tcp_external_addr(),
+                        accept_opts.clone(),
                     )
                     .await?;
                     let listener = TlsAcceptor::new(tls_config, listener).await?;
-                    let listener = WebSocketAcceptor::new(ws_config, listener);
-                    self.run_with_acceptor(listener, svr_cfg).await
+                    TcpServerData::Wss(WebSocketAcceptor::new(ws_config, listener))
                 }
                 #[cfg(feature = "transport-mkcp")]
                 &TransportAcceptorConfig::Mkcp(mkcp_config) => {
                     let socket = UdpSocket::listen_server_with_opts(
-                        self.context.context().as_ref(),
-                        svr_cfg.external_addr(),
-                        self.accept_opts.clone(),
+                        context.context().as_ref(),
+                        svr_cfg.tcp_external_addr(),
+                        accept_opts.clone(),
                     )
                     .await?;
                     let r = Arc::new(socket);
                     let w = r.clone();
                     let local_addr = r.local_addr()?;
-                    let listener = MkcpAcceptor::new(Arc::new(mkcp_config.clone()), local_addr, r, w, None);
-                    self.run_with_acceptor(listener, svr_cfg).await
+                    TcpServerData::Mkcp(MkcpAcceptor::new(Arc::new(mkcp_config.clone()), local_addr, r, w, None))
                 }
                 #[cfg(feature = "transport-skcp")]
                 &TransportAcceptorConfig::Skcp(skcp_config) => {
                     let socket = UdpSocket::listen_server_with_opts(
-                        self.context.context().as_ref(),
-                        svr_cfg.external_addr(),
-                        self.accept_opts.clone(),
+                        context.context().as_ref(),
+                        svr_cfg.tcp_external_addr(),
+                        accept_opts.clone(),
                     )
                     .await?;
-                    let listener = SkcpAcceptor::new(skcp_config.clone(), socket)?;
-                    self.run_with_acceptor(listener, svr_cfg).await
+                    TcpServerData::Skcp(SkcpAcceptor::new(skcp_config.clone(), socket)?)
                 }
             },
-            None => {
-                let listener = TcpAcceptor::bind_server_with_opts(
-                    self.context.context().as_ref(),
-                    svr_cfg.external_addr(),
-                    self.accept_opts.clone(),
+            None => TcpServerData::Native(
+                TcpAcceptor::bind_server_with_opts(
+                    context.context().as_ref(),
+                    svr_cfg.tcp_external_addr(),
+                    accept_opts.clone(),
                 )
-                .await?;
-                self.run_with_acceptor(listener, svr_cfg).await
-            }
-        }
+                .await?,
+            ),
+        };
 
         #[cfg(not(feature = "transport"))]
-        {
-            let listener = TcpAcceptor::bind_server_with_opts(
-                self.context.context().as_ref(),
-                svr_cfg.external_addr(),
-                self.accept_opts.clone(),
+        let listener = TcpServerData::Tcp(BaseAcceptor::Native(
+            TcpAcceptor::bind_server_with_opts(
+                context.context().as_ref(),
+                svr_cfg.tcp_external_addr(),
+                accept_opts.clone(),
             )
-            .await?;
+            .await?,
+        ));
 
-            self.run_with_acceptor(listener, svr_cfg).await
+        Ok(TcpServer {
+            context,
+            connector,
+            svr_cfg,
+            listener,
+        })
+    }
+
+    /// Start server's accept loop
+    pub async fn run(self) -> io::Result<()> {
+        let connector = self.connector;
+        match self.listener {
+            TcpServerData::Native(listener) => {
+                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg).await
+            }
+            #[cfg(feature = "transport-ws")]
+            TcpServerData::Ws(listener) => {
+                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg).await
+            }
+            #[cfg(feature = "transport-tls")]
+            TcpServerData::Tls(listener) => {
+                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg).await
+            }
+            #[cfg(feature = "transport-restls")]
+            TcpServerData::Restls(listener) => {
+                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg).await
+            }
+            #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+            TcpServerData::Wss(listener) => {
+                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg).await
+            }
+            #[cfg(feature = "transport-mkcp")]
+            TcpServerData::Mkcp(listener) => {
+                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg).await
+            }
+            #[cfg(feature = "transport-skcp")]
+            TcpServerData::Skcp(listener) => {
+                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg).await
+            }
+            #[cfg(feature = "tuic")]
+            TcpServerData::Tuic(server) => {
+                server.run(self.context.cancel_waiter()).await;
+                Ok(())
+            }
         }
     }
 
-    async fn run_with_acceptor(self, mut listener: impl Acceptor, svr_cfg: &ServerConfig) -> io::Result<()> {
-        let server_policy = Arc::new(Box::new(ServerPolicy::new(self.context.clone(), svr_cfg.timeout()))
+    async fn run_with_acceptor(
+        context: Arc<ServiceContext>,
+        mut listener: impl Acceptor,
+        connector: Arc<TcpConnector>,
+        svr_cfg: &ServerConfig,
+    ) -> io::Result<()> {
+        let server_policy = Arc::new(Box::new(ServerPolicy::new(context.clone(), svr_cfg.timeout()))
             as Box<dyn shadowsocks::policy::ServerPolicy>);
 
         let listen_addr = listener.local_addr().unwrap();
@@ -215,7 +280,7 @@ impl TcpServer {
         if let ServerProtocol::Trojan(trojan_config) = svr_cfg.protocol() {
             return shadowsocks::trojan::server::serve(
                 listener,
-                self.context.cancel_waiter(),
+                context.cancel_waiter(),
                 trojan_config,
                 svr_cfg.request_recv_timeout(),
                 svr_cfg.idle_timeout(),
@@ -237,10 +302,10 @@ impl TcpServer {
         }
 
         loop {
-            let flow_stat = self.context.flow_stat_tcp();
-            let connection_stat = self.context.connection_stat();
+            let flow_stat = context.flow_stat_tcp();
+            let connection_stat = context.connection_stat();
             #[cfg(feature = "rate-limit")]
-            let connection_bound_width = self.context.connection_bound_width();
+            let connection_bound_width = context.connection_bound_width();
 
             #[cfg(feature = "rate-limit")]
             let mut rate_limiter = None;
@@ -280,7 +345,7 @@ impl TcpServer {
 
             #[cfg(feature = "server-limit")]
             let (conn, in_count_guard) = match connection_stat
-                .check_add_in_connection(peer_addr, self.context.limit_connection_per_ip())
+                .check_add_in_connection(peer_addr, context.limit_connection_per_ip())
                 .await
             {
                 Ok(r) => r,
@@ -288,17 +353,17 @@ impl TcpServer {
                     #[cfg(feature = "statistics")]
                     bu_context.increment_conn_error("client-conn-limit");
 
-                    match self.context.limit_connection_close_delay() {
+                    match context.limit_connection_close_delay() {
                         None => error!(
                             "tcp server: from {} limit {} reached, close immediately",
                             peer_addr.ip(),
-                            self.context.limit_connection_per_ip().unwrap(),
+                            context.limit_connection_per_ip().unwrap(),
                         ),
                         Some(delay) => {
                             error!(
                                 "tcp server: from {} limit {} reached, close delay {:?}",
                                 peer_addr.ip(),
-                                self.context.limit_connection_per_ip().unwrap(),
+                                context.limit_connection_per_ip().unwrap(),
                                 delay
                             );
                             let delay = *delay;
@@ -317,7 +382,7 @@ impl TcpServer {
                 }
             };
 
-            if self.context.check_client_blocked(&peer_addr) {
+            if context.check_client_blocked(&peer_addr) {
                 #[cfg(feature = "statistics")]
                 bu_context.increment_conn_error("client-blocked");
 
@@ -326,8 +391,8 @@ impl TcpServer {
             }
 
             let client = TcpServerClient {
-                context: self.context.clone(),
-                connector: self.connector.clone(),
+                context: context.clone(),
+                connector: connector.clone(),
                 conn,
                 peer_addr,
                 timeout: svr_cfg.timeout(),
@@ -343,7 +408,7 @@ impl TcpServer {
             match svr_cfg.protocol() {
                 ServerProtocol::SS(ss_cfg) => {
                     let local_stream = ProxyServerStream::from_stream(
-                        self.context.context(),
+                        context.context(),
                         local_stream,
                         ss_cfg.method(),
                         ss_cfg.key(),
@@ -648,9 +713,8 @@ impl TcpServerClient {
         );
 
         // let timeout_ticker = self.idle_timeout.as_ref().map(|o| o.ticker());
-        let (rn, wn, r) = copy_encrypted_bidirectional(method, &mut stream, &mut remote_stream, None).await;
-        match r {
-            Ok(()) => {
+        match copy_encrypted_bidirectional(method, &mut stream, &mut remote_stream, None).await {
+            Ok((rn, wn)) => {
                 trace!(
                     "tcp tunnel {} <-> {} closed, L2R {} bytes, R2L {} bytes",
                     self.peer_addr,

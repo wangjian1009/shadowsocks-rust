@@ -8,7 +8,7 @@ use bytes::{BufMut, BytesMut};
 
 use trust_dns_resolver::proto::{
     op::{header::MessageType, response_code::ResponseCode, Message, OpCode},
-    rr::{RData, Record, RecordType},
+    rr::{rdata, RData, Record, RecordType},
 };
 
 use shadowsocks::{dns_resolver::DnsResolver, timeout::TimeoutTicker};
@@ -134,7 +134,7 @@ async fn resolve(dns_resolver: &DnsResolver, request: Message) -> Message {
                                         continue;
                                     }
                                     let mut record = Record::with(query.name().clone(), RecordType::A, DEFAULT_TTL);
-                                    record.set_data(Some(RData::A(*addr.ip())));
+                                    record.set_data(Some(RData::A(rdata::A(*addr.ip()))));
                                     record
                                 }
                                 SocketAddr::V6(addr) => {
@@ -142,7 +142,7 @@ async fn resolve(dns_resolver: &DnsResolver, request: Message) -> Message {
                                         continue;
                                     }
                                     let mut record = Record::with(query.name().clone(), RecordType::AAAA, DEFAULT_TTL);
-                                    record.set_data(Some(RData::AAAA(*addr.ip())));
+                                    record.set_data(Some(RData::AAAA(rdata::AAAA(*addr.ip()))));
                                     record
                                 }
                             };
@@ -219,7 +219,10 @@ mod test {
 
         assert_eq!(2, response.answer_count());
 
-        assert_eq!(Some(&RData::A(Ipv4Addr::new(1, 1, 1, 1))), response.answers()[0].data());
+        assert_eq!(
+            Some(&RData::A(rdata::A(Ipv4Addr::new(1, 1, 1, 1)))),
+            response.answers()[0].data()
+        );
     }
 
     async fn tcp_process_query(resolver: &DnsResolver, request: &Message) -> io::Result<Message> {
@@ -273,7 +276,7 @@ mod test {
         assert_eq!(2, response.answer_count());
 
         assert_eq!(
-            &RData::A(Ipv4Addr::new(1, 1, 1, 1)),
+            &RData::A(rdata::A(Ipv4Addr::new(1, 1, 1, 1))),
             response.answers()[0].data().unwrap()
         );
     }

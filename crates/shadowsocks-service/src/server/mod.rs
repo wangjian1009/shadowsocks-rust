@@ -23,7 +23,11 @@ use crate::{
     dns::build_dns_resolver,
 };
 
-pub use self::server::Server;
+pub use self::{
+    server::{Server, ServerBuilder},
+    tcprelay::TcpServer,
+    udprelay::UdpServer,
+};
 
 mod connection;
 pub mod context;
@@ -104,6 +108,7 @@ pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> 
     connect_opts.tcp.nodelay = config.no_delay;
     connect_opts.tcp.fastopen = config.fast_open;
     connect_opts.tcp.keepalive = config.keep_alive.or(Some(SERVER_DEFAULT_KEEPALIVE_TIMEOUT));
+    connect_opts.tcp.mptcp = config.mptcp;
 
     let mut accept_opts = AcceptOpts {
         ipv6_only: config.ipv6_only,
@@ -114,6 +119,7 @@ pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> 
     accept_opts.tcp.nodelay = config.no_delay;
     accept_opts.tcp.fastopen = config.fast_open;
     accept_opts.tcp.keepalive = config.keep_alive.or(Some(SERVER_DEFAULT_KEEPALIVE_TIMEOUT));
+    accept_opts.tcp.mptcp = config.mptcp;
 
     let resolver = build_dns_resolver(config.dns, config.ipv6_first, &connect_opts)
         .await
@@ -123,94 +129,80 @@ pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> 
 
     for inst in config.server {
         let svr_cfg = inst.config;
-        let mut server = Server::new(cancel_waiter.clone(), svr_cfg);
+        let mut server_builder = ServerBuilder::new(svr_cfg, cancel_waiter.clone());
 
         if let Some(ref r) = resolver {
-            server.set_dns_resolver(r.clone());
+            server_builder.set_dns_resolver(r.clone());
         }
 
-        server.set_connect_opts(connect_opts.clone());
-        server.set_accept_opts(accept_opts.clone());
+        server_builder.set_connect_opts(connect_opts.clone());
+        server_builder.set_accept_opts(accept_opts.clone());
 
         #[cfg(feature = "rate-limit")]
-        server.set_connection_bound_width(config.rate_limit.clone());
+        server_builder.set_connection_bound_width(config.rate_limit.clone());
 
         #[cfg(feature = "server-limit")]
-        server.set_limit_connection_per_ip(config.limit_connection_per_ip);
+        server_builder.set_limit_connection_per_ip(config.limit_connection_per_ip);
 
         #[cfg(feature = "server-limit")]
-        server.set_limit_connection_close_delay(config.limit_connection_close_delay);
+        server_builder.set_limit_connection_close_delay(config.limit_connection_close_delay);
 
         #[cfg(feature = "server-mock")]
         for mock_dns in &config.mock_dns {
-            server.set_mock_server_protocol(mock_dns.clone(), ServerMockProtocol::DNS);
+            server_builder.set_mock_server_protocol(mock_dns.clone(), ServerMockProtocol::DNS);
         }
 
         if let Some(c) = config.udp_max_associations {
-            server.set_udp_capacity(c);
+            server_builder.set_udp_capacity(c);
         }
         if let Some(d) = config.udp_timeout {
-            server.set_udp_expiry_duration(d);
+            server_builder.set_udp_expiry_duration(d);
         }
         if let Some(ref m) = config.manager {
-            server.set_manager_addr(m.addr.clone());
+            server_builder.set_manager_addr(m.addr.clone());
         }
 
         match inst.acl {
-            Some(acl) => server.set_acl(Arc::new(acl)),
+            Some(acl) => server_builder.set_acl(Arc::new(acl)),
             None => {
                 if let Some(ref acl) = acl {
-                    server.set_acl(acl.clone());
+                    server_builder.set_acl(acl.clone());
                 }
             }
         }
 
         if config.ipv6_first {
-            server.set_ipv6_first(config.ipv6_first);
+            server_builder.set_ipv6_first(config.ipv6_first);
         }
 
         if config.worker_count >= 1 {
-            server.set_worker_count(config.worker_count);
+            server_builder.set_worker_count(config.worker_count);
         }
 
-        server.set_security_config(&config.security);
+        server_builder.set_security_config(&config.security);
 
+        let server = server_builder.build().await?;
         servers.push(server);
     }
 
     #[cfg(feature = "server-maintain")]
-    let mut maintain_svr = None;
-
-    #[cfg(feature = "server-maintain")]
-    if config.maintain_addr.is_some() {
+    let maintain_svr = if config.maintain_addr.is_some() {
         let mut server_infos = Vec::new();
         for server in &servers {
             server_infos.push(maintain::ServerInfo {
-                addr: server.config().addr().clone(),
-                context: server.get_context(),
+                addr: server.server_config().addr().clone(),
+                context: server.context(),
             });
         }
-        maintain_svr = Some(maintain::MaintainServer::new(server_infos));
-    }
-
-    #[cfg(feature = "server-maintain")]
-    if maintain_svr.is_none() && servers.len() == 1 {
-        let server = servers.pop().unwrap();
-        let span = info_span!("svr", port = server.config().addr().port());
-        return server.run().instrument(span.or_current()).await;
-    }
-
-    #[cfg(not(feature = "server-maintain"))]
-    if servers.len() == 1 {
-        let server = servers.pop().unwrap();
-        let span = info_span!("svr", port = server.config().addr().port());
-        return server.run().instrument(span.or_current()).await;
-    }
+        Some(maintain::MaintainServer::new(server_infos))
+    } else {
+        None
+    };
 
     let mut vfut = Vec::with_capacity(servers.len());
 
     for server in servers {
-        let span = info_span!("svr", port = server.config().addr().port());
+        let span = info_span!("svr", port = server.server_config().addr().port());
         vfut.push(ServerHandle(tokio::spawn(server.run().instrument(span.or_current()))));
     }
 

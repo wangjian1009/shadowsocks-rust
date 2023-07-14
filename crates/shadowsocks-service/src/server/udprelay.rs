@@ -13,9 +13,8 @@ use futures::future;
 use lru_time_cache::LruCache;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use shadowsocks::{
-    config::ServerUser,
-    config::ShadowsocksConfig,
-    crypto::{CipherCategory, CipherKind},
+    config::{ServerProtocol, ServerUser},
+    crypto::CipherCategory,
     lookup_then,
     net::{AcceptOpts, AddrFamily, UdpSocket as OutboundUdpSocket},
     relay::udprelay::{options::UdpSocketControlData, ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
@@ -76,25 +75,34 @@ impl NatMap {
     }
 }
 
+/// UDP server instance
 pub struct UdpServer {
     context: Arc<ServiceContext>,
     assoc_map: NatMap,
     keepalive_tx: mpsc::Sender<NatKey>,
     keepalive_rx: mpsc::Receiver<NatKey>,
     time_to_live: Duration,
-    accept_opts: AcceptOpts,
     worker_count: usize,
+    listener: Arc<MonProxySocket>,
+    svr_cfg: ServerConfig,
 }
 
 impl UdpServer {
-    pub fn new(
+    pub(crate) async fn new(
         context: Arc<ServiceContext>,
-        method: CipherKind,
+        svr_cfg: ServerConfig,
         time_to_live: Option<Duration>,
         capacity: Option<usize>,
         accept_opts: AcceptOpts,
-    ) -> UdpServer {
+    ) -> io::Result<UdpServer> {
         let time_to_live = time_to_live.unwrap_or(crate::DEFAULT_UDP_EXPIRY_DURATION);
+
+        let ss_svr_cfg = match svr_cfg.protocol() {
+            ServerProtocol::SS(c) => c,
+            _ => {
+                return Err(io::Error::new(io::ErrorKind::Other, "udp only support ss"));
+            }
+        };
 
         fn create_assoc_map<K, V>(time_to_live: Duration, capacity: Option<usize>) -> LruCache<K, V>
         where
@@ -106,7 +114,7 @@ impl UdpServer {
             }
         }
 
-        let assoc_map = match method.category() {
+        let assoc_map = match ss_svr_cfg.method().category() {
             CipherCategory::None | CipherCategory::Aead => {
                 NatMap::Association(create_assoc_map(time_to_live, capacity))
             }
@@ -118,39 +126,50 @@ impl UdpServer {
 
         let (keepalive_tx, keepalive_rx) = mpsc::channel(UDP_ASSOCIATION_CLOSE_CHANNEL_SIZE);
 
-        UdpServer {
+        let socket = ProxySocket::bind_with_opts(context.context(), &svr_cfg, ss_svr_cfg, accept_opts).await?;
+        let socket = MonProxySocket::from_socket(socket, context.flow_stat_udp());
+        let listener = Arc::new(socket);
+
+        Ok(UdpServer {
             context,
             assoc_map,
             keepalive_tx,
             keepalive_rx,
             time_to_live,
-            accept_opts,
             worker_count: 1,
-        }
+            listener,
+            svr_cfg,
+        })
     }
 
     #[inline]
-    pub fn set_worker_count(&mut self, worker_count: usize) {
+    pub(crate) fn set_worker_count(&mut self, worker_count: usize) {
         self.worker_count = worker_count;
     }
 
-    pub async fn run(mut self, svr_cfg: &ServerConfig, svr_ss_cfg: &ShadowsocksConfig) -> io::Result<()> {
-        let socket =
-            ProxySocket::bind_with_opts(self.context.context(), svr_cfg, svr_ss_cfg, self.accept_opts.clone()).await?;
+    /// Server's configuration
+    pub fn server_config(&self) -> &ServerConfig {
+        &self.svr_cfg
+    }
 
+    /// Server's listen address
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.listener.get_ref().local_addr()
+    }
+
+    /// Start server's accept loop
+    pub async fn run(mut self) -> io::Result<()> {
         info!(
-            "shadowsocks udp server listening on {}",
-            socket.local_addr().expect("listener.local_addr"),
+            "shadowsocks udp server listening on {}, inbound address {}",
+            self.local_addr().expect("listener.local_addr"),
+            self.svr_cfg.addr(),
         );
 
         #[cfg(feature = "statistics")]
         let bu_context = shadowsocks::statistics::BuContext::new(
-            shadowsocks::statistics::ProtocolInfo::from(svr_cfg.protocol()),
-            svr_cfg.acceptor_transport().map(|t| t.tpe()),
+            shadowsocks::statistics::ProtocolInfo::from(self.svr_cfg.protocol()),
+            self.svr_cfg.acceptor_transport().map(|t| t.tpe()),
         );
-
-        let socket = MonProxySocket::from_socket(socket, self.context.flow_stat_udp());
-        let listener = Arc::new(socket);
 
         let mut cleanup_timer = time::interval(self.time_to_live);
 
@@ -167,7 +186,7 @@ impl UdpServer {
 
             for _ in 1..cpus {
                 let otx = otx.clone();
-                let listener = listener.clone();
+                let listener = self.listener.clone();
                 let context = self.context.clone();
 
                 #[cfg(feature = "statistics")]
@@ -235,6 +254,8 @@ impl UdpServer {
         }
 
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
+        // Make a clone to self.listener to avoid borrowing self
+        let listener = self.listener.clone();
         loop {
             tokio::select! {
                 _ = cleanup_timer.tick() => {

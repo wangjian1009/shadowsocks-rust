@@ -158,9 +158,9 @@ impl TcpServerClient {
             self.context.connect_opts_ref()
         );
 
-        let (rn, wn, r) = copy_bidirectional(&mut stream, &mut remote_stream, Some(self.idle_timeout)).await;
+        let r = copy_bidirectional(&mut stream, &mut remote_stream, Some(self.idle_timeout)).await;
         match r {
-            Ok(()) => {
+            Ok((rn, wn)) => {
                 trace!(
                     "vless tcp tunnel {} <-> {} closed, L2R {} bytes, R2L {} bytes",
                     self.peer_addr,
@@ -171,12 +171,10 @@ impl TcpServerClient {
             }
             Err(err) => {
                 trace!(
-                    "vless tcp tunnel {} <-> {} closed with error: {}, L2R {} bytes, R2L {} bytes",
+                    "vless tcp tunnel {} <-> {} closed with error: {}",
                     self.peer_addr,
                     target_addr,
                     err,
-                    rn,
-                    wn,
                 );
             }
         }

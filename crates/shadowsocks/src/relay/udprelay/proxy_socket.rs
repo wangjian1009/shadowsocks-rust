@@ -101,9 +101,14 @@ impl ProxySocket {
     ) -> ProxySocketResult<ProxySocket> {
         // Note: Plugins doesn't support UDP relay
 
-        let socket = ShadowUdpSocket::connect_server_with_opts(&context, svr_cfg.addr(), opts).await?;
+        let socket = ShadowUdpSocket::connect_server_with_opts(&context, svr_cfg.udp_external_addr(), opts).await?;
 
-        trace!("connected udp remote {} with {:?}", svr_cfg.addr(), opts);
+        trace!(
+            "connected udp remote {} (outbound: {}) with {:?}",
+            svr_cfg.addr(),
+            svr_cfg.udp_external_addr(),
+            opts
+        );
 
         Ok(ProxySocket::from_socket(
             UdpSocketType::Client,
@@ -166,7 +171,7 @@ impl ProxySocket {
         opts: AcceptOpts,
     ) -> ProxySocketResult<ProxySocket> {
         // Plugins doesn't support UDP
-        let socket = match svr_cfg.addr() {
+        let socket = match svr_cfg.udp_external_addr() {
             ServerAddr::SocketAddr(sa) => ShadowUdpSocket::listen_with_opts(sa, opts).await?,
             ServerAddr::DomainName(domain, port) => {
                 lookup_then!(&context, domain, *port, |addr| {

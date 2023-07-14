@@ -134,16 +134,15 @@ pub async fn connect(
                 }
             }
 
-            let (down, up, r) = copy_bidirectional(&mut target, &mut tunnel, Some(idle_timeout)).await;
-            match r {
-                Ok(()) => debug!(up, down, "transfer finished"),
+            match copy_bidirectional(&mut target, &mut tunnel, Some(idle_timeout)).await {
+                Ok((down, up)) => debug!(up, down, "transfer finished"),
                 Err(err) if err.kind() == io::ErrorKind::ConnectionReset => {
-                    debug!(up, down, error = ?err, "transfer reset")
+                    debug!(error = ?err, "transfer reset")
                 }
                 Err(err) if err.kind() == io::ErrorKind::TimedOut => {
-                    debug!(up, down, "transfer timeout")
+                    debug!("transfer timeout")
                 }
-                Err(err) => error!(up, down, error = ?err, "transfer error"),
+                Err(err) => error!(error = ?err, "transfer error"),
             }
         }
         Ok(StreamAction::Local { processor }) => {

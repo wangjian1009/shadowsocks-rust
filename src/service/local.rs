@@ -197,7 +197,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
             .help("Set SIP003 plugin options"),
     )
     .arg(
-        Arg::new("URL")
+        Arg::new("SERVER_URL")
             .long("server-url")
             .num_args(1)
             .action(ArgAction::Set)
@@ -206,7 +206,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
             .help("Server address in SIP002 (https://shadowsocks.org/guide/sip002.html) URL"),
     )
     .group(ArgGroup::new("SERVER_CONFIG")
-        .arg("SERVER_ADDR").arg("URL").multiple(true))
+        .arg("SERVER_ADDR").arg("SERVER_URL").multiple(true))
     .arg(
         Arg::new("ACL")
             .long("acl")
@@ -219,6 +219,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
     .arg(Arg::new("TCP_NO_DELAY").long("tcp-no-delay").alias("no-delay").action(ArgAction::SetTrue).help("Set TCP_NODELAY option for sockets"))
     .arg(Arg::new("TCP_FAST_OPEN").long("tcp-fast-open").alias("fast-open").action(ArgAction::SetTrue).help("Enable TCP Fast Open (TFO)"))
     .arg(Arg::new("TCP_KEEP_ALIVE").long("tcp-keep-alive").num_args(1).action(ArgAction::Set).value_parser(clap::value_parser!(u64)).help("Set TCP keep alive timeout seconds"))
+    .arg(Arg::new("TCP_MULTIPATH").long("tcp-multipath").alias("mptcp").action(ArgAction::SetTrue).help("Enable Multipath-TCP (MPTCP)"))
     .arg(Arg::new("UDP_TIMEOUT").long("udp-timeout").num_args(1).action(ArgAction::Set).value_parser(clap::value_parser!(u64)).help("Timeout seconds for UDP relay"))
     .arg(Arg::new("UDP_MAX_ASSOCIATIONS").long("udp-max-associations").num_args(1).action(ArgAction::Set).value_parser(clap::value_parser!(usize)).help("Maximum associations to be kept simultaneously for UDP relay"))
     .arg(Arg::new("INBOUND_SEND_BUFFER_SIZE").long("inbound-send-buffer-size").num_args(1).action(ArgAction::Set).value_parser(clap::value_parser!(u32)).help("Set inbound sockets' SO_SNDBUF option"))
@@ -732,12 +733,14 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
             let mut protocol = protocol.unwrap();
 
+            // protocol.if_ss_mut
             if let ServerProtocol::SS(protocol) = &mut protocol {
                 if let Some(p) = matches.get_one::<String>("PLUGIN") {
                     let plugin = PluginConfig {
                         plugin: p.to_owned(),
                         plugin_opts: matches.get_one::<String>("PLUGIN_OPT").map(ToOwned::to_owned),
                         plugin_args: Vec::new(),
+                        plugin_mode: Mode::TcpOnly,
                     };
 
                     protocol.set_plugin(plugin);
@@ -755,7 +758,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             config.server.push(ServerInstanceConfig::with_server_config(sc));
         }
 
-        if let Some(svr_addr) = matches.get_one::<ServerConfig>("URL").cloned() {
+        if let Some(svr_addr) = matches.get_one::<ServerConfig>("SERVER_URL").cloned() {
             config.server.push(ServerInstanceConfig::with_server_config(svr_addr));
         }
 
@@ -954,6 +957,10 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             .map(Duration::from_secs)
         {
             config.keep_alive = Some(keep_alive);
+        }
+
+        if matches.get_flag("TCP_MULTIPATH") {
+            config.mptcp = true;
         }
 
         #[cfg(any(target_os = "linux", target_os = "android"))]

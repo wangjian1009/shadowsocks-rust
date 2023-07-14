@@ -13,21 +13,23 @@ use context::MaintainServerContext;
 
 pub struct MaintainServer {
     context: MaintainServerContext,
+    addr: SocketAddr,
 }
 
 impl MaintainServer {
-    pub fn new(service_context: ServiceContext) -> MaintainServer {
+    pub fn new(service_context: ServiceContext, addr: SocketAddr) -> MaintainServer {
         MaintainServer {
             context: MaintainServerContext::new(service_context),
+            addr,
         }
     }
 
-    pub async fn run(self, addr: SocketAddr) -> io::Result<()> {
-        let server = HttpServer::bind(&addr).serve(server::MakeSvc {
+    pub async fn run(self) -> io::Result<()> {
+        let server = HttpServer::bind(&self.addr).serve(server::MakeSvc {
             context: self.context.clone(),
         });
 
-        tracing::info!("shadowsocks maintain server listening on {}", addr);
+        tracing::info!("shadowsocks maintain server listening on {}", self.addr);
 
         let cancel_waiter = self.context.service_context.cancel_waiter();
         tokio::select! {

@@ -1,6 +1,6 @@
 //! Shadowsocks HTTP Local Server
 
-pub use self::server::Http;
+pub use self::server::{Http, HttpBuilder};
 pub use http_stream::ProxyHttpStream;
 
 mod client_cache;

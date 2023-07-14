@@ -39,6 +39,13 @@ where
     S: AsyncRead + AsyncWrite + AutoProxyIo + Unpin,
 {
     if shadow.is_proxied() {
+        debug!(
+            "established tcp tunnel {} <-> {} through sever {} (outbound: {})",
+            peer_addr,
+            target_addr,
+            svr_cfg.tcp_external_addr(),
+            svr_cfg.addr(),
+        );
     } else {
         return establish_tcp_tunnel_bypassed(&mut plain, shadow, peer_addr, target_addr, None).await;
     }
@@ -102,7 +109,7 @@ where
         }
     }
 
-    let (wn, rn, r) = match svr_cfg.protocol() {
+    let r = match svr_cfg.protocol() {
         ServerProtocol::SS(ss_cfg) => copy_encrypted_bidirectional(ss_cfg.method(), shadow, &mut plain, None).await,
         #[cfg(feature = "trojan")]
         ServerProtocol::Trojan(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
@@ -114,7 +121,7 @@ where
         ServerProtocol::WG(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
     };
     match r {
-        Ok(()) => {
+        Ok((wn, rn)) => {
             trace!(
                 "tcp tunnel {} <-> {} (proxied) closed, L2R {} bytes, R2L {} bytes",
                 peer_addr,
@@ -149,9 +156,9 @@ where
 {
     debug!("established tcp tunnel {} <-> {} bypassed", peer_addr, target_addr);
 
-    let (rn, wn, r) = copy_bidirectional(plain, shadow, idle_timeout).await;
+    let r = copy_bidirectional(plain, shadow, idle_timeout).await;
     match r {
-        Ok(()) => {
+        Ok((rn, wn)) => {
             trace!(
                 "tcp tunnel {} <-> {} (bypassed) closed, L2R {} bytes, R2L {} bytes",
                 peer_addr,

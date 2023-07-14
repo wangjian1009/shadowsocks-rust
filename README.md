@@ -241,13 +241,19 @@ Read `Cargo.toml` for more details.
 
 ## Getting Started
 
+Generate a safe and secured password for a specific encryption method (`aes-128-gcm` in the example) with:
+
+```bash
+ssservice genkey -m "aes-128-gcm"
+```
+
 Create a ShadowSocks' configuration file. Example
 
 ```jsonc
 {
     "server": "my_server_ip",
     "server_port": 8388,
-    "password": "mypassword",
+    "password": "rwQc8qPXVsRpGx3uW+Y3Lj4Y42yF9Bs0xg1pmx8/+bo=",
     "method": "aes-256-gcm",
     // ONLY FOR `sslocal`
     // Delete these lines if you are running `ssserver` or `ssmanager`
@@ -264,23 +270,23 @@ In shadowsocks-rust, we also have an extended configuration file format, which i
 {
     "servers": [
         {
-            "address": "127.0.0.1",
-            "port": 8388,
-            "password": "hello-world",
+            "server": "127.0.0.1",
+            "server_port": 8388,
+            "password": "rwQc8qPXVsRpGx3uW+Y3Lj4Y42yF9Bs0xg1pmx8/+bo=",
             "method": "aes-256-gcm",
             "timeout": 7200
         },
         {
-            "address": "127.0.0.1",
-            "port": 8389,
-            "password": "hello-kitty",
+            "server": "127.0.0.1",
+            "server_port": 8389,
+            "password": "/dliNXn5V4jg6vBW4MnC1I8Jljg9x7vSihmk6UZpRBM=",
             "method": "chacha20-ietf-poly1305"
         },
         {
             "disabled": true,
-            "address": "eg.disable.me",
-            "port": 8390,
-            "password": "hello-internet",
+            "server": "eg.disable.me",
+            "server_port": 8390,
+            "password": "mGvbWWay8ueP9IHnV5F1uWGN2BRToiVCAWJmWOTLU24=",
             "method": "chacha20-ietf-poly1305"
         }
     ],
@@ -568,6 +574,11 @@ Example configuration:
     "password": "your-password",
     "plugin": "v2ray-plugin",
     "plugin_opts": "mode=quic;host=github.com",
+    "plugin_args": [
+        // Each line is an argument passed to "plugin"
+        "--verbose"
+    ],
+    "plugin_mode": "tcp_and_udp", // SIP003u, default is "tcp_only"
     // Server: TCP socket timeout in seconds.
     // Client: TCP connection timeout in seconds.
     // Omit this field if you don't have specific needs.
@@ -588,6 +599,8 @@ Example configuration:
             "password": "your-password",
             "plugin": "...",
             "plugin_opts": "...",
+            "plugin_args": [],
+            "plugin_mode": "...",
             "timeout": 7200,
 
             // Customized weight for local server's balancer
@@ -756,6 +769,8 @@ The configuration file is set by `socks5_auth_config_path` in `locals`.
 - `2022-blake3-aes-128-gcm`, `2022-blake3-aes-256-gcm`
 - `2022-blake3-chacha20-poly1305`, `2022-blake3-chacha8-poly1305`
 
+These Ciphers require `"password"` to be a Base64 string of key that have **exactly the same length** of Cipher's Key Size. It is recommended to use `ssservice genkey -m "METHOD_NAME"` to generate a secured and safe key.
+
 ### AEAD Ciphers
 
 - `chacha20-ietf-poly1305`
@@ -863,6 +878,7 @@ It supports the following features:
 - [x] Load balancing (multiple servers) and server delay checking
 - [x] [SIP004](https://github.com/shadowsocks/shadowsocks-org/issues/30) AEAD ciphers
 - [x] [SIP003](https://github.com/shadowsocks/shadowsocks-org/issues/28) Plugins
+- [x] [SIP003u](https://github.com/shadowsocks/shadowsocks-org/issues/180) Plugin with UDP support
 - [x] [SIP002](https://github.com/shadowsocks/shadowsocks-org/issues/27) Extension ss URLs
 - [x] [SIP022](https://github.com/shadowsocks/shadowsocks-org/issues/196) AEAD 2022 ciphers
 - [x] HTTP Proxy Supports ([RFC 7230](http://tools.ietf.org/html/rfc7230) and [CONNECT](https://tools.ietf.org/html/draft-luotonen-web-proxy-tunneling-01))

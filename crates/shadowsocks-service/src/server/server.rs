@@ -11,7 +11,7 @@ use cfg_if::cfg_if;
 use futures::FutureExt;
 use shadowsocks::{
     canceler::CancelWaiter,
-    config::{ManagerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
+    config::{ManagerAddr, ServerConfig},
     dns_resolver::DnsResolver,
     net::{AcceptOpts, ConnectOpts, FlowStat},
     plugin::{Plugin, PluginMode},
@@ -37,8 +37,8 @@ cfg_if! {
     }
 }
 
-/// Shadowsocks Server
-pub struct Server {
+/// Shadowsocks Server Builder
+pub struct ServerBuilder {
     context: Arc<ServiceContext>,
     svr_cfg: ServerConfig,
     udp_expiry_duration: Option<Duration>,
@@ -48,15 +48,15 @@ pub struct Server {
     worker_count: usize,
 }
 
-impl Server {
-    /// Create a new server from configuration
-    pub fn new(cancel_waiter: CancelWaiter, svr_cfg: ServerConfig) -> Server {
-        Server::with_context(Arc::new(ServiceContext::new(cancel_waiter)), svr_cfg)
+impl ServerBuilder {
+    /// Create a new server builder from configuration
+    pub fn new(svr_cfg: ServerConfig, cancel_waiter: CancelWaiter) -> ServerBuilder {
+        ServerBuilder::with_context(Arc::new(ServiceContext::new(cancel_waiter)), svr_cfg)
     }
 
-    /// Create a new server with context
-    pub fn with_context(context: Arc<ServiceContext>, svr_cfg: ServerConfig) -> Server {
-        Server {
+    /// Create a new server builder with context
+    pub fn with_context(context: Arc<ServiceContext>, svr_cfg: ServerConfig) -> ServerBuilder {
+        ServerBuilder {
             context,
             svr_cfg,
             udp_expiry_duration: None,
@@ -159,7 +159,7 @@ impl Server {
     }
 
     /// Get server's configuration
-    pub fn config(&self) -> &ServerConfig {
+    pub fn server_config(&self) -> &ServerConfig {
         &self.svr_cfg
     }
 
@@ -192,95 +192,137 @@ impl Server {
         context.set_security_config(security)
     }
 
+    /// Start the server
+    ///
+    /// 1. Starts plugin (subprocess)
+    /// 2. Starts TCP server (listener)
+    /// 3. Starts UDP server (listener)
+    pub async fn build(mut self) -> io::Result<Server> {
+        let mut plugin = None;
+
+        if let Some(plugin_cfg) = self.svr_cfg.if_ss(|c| c.plugin()).unwrap_or(None) {
+            plugin = Some(Plugin::start(plugin_cfg, self.svr_cfg.addr(), PluginMode::Server)?);
+        };
+
+        if let Some(plugin) = &plugin {
+            self.svr_cfg
+                .must_be_ss_mut(|c| c.set_plugin_addr(plugin.local_addr().into()));
+        }
+
+        let mut tcp_server = None;
+        if self.svr_cfg.if_ss(|c| c.mode().enable_tcp()).unwrap_or(true) {
+            let server = TcpServer::new(
+                self.context.clone(),
+                Arc::new(TcpConnector::new(Some(self.context.context()))),
+                self.svr_cfg.clone(),
+                self.accept_opts.clone(),
+            )
+            .await?;
+            tcp_server = Some(server);
+        }
+
+        let mut udp_server = None;
+        if self.svr_cfg.if_ss(|c| c.mode().enable_udp()).unwrap_or(false) {
+            let mut server = UdpServer::new(
+                self.context.clone(),
+                self.svr_cfg.clone(),
+                self.udp_expiry_duration,
+                self.udp_capacity,
+                self.accept_opts.clone(),
+            )
+            .await?;
+            server.set_worker_count(self.worker_count);
+            udp_server = Some(server);
+        }
+
+        Ok(Server {
+            context: self.context,
+            svr_cfg: self.svr_cfg,
+            tcp_server,
+            udp_server,
+            accept_opts: self.accept_opts,
+            manager_addr: self.manager_addr,
+            plugin,
+        })
+    }
+}
+
+/// Shadowsocks Server instance
+pub struct Server {
+    context: Arc<ServiceContext>,
+    svr_cfg: ServerConfig,
+    tcp_server: Option<TcpServer>,
+    udp_server: Option<UdpServer>,
+    manager_addr: Option<ManagerAddr>,
+    accept_opts: AcceptOpts,
+    plugin: Option<Plugin>,
+}
+
+impl Server {
+    pub fn context(&self) -> Arc<ServiceContext> {
+        self.context.clone()
+    }
+
+    /// Get Server's configuration
+    pub fn server_config(&self) -> &ServerConfig {
+        &self.svr_cfg
+    }
+
+    /// Get TCP server instance
+    pub fn tcp_server(&self) -> Option<&TcpServer> {
+        self.tcp_server.as_ref()
+    }
+
+    /// Get UDP server instance
+    pub fn udp_server(&self) -> Option<&UdpServer> {
+        self.udp_server.as_ref()
+    }
+
     /// Start serving
-    pub async fn run(mut self) -> io::Result<()> {
+    pub async fn run(self) -> io::Result<()> {
         let mut vfut = Vec::with_capacity(3);
 
-        let connector = Arc::new(TcpConnector::new(Some(self.context.context())));
-
-        if self.svr_cfg.if_ss(|ss_cfg| ss_cfg.mode().enable_tcp()).unwrap_or(false) {
-            let mut plugin = None;
-
-            if let Some(plugin_cfg) = self.svr_cfg.if_ss(|c| c.plugin()).unwrap_or(None) {
-                plugin = Some(Plugin::start(plugin_cfg, self.svr_cfg.addr(), PluginMode::Server)?);
-            };
-
-            if let Some(plugin) = plugin {
-                self.svr_cfg
-                    .must_be_ss_mut(|c| c.set_plugin_addr(plugin.local_addr().into()));
-                vfut.push(
-                    async move {
-                        match plugin.join().await {
-                            Ok(status) => {
-                                error!("plugin exited with status: {}", status);
-                                Ok(())
-                            }
-                            Err(err) => {
-                                error!("plugin exited with error: {}", err);
-                                Err(err)
-                            }
+        if let Some(plugin) = self.plugin {
+            vfut.push(
+                async move {
+                    match plugin.join().await {
+                        Ok(status) => {
+                            error!("plugin exited with status: {}", status);
+                            Ok(())
+                        }
+                        Err(err) => {
+                            error!("plugin exited with error: {}", err);
+                            Err(err)
                         }
                     }
+                }
+                .boxed(),
+            );
+        }
+
+        if let Some(tcp_server) = self.tcp_server {
+            vfut.push(tcp_server.run().instrument(info_span!("ss.tcp")).boxed());
+        }
+
+        if let Some(udp_server) = self.udp_server {
+            vfut.push(udp_server.run().instrument(info_span!("ss.udp")).boxed())
+        }
+
+        if let Some(manager_addr) = self.manager_addr {
+            vfut.push(
+                Self::run_manager_report(self.context.clone(), manager_addr, self.svr_cfg.addr().clone())
+                    .instrument(info_span!("maintain"))
                     .boxed(),
-                );
-            }
-
-            let tcp_fut = self
-                .run_tcp_server(connector.clone())
-                .instrument(info_span!("ss.tcp"))
-                .boxed();
-            vfut.push(tcp_fut);
-        }
-
-        if self.svr_cfg.if_ss(|ss_cfg| ss_cfg.mode().enable_udp()).unwrap_or(false) {
-            match &self.svr_cfg.protocol() {
-                ServerProtocol::SS(cfg) => {
-                    let udp_fut = self.run_udp_server(cfg).instrument(info_span!("ss.udp")).boxed();
-                    vfut.push(udp_fut);
-                }
-                #[cfg(feature = "trojan")]
-                ServerProtocol::Trojan(_cfg) => {}
-                #[cfg(feature = "vless")]
-                ServerProtocol::Vless(_cfg) => {}
-                #[cfg(feature = "tuic")]
-                ServerProtocol::Tuic(_cfg) => {}
-                #[cfg(feature = "wireguard")]
-                ServerProtocol::WG(_cfg) => {}
-            }
-        }
-
-        // 其他协议处理
-        if self.svr_cfg.if_not_ss() {
-            let tcp_fut = self.run_tcp_server(connector.clone()).boxed();
-            vfut.push(tcp_fut);
-
-            #[cfg(feature = "tuic")]
-            if let ServerProtocol::Tuic(tuic_cfg) = self.svr_cfg.protocol() {
-                if let shadowsocks::config::TuicConfig::Server((_, run_noop_tcp)) = tuic_cfg {
-                    if *run_noop_tcp {
-                        vfut.push(
-                            self.tuic_run_shadow_tcp()
-                                .instrument(info_span!("tuic.shadow").or_current())
-                                .boxed(),
-                        );
-                    }
-                }
-            }
-        }
-
-        if self.manager_addr.is_some() {
-            let manager_fut = self
-                .run_manager_report()
-                .instrument(
-                    info_span!("reporter", remote = self.manager_addr.as_ref().unwrap().to_string()).or_current(),
-                )
-                .boxed();
-            vfut.push(manager_fut);
+            );
         }
 
         // 上报速率测算
         #[cfg(feature = "statistics")]
-        vfut.push(self.run_speed_reporter().boxed());
+        vfut.push(
+            Self::run_speed_reporter(self.context.clone(), &self.svr_cfg)
+                .instrument(info_span!("speed_reporter"))
+                .boxed(),
+        );
 
         loop {
             let (res, _, vfut_left) = futures::future::select_all(vfut).await;
@@ -297,26 +339,8 @@ impl Server {
         }
     }
 
-    async fn run_tcp_server(&self, connector: Arc<TcpConnector>) -> io::Result<()> {
-        let server = TcpServer::new(self.context.clone(), connector, self.accept_opts.clone());
-        server.run(&self.svr_cfg).in_current_span().await
-    }
-
-    async fn run_udp_server(&self, cfg: &ShadowsocksConfig) -> io::Result<()> {
-        let mut server = UdpServer::new(
-            self.context.clone(),
-            cfg.method(),
-            self.udp_expiry_duration,
-            self.udp_capacity,
-            self.accept_opts.clone(),
-        );
-        server.set_worker_count(self.worker_count);
-
-        server.run(&self.svr_cfg, cfg).await
-    }
-
     #[cfg(feature = "statistics")]
-    async fn run_speed_reporter(&self) -> io::Result<()> {
+    async fn run_speed_reporter(context: Arc<ServiceContext>, svr_cfg: &ServerConfig) -> io::Result<()> {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         const SPEED_DURATION: usize = 30;
@@ -332,8 +356,8 @@ impl Server {
         let mut pre_udp_rx: u64 = 0;
 
         let bu_context = shadowsocks::statistics::BuContext::new(
-            shadowsocks::statistics::ProtocolInfo::from(self.svr_cfg.protocol()),
-            self.svr_cfg.acceptor_transport().map(|t| t.tpe()),
+            shadowsocks::statistics::ProtocolInfo::from(svr_cfg.protocol()),
+            svr_cfg.acceptor_transport().map(|t| t.tpe()),
         );
 
         loop {
@@ -351,10 +375,10 @@ impl Server {
                 pre_slot = slot;
             }
 
-            let tcp_tx = self.context.flow_stat_tcp_ref().tx();
-            let tcp_rx = self.context.flow_stat_tcp_ref().rx();
-            let udp_tx = self.context.flow_stat_udp_ref().tx();
-            let udp_rx = self.context.flow_stat_udp_ref().rx();
+            let tcp_tx = context.flow_stat_tcp_ref().tx();
+            let tcp_rx = context.flow_stat_tcp_ref().rx();
+            let udp_tx = context.flow_stat_udp_ref().tx();
+            let udp_rx = context.flow_stat_udp_ref().rx();
 
             tcp_tx_slots[slot] += tcp_tx - pre_tcp_tx;
             tcp_rx_slots[slot] += tcp_rx - pre_tcp_rx;
@@ -398,27 +422,24 @@ impl Server {
         }
     }
 
-    async fn run_manager_report(&self) -> io::Result<()> {
-        let manager_addr = self.manager_addr.as_ref().unwrap();
-        let cancel_waiter = self.context.cancel_waiter();
+    async fn run_manager_report(
+        context: Arc<ServiceContext>,
+        manager_addr: ManagerAddr,
+        svr_addr: ServerAddr,
+    ) -> io::Result<()> {
+        let cancel_waiter = context.cancel_waiter();
 
         loop {
-            match ManagerClient::connect(
-                self.context.context_ref(),
-                manager_addr,
-                self.context.connect_opts_ref(),
-            )
-            .await
-            {
+            match ManagerClient::connect(context.context_ref(), &manager_addr, context.connect_opts_ref()).await {
                 Err(err) => error!(error = ?err, "connect failed"),
                 Ok(mut client) => {
                     use super::manager::{ServerStat, StatRequest};
 
-                    let flow_tcp = self.flow_stat_tcp_ref();
-                    let flow_udp = self.flow_stat_udp_ref();
-                    let connection = self.connection_stat_ref();
+                    let flow_tcp = context.flow_stat_tcp_ref();
+                    let flow_udp = context.flow_stat_udp_ref();
+                    let connection = context.connection_stat_ref();
 
-                    let addr = match self.svr_cfg.addr() {
+                    let addr = match svr_addr {
                         ServerAddr::SocketAddr(ref addr) => match addr {
                             SocketAddr::V4(ref addr) => {
                                 if addr.ip() == &Ipv4Addr::UNSPECIFIED {
@@ -468,11 +489,11 @@ impl Server {
         use bytes::BytesMut;
         use shadowsocks::transport::{direct::TcpAcceptor, Acceptor};
 
-        info!("tuic shadow server listening on {}", self.svr_cfg.external_addr());
+        info!("tuic shadow server listening on {}", self.svr_cfg.tcp_external_addr());
 
         let mut listener = TcpAcceptor::bind_server_with_opts(
             self.context.context().as_ref(),
-            self.svr_cfg.external_addr(),
+            self.svr_cfg.tcp_external_addr(),
             self.accept_opts.clone(),
         )
         .await?;

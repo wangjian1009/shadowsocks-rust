@@ -36,7 +36,9 @@ const FALSE: BOOL = 0;
 use crate::net::{
     is_dual_stack_addr,
     sys::{set_common_sockopt_for_connect, socket_bind_dual_stack},
-    AddrFamily, ConnectOpts,
+    AcceptOpts,
+    AddrFamily,
+    ConnectOpts,
 };
 
 /// A `TcpStream` that supports TFO (TCP Fast Open)
@@ -55,7 +57,7 @@ impl TcpStream {
 
         // Binds to a specific network interface (device)
         if let Some(ref iface) = opts.bind_interface {
-            set_ip_unicast_if(&socket, addr, iface)?;
+            set_ip_unicast_if(&socket, &addr, iface)?;
         }
 
         set_common_sockopt_for_connect(addr, &socket, opts)?;
@@ -175,7 +177,15 @@ pub fn set_tcp_fastopen<S: AsRawSocket>(socket: &S) -> io::Result<()> {
     Ok(())
 }
 
-fn set_ip_unicast_if<S: AsRawSocket>(socket: &S, addr: SocketAddr, iface: &str) -> io::Result<()> {
+/// Create a TCP socket for listening
+pub async fn create_inbound_tcp_socket(bind_addr: &SocketAddr, _accept_opts: &AcceptOpts) -> io::Result<TcpSocket> {
+    match bind_addr {
+        SocketAddr::V4(..) => TcpSocket::new_v4(),
+        SocketAddr::V6(..) => TcpSocket::new_v6(),
+    }
+}
+
+fn set_ip_unicast_if<S: AsRawSocket>(socket: &S, addr: &SocketAddr, iface: &str) -> io::Result<()> {
     let handle = socket.as_raw_socket() as SOCKET;
 
     unsafe {
@@ -340,10 +350,17 @@ pub async fn create_outbound_udp_socket(af: AddrFamily, opts: &ConnectOpts) -> i
         (AddrFamily::Ipv6, ..) => SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 0),
     };
 
+    bind_outbound_udp_socket(&bind_addr, opts).await
+}
+
+/// Create a `UdpSocket` binded to `bind_addr`
+pub async fn bind_outbound_udp_socket(bind_addr: &SocketAddr, opts: &ConnectOpts) -> io::Result<UdpSocket> {
+    let af = AddrFamily::from(bind_addr);
+
     let socket = if af != AddrFamily::Ipv6 {
         UdpSocket::bind(bind_addr).await?
     } else {
-        let socket = Socket::new(Domain::for_address(bind_addr), Type::DGRAM, Some(Protocol::UDP))?;
+        let socket = Socket::new(Domain::for_address(*bind_addr), Type::DGRAM, Some(Protocol::UDP))?;
         socket_bind_dual_stack(&socket, &bind_addr, false)?;
 
         // UdpSocket::from_std requires socket to be non-blocked
@@ -363,32 +380,50 @@ pub async fn create_outbound_udp_socket(af: AddrFamily, opts: &ConnectOpts) -> i
     Ok(socket)
 }
 
-pub fn set_common_sockopt_after_connect<S: AsRawSocket>(stream: &S, opts: &ConnectOpts) -> io::Result<()> {
+#[inline(always)]
+fn socket_call_warp<S: AsRawSocket, F: FnOnce(&Socket) -> io::Result<()>>(stream: &S, f: F) -> io::Result<()> {
     let socket = unsafe { Socket::from_raw_socket(stream.as_raw_socket()) };
-
-    macro_rules! try_sockopt {
-        ($socket:ident . $func:ident ($($arg:expr),*)) => {
-            match $socket . $func ($($arg),*) {
-                Ok(e) => e,
-                Err(err) => {
-                    let _ = socket.into_raw_socket();
-                    return Err(err);
-                }
-            }
-        };
-    }
-
-    if opts.tcp.nodelay {
-        try_sockopt!(socket.set_nodelay(true));
-    }
-
-    if let Some(keepalive_duration) = opts.tcp.keepalive {
-        let keepalive = TcpKeepalive::new()
-            .with_time(keepalive_duration)
-            .with_interval(keepalive_duration);
-        try_sockopt!(socket.set_tcp_keepalive(&keepalive));
-    }
-
+    let result = f(&socket);
     let _ = socket.into_raw_socket();
+    result
+}
+
+pub fn set_common_sockopt_after_connect<S: AsRawSocket>(stream: &S, opts: &ConnectOpts) -> io::Result<()> {
+    socket_call_warp(stream, |socket| set_common_sockopt_after_connect_impl(socket, opts))
+}
+
+fn set_common_sockopt_after_connect_impl(socket: &Socket, opts: &ConnectOpts) -> io::Result<()> {
+    if opts.tcp.nodelay {
+        socket.set_nodelay(true)?;
+    }
+
+    if let Some(intv) = opts.tcp.keepalive {
+        let keepalive = TcpKeepalive::new().with_time(intv).with_interval(intv);
+        socket.set_tcp_keepalive(&keepalive)?;
+    }
+
+    Ok(())
+}
+
+pub fn set_common_sockopt_after_accept<S: AsRawSocket>(stream: &S, opts: &AcceptOpts) -> io::Result<()> {
+    socket_call_warp(stream, |socket| set_common_sockopt_after_accept_impl(socket, opts))
+}
+
+fn set_common_sockopt_after_accept_impl(socket: &Socket, opts: &AcceptOpts) -> io::Result<()> {
+    if let Some(buf_size) = opts.tcp.send_buffer_size {
+        socket.set_send_buffer_size(buf_size as usize)?;
+    }
+
+    if let Some(buf_size) = opts.tcp.recv_buffer_size {
+        socket.set_recv_buffer_size(buf_size as usize)?;
+    }
+
+    socket.set_nodelay(opts.tcp.nodelay)?;
+
+    if let Some(intv) = opts.tcp.keepalive {
+        let keepalive = TcpKeepalive::new().with_time(intv).with_interval(intv);
+        socket.set_tcp_keepalive(&keepalive)?;
+    }
+
     Ok(())
 }

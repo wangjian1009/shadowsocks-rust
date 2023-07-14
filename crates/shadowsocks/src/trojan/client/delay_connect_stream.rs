@@ -68,7 +68,8 @@ impl<S: StreamConnection> DelayConnectStream<S> {
         C: Connector,
         F: FnOnce(C::TS) -> S,
     {
-        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.external_addr(), opts)).await {
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.tcp_external_addr(), opts)).await
+        {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
                 error!(error = ?e, "connect error");

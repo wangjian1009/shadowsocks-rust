@@ -143,6 +143,8 @@ struct SSConfig {
     plugin_opts: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     plugin_args: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin_mode: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     network: Option<String>,
@@ -169,6 +171,7 @@ struct SSConfig {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     no_delay: Option<bool>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     keep_alive: Option<u64>,
     #[cfg(feature = "rate-limit")]
@@ -190,6 +193,9 @@ struct SSConfig {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     fast_open: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mptcp: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -330,6 +336,8 @@ struct SSServerExtConfig {
     plugin_opts: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     plugin_args: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin_mode: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout: Option<u64>,
@@ -1132,6 +1140,8 @@ pub struct Config {
     ///
     /// If this is not set, sockets will be set with a default timeout
     pub keep_alive: Option<Duration>,
+    /// Multipath-TCP
+    pub mptcp: bool,
 
     /// Speed limit
     #[cfg(feature = "rate-limit")]
@@ -1294,6 +1304,7 @@ impl Config {
             no_delay: false,
             fast_open: false,
             keep_alive: None,
+            mptcp: false,
 
             #[cfg(feature = "rate-limit")]
             rate_limit: None,
@@ -1739,6 +1750,20 @@ impl Config {
                             plugin: p.clone(),
                             plugin_opts: config.plugin_opts.clone(),
                             plugin_args: config.plugin_args.clone().unwrap_or_default(),
+                            plugin_mode: match config.plugin_mode {
+                                None => Mode::TcpOnly,
+                                Some(ref mode) => match mode.parse::<Mode>() {
+                                    Ok(m) => m,
+                                    Err(..) => {
+                                        let e = Error::new(
+                                            ErrorKind::Malformed,
+                                            "malformed `plugin_mode`, must be one of `tcp_only`, `udp_only` and `tcp_and_udp`",
+                                            None,
+                                        );
+                                        return Err(e);
+                                    }
+                                },
+                            },
                         };
                         nsvr.must_be_ss_mut(|cfg| cfg.set_plugin(plugin));
                     }
@@ -1866,6 +1891,20 @@ impl Config {
                             plugin: p,
                             plugin_opts: svr.plugin_opts,
                             plugin_args: svr.plugin_args.unwrap_or_default(),
+                            plugin_mode: match svr.plugin_mode {
+                                None => Mode::TcpOnly,
+                                Some(ref mode) => match mode.parse::<Mode>() {
+                                    Ok(m) => m,
+                                    Err(..) => {
+                                        let e = Error::new(
+                                            ErrorKind::Malformed,
+                                            "malformed `plugin_mode`, must be one of `tcp_only`, `udp_only` and `tcp_and_udp`",
+                                            None,
+                                        );
+                                        return Err(e);
+                                    }
+                                },
+                            },
                         };
                         nsvr.must_be_ss_mut(|c| c.set_plugin(plugin));
                     }
@@ -1980,6 +2019,20 @@ impl Config {
                         plugin: p,
                         plugin_opts: config.plugin_opts,
                         plugin_args: config.plugin_args.unwrap_or_default(),
+                        plugin_mode: match config.plugin_mode {
+                            None => Mode::TcpOnly,
+                            Some(ref mode) => match mode.parse::<Mode>() {
+                                Ok(m) => m,
+                                Err(..) => {
+                                    let e = Error::new(
+                                        ErrorKind::Malformed,
+                                        "malformed `plugin_mode`, must be one of `tcp_only`, `udp_only` and `tcp_and_udp`",
+                                        None,
+                                    );
+                                    return Err(e);
+                                }
+                            },
+                        },
                     });
                 }
             }
@@ -2010,6 +2063,11 @@ impl Config {
         // TCP Keep-Alive
         if let Some(d) = config.keep_alive {
             nconfig.keep_alive = Some(Duration::from_secs(d));
+        }
+
+        // Multipath-TCP
+        if let Some(b) = config.mptcp {
+            nconfig.mptcp = b;
         }
 
         // Speed limit
@@ -2210,26 +2268,12 @@ impl Config {
             };
 
             if protocol.enable_udp() {
-                c.add_name_server(NameServerConfig {
-                    socket_addr,
-                    protocol: Protocol::Udp,
-                    tls_dns_name: None,
-                    trust_nx_responses: false,
-                    #[cfg(any(feature = "dns-over-tls", feature = "dns-over-https"))]
-                    tls_config: None,
-                    bind_addr: None,
-                });
+                let ns_config = NameServerConfig::new(socket_addr, Protocol::Udp);
+                c.add_name_server(ns_config);
             }
             if protocol.enable_tcp() {
-                c.add_name_server(NameServerConfig {
-                    socket_addr,
-                    protocol: Protocol::Tcp,
-                    tls_dns_name: None,
-                    trust_nx_responses: false,
-                    #[cfg(any(feature = "dns-over-tls", feature = "dns-over-https"))]
-                    tls_config: None,
-                    bind_addr: None,
-                });
+                let ns_config = NameServerConfig::new(socket_addr, Protocol::Tcp);
+                c.add_name_server(ns_config);
             }
         }
 
@@ -2625,6 +2669,15 @@ impl fmt::Display for Config {
                         }
                     });
                 });
+                jconf.plugin_mode = svr
+                    .if_ss(|c| match c.plugin() {
+                        None => None,
+                        Some(p) => match p.plugin_mode {
+                            Mode::TcpOnly => None,
+                            _ => Some(p.plugin_mode.to_string()),
+                        },
+                    })
+                    .unwrap_or(None);
                 jconf.timeout = Some(svr.timeout().as_secs());
                 jconf.mode = Some(svr.if_ss(|c| c.mode()).unwrap_or(Mode::TcpAndUdp).to_string());
 
@@ -2686,6 +2739,15 @@ impl fmt::Display for Config {
                                         Some(p.plugin_args.clone())
                                     }
                                 })
+                            })
+                            .unwrap_or(None),
+                        plugin_mode: svr
+                            .if_ss(|c| match c.plugin() {
+                                None => None,
+                                Some(p) => match p.plugin_mode {
+                                    Mode::TcpOnly => None,
+                                    _ => Some(p.plugin_mode.to_string()),
+                                },
                             })
                             .unwrap_or(None),
                         timeout: Some(svr.timeout().as_secs()),
@@ -2766,6 +2828,10 @@ impl fmt::Display for Config {
         #[cfg(feature = "rate-limit")]
         if let Some(d) = self.rate_limit.as_ref() {
             jconf.rate_limit = Some(d.clone());
+        }
+
+        if self.mptcp {
+            jconf.mptcp = Some(self.mptcp);
         }
 
         #[cfg(feature = "sniffer-bittorrent")]
