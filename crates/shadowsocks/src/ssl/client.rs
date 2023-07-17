@@ -17,7 +17,7 @@ pub fn load_certificates(files: &Vec<String>) -> io::Result<RootCertStore> {
             if let Item::X509Certificate(cert) = item {
                 certs
                     .add(&Certificate(cert))
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("load_certifications: {}", e)))?;
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("load_certifications: {e}")))?;
             }
         }
     }
@@ -26,14 +26,14 @@ pub fn load_certificates(files: &Vec<String>) -> io::Result<RootCertStore> {
         for file in files {
             certs
                 .add(&Certificate(fs::read(file)?))
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("load_certifications: {}", e)))?;
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("load_certifications: {e}")))?;
         }
     }
 
     for cert in rustls_native_certs::load_native_certs()? {
         certs
             .add(&Certificate(cert.0))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("load_certifications: native: {}", e)))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("load_certifications: native: {e}")))?;
     }
 
     Ok(certs)

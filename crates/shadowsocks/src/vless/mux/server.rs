@@ -171,7 +171,7 @@ async fn read_data(
             .read_cmd_sender()
             .send(SessionReadCmd::Read(len))
             .await
-            .map_err(|e| new_error(format!("read_data: send read cmd fail {}", e)))?;
+            .map_err(|e| new_error(format!("read_data: send read cmd fail {e}")))?;
         let _ = read_done_receiver.recv().await;
     }
 

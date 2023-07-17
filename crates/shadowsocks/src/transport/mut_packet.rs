@@ -93,7 +93,7 @@ impl PacketWrite for MutPacketWriter {
             .await
         {
             Ok(()) => Ok(()),
-            Err(err) => Err(io::Error::new(io::ErrorKind::Other, format!("{}", err))),
+            Err(err) => Err(io::Error::new(io::ErrorKind::Other, format!("{err:?}"))),
         }
     }
 }

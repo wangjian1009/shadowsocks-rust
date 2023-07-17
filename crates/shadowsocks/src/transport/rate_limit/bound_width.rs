@@ -84,7 +84,7 @@ impl Serialize for BoundWidth {
     where
         S: Serializer,
     {
-        serializer.serialize_str(format!("{}", self).as_str())
+        serializer.serialize_str(format!("{self}").as_str())
     }
 }
 
@@ -103,7 +103,7 @@ impl<'de> Visitor<'de> for BoundWidthVisitor {
     {
         match BoundWidth::from_str(value) {
             Ok(r) => Ok(r),
-            Err(err) => Err(E::custom(format!("{}", err))),
+            Err(err) => Err(E::custom(format!("{err}"))),
         }
     }
 

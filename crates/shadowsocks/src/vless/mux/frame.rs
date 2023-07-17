@@ -155,7 +155,7 @@ where
     let meta_len = stream.read_u16().await? as usize;
 
     if meta_len > 512 {
-        return Err(new_error(format!("mux: ecode_frame: invalid metalen {}", meta_len)));
+        return Err(new_error(format!("mux: ecode_frame: invalid metalen {meta_len}")));
     }
 
     let session_id = stream.read_u16().await?;
@@ -167,8 +167,7 @@ where
         0x04 => SessionStatus::KeepAlive,
         _ => {
             return Err(new_error(format!(
-                "mux: ecode_frame: invalid session_status {}",
-                session_status
+                "mux: ecode_frame: invalid session_status {session_status}"
             )));
         }
     };
@@ -182,7 +181,7 @@ where
             0x01 => TargetNetwork::TCP,
             0x02 => TargetNetwork::UDP,
             _ => {
-                return Err(new_error(format!("mux: ecode_frame: invalid network {}", network)));
+                return Err(new_error(format!("mux: ecode_frame: invalid network {network}")));
             }
         };
 

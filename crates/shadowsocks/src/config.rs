@@ -903,7 +903,7 @@ impl ServerConfig {
         };
 
         let port = parsed.port().unwrap_or(dft_port);
-        let addr = format!("{}:{}", host, port);
+        let addr = format!("{host}:{port}");
 
         match addr.parse::<ServerAddr>() {
             Ok(a) => Ok(a),

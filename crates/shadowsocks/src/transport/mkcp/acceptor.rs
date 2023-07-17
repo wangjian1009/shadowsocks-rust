@@ -144,7 +144,7 @@ impl MkcpAcceptor {
         src: SocketAddr,
     ) -> io::Result<()> {
         if segments.is_empty() {
-            return Err(new_error(format!("discarding invalid payload from {}", src)));
+            return Err(new_error(format!("discarding invalid payload from {src}")));
         }
 
         let conv = segments[0].conv;

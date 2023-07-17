@@ -8,7 +8,7 @@ impl ServerConfig {
     pub(crate) fn from_url_wg(parsed: &Url) -> Result<ServerConfig, UrlParseError> {
         // wg://144.126.139.41:51888?peer-key=/fng93Xwujo0ESFLdj8sSbvP3qiFLi/wBygnxJLNUBY=&itf-mtu=1420&itf-dns=8.8.8.8&peer-persistent-keepalive=20&itf-key=yDgDh25EIU1F6JfJDeiUq2M/pZYG/v8tXNYBrKVPtFs=&itf-addr=10.10.199.22/32
 
-        println!("xxxxx: url: {}", parsed);
+        println!("xxxxx: url: {parsed}");
         let mut query = Vec::new();
         if let Some(q) = parsed.query() {
             for item in q.split('&') {
@@ -19,7 +19,7 @@ impl ServerConfig {
                 let mut split = item.splitn(2, '=');
                 match (split.next(), split.next()) {
                     (Some(key), Some(value)) => {
-                        println!("url to config: wg: item {}={}", key, value);
+                        println!("url to config: wg: item {key}={value}");
                         query.push((key.to_string(), value.to_string()));
                     }
                     _ => {
@@ -100,15 +100,16 @@ impl ServerConfig {
             }
         };
 
-        let mut allowed_ips = Vec::new();
-        allowed_ips.push(IPAddressRange {
-            address: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
-            network_prefix_length: 0,
-        });
-        allowed_ips.push(IPAddressRange {
-            address: IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)),
-            network_prefix_length: 0,
-        });
+        let allowed_ips = vec![
+            IPAddressRange {
+                address: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+                network_prefix_length: 0,
+            },
+            IPAddressRange {
+                address: IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)),
+                network_prefix_length: 0,
+            },
+        ];
 
         let port = parsed.port().unwrap_or(51820);
         let endpoint = if let Some(host) = parsed.host() {

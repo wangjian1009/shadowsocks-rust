@@ -40,7 +40,7 @@ impl FromStr for CongestionController {
         } else {
             Err(io::Error::new(
                 io::ErrorKind::Other,
-                format!("not support CongestionController {}", s),
+                format!("not support CongestionController {s}"),
             ))
         }
     }

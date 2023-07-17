@@ -183,7 +183,7 @@ impl DeviceHandle {
     pub fn clean(&mut self) {
         for path in &self.device.read().cleanup_paths {
             // attempt to remove any file we created in the work dir
-            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(path);
         }
     }
 
@@ -666,7 +666,7 @@ impl Device {
                     let mut flush = false;
                     match peer.tunnel.decapsulate(Some(peer_addr), src, &mut t.dst_buf[..]) {
                         TunnResult::Done => {}
-                        TunnResult::Err(e) => eprintln!("Decapsulate error {:?}", e),
+                        TunnResult::Err(e) => eprintln!("Decapsulate error {e:?}"),
                         TunnResult::WriteToNetwork(packet) => {
                             flush = true;
                             udp.write(packet);
@@ -727,11 +727,11 @@ impl Device {
                             if ek == io::ErrorKind::Interrupted || ek == io::ErrorKind::WouldBlock {
                                 break;
                             }
-                            eprintln!("Fatal read error on tun interface: errno {:?}", errno);
+                            eprintln!("Fatal read error on tun interface: errno {errno:?}");
                             return Action::Exit;
                         }
                         Err(e) => {
-                            eprintln!("Unexpected error on tun interface: {:?}", e);
+                            eprintln!("Unexpected error on tun interface: {e:?}");
                             return Action::Exit;
                         }
                     };

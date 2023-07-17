@@ -131,8 +131,7 @@ impl MkcpPacketWriter {
             let nonce_size = security.nonce_size();
             if nonce_size > b.len() {
                 return Err(new_error(format!(
-                    "write packet: not enough buf for nonce, nonce-size={}",
-                    nonce_size,
+                    "write packet: not enough buf for nonce, nonce-size={nonce_size}"
                 )));
             }
 

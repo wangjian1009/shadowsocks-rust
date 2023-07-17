@@ -64,7 +64,7 @@ impl Device {
                         _ => EIO,
                     };
                     // The protocol requires to return an error code as the response, or zero on success
-                    writeln!(writer, "errno={}\n", status).ok();
+                    writeln!(writer, "errno={status}\n").ok();
                 }
                 Action::Continue // Indicates the worker thread should continue as normal
             }),
@@ -94,7 +94,7 @@ impl Device {
                         _ => EIO,
                     };
                     // The protocol requires to return an error code as the response, or zero on success
-                    writeln!(writer, "errno={}\n", status).ok();
+                    writeln!(writer, "errno={status}\n").ok();
                 } else {
                     // The remote side is likely closed; we should trigger an exit.
                     d.trigger_exit();
@@ -160,7 +160,7 @@ fn api_get(writer: &mut BufWriter<&UnixStream>, d: &Device) -> i32 {
     }
 
     if let Some(fwmark) = d.fwmark {
-        writeln!(writer, "fwmark={}", fwmark);
+        writeln!(writer, "fwmark={fwmark}");
     }
 
     for (k, p) in d.peers.iter() {
@@ -171,15 +171,15 @@ fn api_get(writer: &mut BufWriter<&UnixStream>, d: &Device) -> i32 {
         }
 
         if let Some(keepalive) = p.persistent_keepalive() {
-            writeln!(writer, "persistent_keepalive_interval={}", keepalive);
+            writeln!(writer, "persistent_keepalive_interval={keepalive}");
         }
 
         if let Some(ref addr) = p.endpoint().addr {
-            writeln!(writer, "endpoint={}", addr);
+            writeln!(writer, "endpoint={addr}");
         }
 
         for (ip, cidr) in p.allowed_ips() {
-            writeln!(writer, "allowed_ip={}/{}", ip, cidr);
+            writeln!(writer, "allowed_ip={ip}/{cidr}");
         }
 
         if let Some(time) = p.time_since_last_handshake() {
@@ -189,8 +189,8 @@ fn api_get(writer: &mut BufWriter<&UnixStream>, d: &Device) -> i32 {
 
         let (_, tx_bytes, rx_bytes, ..) = p.tunnel.stats();
 
-        writeln!(writer, "rx_bytes={}", rx_bytes);
-        writeln!(writer, "tx_bytes={}", tx_bytes);
+        writeln!(writer, "rx_bytes={rx_bytes}");
+        writeln!(writer, "tx_bytes={tx_bytes}");
     }
     0
 }

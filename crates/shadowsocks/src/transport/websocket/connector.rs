@@ -42,7 +42,7 @@ impl<'a, T: Connector> WebSocketConnector<T> {
             .authority(config.host.clone())
             .path_and_query(config.path.clone())
             .build()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("WebSocket build uril fail: {:?}", e)))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("WebSocket build uril fail: {e:?}")))?;
         Ok(Self { inner, uri })
     }
 }

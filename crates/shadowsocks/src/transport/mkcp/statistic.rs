@@ -52,8 +52,7 @@ impl Display for StatisticStat {
 
         write!(
             f,
-            "tx={}(lost={} {}), rx={}(ignore={} {})",
-            tx_total, tx_retry, tx_rate, rx_total, rx_ignore, rx_rate,
+            "tx={tx_total}(lost={tx_retry} {tx_rate}), rx={rx_total}(ignore={rx_ignore} {rx_rate})"
         )
     }
 }

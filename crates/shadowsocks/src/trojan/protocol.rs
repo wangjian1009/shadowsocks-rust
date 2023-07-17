@@ -19,7 +19,7 @@ pub fn password_to_hash(s: &str) -> String {
     let h = hasher.finalize();
     let mut s = String::with_capacity(HASH_STR_LEN);
     for i in h {
-        write!(s, "{:02x}", i).unwrap();
+        write!(s, "{i:02x}").unwrap();
     }
     s
 }

@@ -81,7 +81,7 @@ impl<T: StreamConnection> AsyncRead for BinaryWsStream<T> {
                 _ => {
                     return Poll::Ready(Err(io::Error::new(
                         io::ErrorKind::Other,
-                        format!("invalid message type {:?}", message),
+                        format!("invalid message type {message:?}"),
                     )))
                 }
             }
@@ -92,11 +92,11 @@ impl<T: StreamConnection> AsyncRead for BinaryWsStream<T> {
 impl<T: StreamConnection> AsyncWrite for BinaryWsStream<T> {
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
         ready!(Pin::new(&mut self.inner).poll_ready(cx))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{:?}", e)))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e:?}")))?;
         let message = Message::Binary(buf.into());
         Pin::new(&mut self.inner)
             .start_send(message)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{:?}", e)))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e:?}")))?;
         Poll::Ready(Ok(buf.len()))
     }
 
@@ -104,7 +104,7 @@ impl<T: StreamConnection> AsyncWrite for BinaryWsStream<T> {
         let inner = Pin::new(&mut self.inner);
         inner
             .poll_flush(cx)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{:?}", e)))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e:?}")))
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {

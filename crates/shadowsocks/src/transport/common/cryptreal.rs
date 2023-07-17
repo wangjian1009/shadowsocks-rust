@@ -43,7 +43,7 @@ impl AEAD for AEADAESGCMBasedOnSeed {
         let output = self
             .block
             .encrypt(nonce, plain_in)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e}")))?;
         if output.len() > cipher_out.len() {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -87,7 +87,7 @@ impl AEAD for AEADAESGCMBasedOnSeed {
         let output = self
             .block
             .decrypt(nonce, cipher_in)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e}")))?;
         if output.len() > plain_out.len() {
             return Err(io::Error::new(
                 io::ErrorKind::Other,

@@ -25,7 +25,7 @@ impl UUID {
     // ParseBytes converts a UUID in byte form to object.
     pub fn parse_bytes(b: &[u8]) -> io::Result<Self> {
         if b.len() != 16 {
-            return Err(new_error(format!("invalid UUID: {:?}", b)));
+            return Err(new_error(format!("invalid UUID: {b:?}")));
         }
 
         let mut data = [0u8; 16];
@@ -51,7 +51,7 @@ impl FromStr for UUID {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() < 32 {
-            return Err(new_error(format!("invalid UUID: {}", s)));
+            return Err(new_error(format!("invalid UUID: {s}")));
         }
 
         let mut uuid = [0u8; 16];

@@ -35,7 +35,7 @@ impl FromStr for HeaderConfig {
             "wireguard" => Ok(HeaderConfig::Wireguard),
             _ => Err(io::Error::new(
                 io::ErrorKind::Other,
-                format!("not support header config {}", s),
+                format!("not support header config {s}"),
             )),
         }
     }

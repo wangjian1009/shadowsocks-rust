@@ -22,7 +22,7 @@ impl Validator {
             if let Some(..) = self.email.insert(email.to_lowercase(), user.clone()) {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
-                    format!("User {} already exists.", email),
+                    format!("User {email} already exists."),
                 ));
             }
         }
@@ -36,7 +36,7 @@ impl Validator {
     pub fn del(&mut self, e: &str) -> io::Result<Arc<User>> {
         let le = e.to_lowercase();
         match self.email.remove(&le) {
-            None => Err(io::Error::new(io::ErrorKind::Other, format!("User {} not found.", e))),
+            None => Err(io::Error::new(io::ErrorKind::Other, format!("User {e} not found."))),
             Some(user) => {
                 self.users.remove(&user.account.id);
                 Ok(user)

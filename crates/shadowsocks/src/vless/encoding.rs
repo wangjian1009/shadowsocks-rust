@@ -89,7 +89,7 @@ where
                 0x02 => protocol::RequestCommand::UDP,
                 0x03 => protocol::RequestCommand::Mux,
                 _ => {
-                    return Err(new_error(format!("decode request header: invalid cmd {}", command)));
+                    return Err(new_error(format!("decode request header: invalid cmd {command}")));
                 }
             };
 
@@ -108,8 +108,7 @@ where
             Ok((request, addons, false))
         }
         _ => Err(new_error(format!(
-            "decode request header: invalid request version {}",
-            version
+            "decode request header: invalid request version {version}"
         ))),
     }
 }
@@ -146,8 +145,7 @@ where
             Ok(addons)
         }
         _ => Err(new_error(format!(
-            "decode response header: invalid request version {}",
-            version
+            "decode response header: invalid request version {version}"
         ))),
     }
 }
@@ -275,10 +273,10 @@ where
             let addr_len = stream.read_u8().await?;
             let mut addr_buf = vec![0u8; addr_len as usize];
             stream.read_exact(&mut addr_buf).await?;
-            let addr = String::from_utf8(addr_buf).map_err(|e| new_error(format!("decode address: {}", e)))?;
+            let addr = String::from_utf8(addr_buf).map_err(|e| new_error(format!("decode address: {e}")))?;
             Ok(protocol::Address::DomainNameAddress(addr, port))
         }
-        _ => Err(new_error(format!("decode address: invalid address type {}", addr_type))),
+        _ => Err(new_error(format!("decode address: invalid address type {addr_type}"))),
     }
 }
 

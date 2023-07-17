@@ -41,7 +41,7 @@ impl fmt::Display for Error {
             }
             Error::IoError(ref e) => e.fmt(f),
             Error::UnsupportedCmd(ref e) => write!(f, "cmd {} is not supported", *e),
-            ref e => write!(f, "{}", e),
+            ref e => write!(f, "{e}"),
         }
     }
 }

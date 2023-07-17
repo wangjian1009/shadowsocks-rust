@@ -321,7 +321,7 @@ impl Segment {
         } else if cmd == (Command::Ping as u8) {
             SegmentData::CmdOnlySegment(CmdOnlySegment::read_from(Command::Ping, stream).await?)
         } else {
-            return Err(new_error(format!("Segment::read_from: not support cmd {}", cmd)));
+            return Err(new_error(format!("Segment::read_from: not support cmd {cmd}")));
         };
 
         Ok(Segment { conv, option, data })

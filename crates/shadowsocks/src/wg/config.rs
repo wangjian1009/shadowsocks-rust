@@ -18,9 +18,9 @@ impl Config {
         wg_settings.push(format!("private_key={}", self.itf.private_key.hex()));
 
         if let Some(listen_port) = self.itf.listen_port {
-            wg_settings.push(format!("listen_port={}", listen_port));
+            wg_settings.push(format!("listen_port={listen_port}"));
         }
-        if self.peers.len() > 0 {
+        if !self.peers.is_empty() {
             wg_settings.push("replace_peers=true".to_string());
         }
 
@@ -31,19 +31,19 @@ impl Config {
             }
 
             if let Some(endpoint) = peer.endpoint {
-                wg_settings.push(format!("endpoint={}", endpoint));
+                wg_settings.push(format!("endpoint={endpoint}"));
             }
 
             if let Some(persistent_keep_alive) = peer.persistent_keep_alive {
-                wg_settings.push(format!("persistent_keepalive_interval={}", persistent_keep_alive));
+                wg_settings.push(format!("persistent_keepalive_interval={persistent_keep_alive}"));
             }
 
-            if peer.allowed_ips.len() > 0 {
+            if !peer.allowed_ips.is_empty() {
                 wg_settings.push("replace_allowed_ips=true".to_string());
             }
 
             for allow_ip in &peer.allowed_ips {
-                wg_settings.push(format!("allowed_ip={}", allow_ip));
+                wg_settings.push(format!("allowed_ip={allow_ip}"));
             }
         }
         wg_settings.join("\n")
@@ -93,7 +93,7 @@ impl FromStr for IPAddressRange {
                     Err(err) => {
                         return Err(io::Error::new(
                             io::ErrorKind::Other,
-                            format!("address format error: {}", err),
+                            format!("address format error: {err}"),
                         ))
                     }
                 };
@@ -102,7 +102,7 @@ impl FromStr for IPAddressRange {
                     Err(err) => {
                         return Err(io::Error::new(
                             io::ErrorKind::Other,
-                            format!("network_prefix_length {} format error: {}", len, err),
+                            format!("network_prefix_length {len} format error: {err}"),
                         ))
                     }
                 };

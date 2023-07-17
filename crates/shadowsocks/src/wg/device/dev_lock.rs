@@ -26,7 +26,7 @@ impl<T> Lock<T> {
 impl<T: ?Sized> Lock<T> {
     /// Acquire a read lock
     pub fn read(&self) -> LockReadGuard<T> {
-        let &(ref lock, ref cvar) = &self.wants_write;
+        let (lock, cvar) = &self.wants_write;
         let mut wants_write = lock.lock();
         while *wants_write {
             // We have a writer and we want to wait for it to go away
@@ -57,11 +57,7 @@ impl<'a, T: ?Sized> LockReadGuard<'a, T> {
     /// `mut_func` - A closure that will run once write access is gained. It iwll be passed a mutable reference
     /// to the inner value.
     ///
-    pub fn try_writeable<U, P: FnOnce(&T), F: FnOnce(&mut T) -> U>(
-        &mut self,
-        prep_func: P,
-        mut_func: F,
-    ) -> Option<U> {
+    pub fn try_writeable<U, P: FnOnce(&T), F: FnOnce(&mut T) -> U>(&mut self, prep_func: P, mut_func: F) -> Option<U> {
         // First tell everyone that we want to write now, this will prevent any new reader from starting until we are done.
         {
             let &(ref lock, cvar) = &self.wants_write;
@@ -90,7 +86,7 @@ impl<'a, T: ?Sized> LockReadGuard<'a, T> {
         }));
 
         // Finally signal other threads
-        let &(ref lock, ref cvar) = &self.wants_write;
+        let (lock, cvar) = &self.wants_write;
         let mut wants_write = lock.lock();
         *wants_write = false;
         cvar.notify_all();
@@ -103,6 +99,6 @@ impl<'a, T: ?Sized> Deref for LockReadGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        &*self.inner
+        &self.inner
     }
 }

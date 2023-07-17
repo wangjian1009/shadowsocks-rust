@@ -847,7 +847,7 @@ impl MkcpConnection {
                 wakeup_updater!(
                     self.context,
                     UPDATER_DATA,
-                    format!("writed {} bytes", writed_size),
+                    format!("writed {writed_size} bytes"),
                     self.context.data_updater
                 );
                 update_pending = false;

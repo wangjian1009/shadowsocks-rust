@@ -87,16 +87,14 @@ pub fn parse_utun_name(name: &str) -> Result<u32, Error> {
         }
         Some(idx) => {
             // Everything past utun should represent an integer index
-            idx.parse::<u32>()
-                .map_err(|_| Error::InvalidTunnelName)
-                .map(|x| x + 1)
+            idx.parse::<u32>().map_err(|_| Error::InvalidTunnelName).map(|x| x + 1)
         }
     }
 }
 
 impl TunSocket {
     fn write(&self, src: &[u8], af: u8) -> usize {
-        let mut hdr = [0u8, 0u8, 0u8, af as u8];
+        let mut hdr = [0u8, 0u8, 0u8, af];
         let mut iov = [
             iovec {
                 iov_base: hdr.as_mut_ptr() as _,
@@ -152,14 +150,7 @@ impl TunSocket {
             sc_reserved: Default::default(),
         };
 
-        if unsafe {
-            connect(
-                fd,
-                &addr as *const sockaddr_ctl as _,
-                size_of_val(&addr) as _,
-            )
-        } < 0
-        {
+        if unsafe { connect(fd, &addr as *const sockaddr_ctl as _, size_of_val(&addr) as _) } < 0 {
             unsafe { close(fd) };
             let mut err_string = errno_str();
             err_string.push_str("(did you run with sudo?)");

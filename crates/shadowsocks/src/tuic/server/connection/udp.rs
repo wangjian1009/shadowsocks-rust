@@ -109,7 +109,7 @@ impl UdpSessionMap {
                 #[cfg(feature = "statistics")]
                 bu_context,
             )
-            .instrument(info_span!("udp-session", id = assoc_id, source = format!("{:?}", source)).or_current())
+            .instrument(info_span!("udp-session", id = assoc_id, source = format!("{source:?}")).or_current())
             .await?;
 
             send_pkt_tx = Some((assoc.packet_sender.clone(), assoc.span.clone()));

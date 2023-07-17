@@ -95,7 +95,7 @@ impl AEAD for SimpleAuthenticator {
         if clen < 6 {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
-                format!("simple authenticator: invalid auth(cipher len {} too small)", clen),
+                format!("simple authenticator: invalid auth(cipher len {clen} too small)"),
             ));
         }
 

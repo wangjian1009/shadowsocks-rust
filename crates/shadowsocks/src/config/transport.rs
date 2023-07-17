@@ -328,7 +328,7 @@ impl TransportConnectorConfig {
             "mkcp" => Ok(TransportConnectorConfig::Mkcp(build_mkcp_config(&_args)?)),
             #[cfg(feature = "transport-skcp")]
             "skcp" => Ok(TransportConnectorConfig::Skcp(build_skcp_config(&_args)?)),
-            _ => Err(format!("not support transport protocol {}", protocol)),
+            _ => Err(format!("not support transport protocol {protocol}")),
         }
     }
 
@@ -358,7 +358,7 @@ impl TransportConnectorConfig {
             path: if path.starts_with('/') {
                 path.to_owned()
             } else {
-                format!("/{}", path)
+                format!("/{path}")
             },
             host: host.unwrap_or(DEFAULT_SNI).to_owned(),
         }
@@ -388,7 +388,7 @@ impl TransportConnectorConfig {
 
         let ciphers =
             crate::ssl::get_cipher_suite(cipher_names.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))
-                .map_err(|e| format!("{:?}", e))?;
+                .map_err(|e| format!("{e:?}"))?;
 
         let mut config = TlsConnectorConfig {
             sni: host.unwrap_or(DEFAULT_SNI).to_owned(),
@@ -424,7 +424,7 @@ fn build_mkcp_config(args: &Option<Vec<(&str, &str)>>) -> Result<MkcpConfig, Str
     let mut config = MkcpConfig::default();
 
     if let Some(header) = find_arg(args, "header") {
-        let header = header.parse::<HeaderConfig>().map_err(|e| format!("{}", e))?;
+        let header = header.parse::<HeaderConfig>().map_err(|e| format!("{e:?}"))?;
         config.header_config = Some(header);
     }
 
@@ -445,12 +445,7 @@ pub fn build_skcp_config(args: &Option<Vec<(&str, &str)>>) -> Result<SkcpConfig,
             "default" => {}
             "fastest" => config.nodelay = KcpNoDelayConfig::fastest(),
             "normal" => config.nodelay = KcpNoDelayConfig::normal(),
-            _ => {
-                return Err(format!(
-                    "skcp: not support mode {}, support default|fastest|normal",
-                    mode
-                ))
-            }
+            _ => return Err(format!("skcp: not support mode {mode}, support default|fastest|normal")),
         };
     }
 
@@ -499,7 +494,7 @@ pub fn build_skcp_config(args: &Option<Vec<(&str, &str)>>) -> Result<SkcpConfig,
     }
 
     if let Some(header) = find_arg(args, "header") {
-        config.header_config = Some(header.parse().map_err(|e| format!("header: {}", e))?);
+        config.header_config = Some(header.parse().map_err(|e| format!("header: {e}"))?);
     }
 
     if let Some(security) = find_arg(args, "security") {
@@ -509,15 +504,10 @@ pub fn build_skcp_config(args: &Option<Vec<(&str, &str)>>) -> Result<SkcpConfig,
                 if let Some(seed) = find_arg(args, "seed") {
                     SecurityConfig::AESGCM { seed: seed.to_owned() }
                 } else {
-                    return Err(format!("skcp: not security {}, no seed configured", security));
+                    return Err(format!("skcp: not security {security}, no seed configured"));
                 }
             }
-            _ => {
-                return Err(format!(
-                    "skcp: not support security {}, support simple|aes-gcm",
-                    security
-                ))
-            }
+            _ => return Err(format!("skcp: not support security {security}, support simple|aes-gcm")),
         });
     }
 
@@ -629,7 +619,7 @@ impl TransportAcceptorConfig {
             "mkcp" => Ok(TransportAcceptorConfig::Mkcp(build_mkcp_config(&_args)?)),
             #[cfg(feature = "transport-skcp")]
             "skcp" => Ok(TransportAcceptorConfig::Skcp(build_skcp_config(&_args)?)),
-            _ => Err(format!("not support transport protocol {}", protocol)),
+            _ => Err(format!("not support transport protocol {protocol}")),
         }
     }
 
@@ -640,7 +630,7 @@ impl TransportAcceptorConfig {
             path: if path.starts_with('/') {
                 path.to_owned()
             } else {
-                format!("/{}", path)
+                format!("/{path}")
             },
         }
     }
@@ -667,7 +657,7 @@ impl TransportAcceptorConfig {
 
         let ciphers =
             crate::ssl::get_cipher_suite(cipher_names.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))
-                .map_err(|e| format!("{:?}", e))?;
+                .map_err(|e| format!("{e:?}"))?;
 
         let config = TlsAcceptorConfig {
             cert: find_arg(args, "cert")
@@ -756,11 +746,11 @@ impl fmt::Display for TransportAcceptorConfig {
                     skcp_config.stream,
                 )?;
                 if let Some(header) = skcp_config.header_config.as_ref() {
-                    write!(f, "&header={}", header)?;
+                    write!(f, "&header={header}")?;
                 }
                 if let Some(security) = skcp_config.security_config.as_ref() {
                     match security {
-                        SecurityConfig::AESGCM { seed } => write!(f, "&security=aes-gcm&seed={}", seed)?,
+                        SecurityConfig::AESGCM { seed } => write!(f, "&security=aes-gcm&seed={seed}")?,
                         SecurityConfig::Simple => write!(f, "&security=simple")?,
                     }
                 }
@@ -796,7 +786,7 @@ where
                     .collect()
             }),
         ),
-        None => Err(format!("format error, input={}", s)),
+        None => Err(format!("format error, input={s}")),
     }
 }
 
@@ -814,7 +804,7 @@ fn find_arg_as<T: FromStr>(args: &Option<Vec<(&str, &str)>>, key: &str) -> Resul
     match find_arg(args, key) {
         Some(v) => match v.parse::<T>() {
             Ok(v) => Ok(Some(v)),
-            Err(e) => Err(format!("{}={} format error", key, v)),
+            Err(e) => Err(format!("{key}={v} format error")),
         },
         None => Ok(None),
     }

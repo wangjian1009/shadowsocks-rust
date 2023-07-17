@@ -119,7 +119,7 @@ impl FromStr for UdpRelayMode<(), ()> {
         } else {
             Err(io::Error::new(
                 io::ErrorKind::Other,
-                format!("not support UdpRelayMode {}", s),
+                format!("not support UdpRelayMode {s}"),
             ))
         }
     }
