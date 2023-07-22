@@ -42,7 +42,7 @@ use shadowsocks::{
 
 use crate::{
     acl::AccessControl,
-    local::{context::ServiceContext, loadbalancing::PingBalancer},
+    local::{context::ServiceContext, loadbalancing::PingBalancer, run_all_done, start_stat::StartStat},
 };
 
 use super::{client_cache::DnsClientCache, config::NameServerAddr};
@@ -166,13 +166,14 @@ impl DnsTcpServer {
     }
 
     /// Start serving
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         info!(
             local_dns = ?self.local_addr,
             remote_dns = ?self.remote_addr,
             "shadowsocks dns TCP listening on {}",
             self.listener.local_addr()?,
         );
+        start_stat.notify().await;
 
         let cancel_waiter = self.context.cancel_waiter();
         loop {
@@ -323,13 +324,14 @@ impl DnsUdpServer {
     }
 
     /// Start serving
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         info!(
             local_dns = ?self.local_addr,
             remote_dns = ?self.remote_addr,
             "shadowsocks dns UDP listening on {}",
             self.listener.local_addr()?,
         );
+        start_stat.notify().await;
 
         let cancel_waiter = self.context.cancel_waiter();
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
@@ -422,21 +424,22 @@ impl Dns {
     }
 
     /// Run server
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, mut start_stat: StartStat) -> io::Result<()> {
         let mut vfut = Vec::new();
 
         if let Some(tcp_server) = self.tcp_server {
-            vfut.push(tcp_server.run().boxed());
+            vfut.push(tcp_server.run(start_stat.new_child("tcp")).boxed());
         }
 
         if let Some(udp_server) = self.udp_server {
             // NOTE: SOCKS 5 RFC requires TCP handshake for UDP ASSOCIATE command
             // But here we can start a standalone UDP SOCKS 5 relay server, for special use cases
-            vfut.push(udp_server.run().boxed());
+            vfut.push(udp_server.run(start_stat.new_child("udp")).boxed());
         }
 
-        let (res, ..) = future::select_all(vfut).await;
-        res
+        vfut.push(start_stat.wait().boxed());
+
+        run_all_done(vfut).await
     }
 }
 

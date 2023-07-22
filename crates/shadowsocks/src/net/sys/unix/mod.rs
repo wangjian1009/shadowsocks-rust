@@ -83,7 +83,7 @@ fn set_tcp_keepalive(socket: &Socket, tcp: &TcpSocketOpts) -> io::Result<()> {
                 // https://github.com/multipath-tcp/mptcp_net-next/issues/383
                 // https://github.com/multipath-tcp/mptcp_net-next/issues/353
                 if let Err(err) = socket.set_tcp_keepalive(&keepalive) {
-                    log::debug!("set TCP keep-alive with time & interval failed with error: {:?}", err);
+                    tracing::debug!("set TCP keep-alive with time & interval failed with error: {:?}", err);
 
                     // Try again without time & interval
                     let keepalive = TcpKeepalive::new();

@@ -91,7 +91,7 @@ pub extern "C" fn lib_local_run(
             crate::logging::init_with_config("sslocal", &log_config)
         };
 
-        // tracing::trace!("config = {}", str_config);
+        // tracing::trace!("config = {str_config}");
 
         let config = load_config(
             &str_config,

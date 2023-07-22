@@ -21,6 +21,7 @@ use crate::{
         loadbalancing::PingBalancer,
         net::AutoProxyClientStream,
         redir::redir_ext::{TcpListenerRedirExt, TcpStreamRedirExt},
+        start_stat::StartStat,
         utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed},
     },
     net::utils::to_ipv4_mapped,
@@ -111,7 +112,7 @@ impl RedirTcpServer {
     }
 
     /// Start serving
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         let listener = ShadowTcpListener::from_listener(self.listener, self.context.accept_opts());
 
         let actual_local_addr = listener.local_addr().expect("determine port bound to");
@@ -120,9 +121,17 @@ impl RedirTcpServer {
             "shadowsocks TCP redirect ({}) listening on {}",
             self.redir_ty, actual_local_addr
         );
+        start_stat.notify().await;
 
+        let cancel_waiter = self.context.cancel_waiter();
         loop {
-            let (socket, peer_addr) = match listener.accept().await {
+            let r = tokio::select! {
+                r = listener.accept() => { r },
+                _ = cancel_waiter.wait() => {
+                    return Ok(());
+                }
+            };
+            let (socket, peer_addr) = match r {
                 Ok(s) => s,
                 Err(err) => {
                     error!("accept failed with error: {}", err);

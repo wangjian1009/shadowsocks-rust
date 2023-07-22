@@ -144,10 +144,7 @@ impl TunnInner {
         for (i, t) in timers.session_timers.iter_mut().enumerate() {
             if time_now - *t > REJECT_AFTER_TIME {
                 if let Some(session) = self.sessions[i].take() {
-                    tracing::debug!(
-                        message = "SESSION_EXPIRED(REJECT_AFTER_TIME)",
-                        session = session.receiving_index
-                    );
+                    tracing::debug!(session = session.receiving_index, "SESSION_EXPIRED(REJECT_AFTER_TIME)");
                 }
                 *t = time_now;
             }

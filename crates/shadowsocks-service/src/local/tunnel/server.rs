@@ -2,11 +2,11 @@
 
 use std::{io, sync::Arc, time::Duration};
 
-use futures::{future, FutureExt};
+use futures::FutureExt;
 use shadowsocks::{canceler::CancelWaiter, config::Mode, context::Context, relay::socks5::Address, ServerAddr};
 use tracing::{info_span, Instrument};
 
-use crate::local::{context::ServiceContext, loadbalancing::PingBalancer};
+use crate::local::{context::ServiceContext, loadbalancing::PingBalancer, run_all_done, start_stat::StartStat};
 
 use super::{tcprelay::TunnelTcpServer, udprelay::TunnelUdpServer};
 
@@ -124,18 +124,29 @@ impl Tunnel {
     }
 
     /// Start serving
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, mut start_stat: StartStat) -> io::Result<()> {
         let mut vfut = Vec::new();
 
         if let Some(tcp_server) = self.tcp_server {
-            vfut.push(tcp_server.run().instrument(info_span!("tcp")).boxed());
+            vfut.push(
+                tcp_server
+                    .run(start_stat.new_child("tcp"))
+                    .instrument(info_span!("tcp"))
+                    .boxed(),
+            );
         }
 
         if let Some(udp_server) = self.udp_server {
-            vfut.push(udp_server.run().instrument(info_span!("udp")).boxed());
+            vfut.push(
+                udp_server
+                    .run(start_stat.new_child("udp"))
+                    .instrument(info_span!("udp"))
+                    .boxed(),
+            );
         }
 
-        let (res, ..) = future::select_all(vfut).await;
-        res
+        vfut.push(start_stat.wait().boxed());
+
+        run_all_done(vfut).await
     }
 }

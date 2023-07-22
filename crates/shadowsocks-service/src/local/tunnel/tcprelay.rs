@@ -10,6 +10,7 @@ use crate::local::{
     context::ServiceContext,
     loadbalancing::PingBalancer,
     net::AutoProxyClientStream,
+    start_stat::StartStat,
     utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed},
 };
 
@@ -54,12 +55,21 @@ impl TunnelTcpServer {
     }
 
     /// Start serving
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         info!("shadowsocks TCP tunnel listening on {}", self.listener.local_addr()?);
+        start_stat.notify().await;
 
         let forward_addr = Arc::new(self.forward_addr);
+        let cancel_waiter = self.context.cancel_waiter();
         loop {
-            let (stream, peer_addr) = match self.listener.accept().await {
+            let r = tokio::select! {
+                r = self.listener.accept() => { r }
+                _ = cancel_waiter.wait() => {
+                    return Ok(());
+                }
+            };
+
+            let (stream, peer_addr) = match r {
                 Ok(s) => s,
                 Err(err) => {
                     error!("accept failed with error: {}", err);

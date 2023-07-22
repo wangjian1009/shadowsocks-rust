@@ -2,10 +2,10 @@
 
 use std::{io, sync::Arc, time::Duration};
 
-use futures::{future, FutureExt};
+use futures::FutureExt;
 use shadowsocks::{canceler::CancelWaiter, config::Mode, context::Context, ServerAddr};
 
-use crate::local::{context::ServiceContext, loadbalancing::PingBalancer};
+use crate::local::{context::ServiceContext, loadbalancing::PingBalancer, run_all_done, StartStat};
 
 pub use self::server::{SocksTcpServer, SocksUdpServer};
 use self::socks5::Socks5UdpServer;
@@ -139,20 +139,21 @@ impl Socks {
     }
 
     /// Start serving
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, mut start_stat: StartStat) -> io::Result<()> {
         let mut vfut = Vec::new();
 
         if let Some(tcp_server) = self.tcp_server {
-            vfut.push(tcp_server.run().boxed());
+            vfut.push(tcp_server.run(start_stat.new_child("tcp")).boxed());
         }
 
         if let Some(udp_server) = self.udp_server {
             // NOTE: SOCKS 5 RFC requires TCP handshake for UDP ASSOCIATE command
             // But here we can start a standalone UDP SOCKS 5 relay server, for special use cases
-            vfut.push(udp_server.run().boxed());
+            vfut.push(udp_server.run(start_stat.new_child("udp")).boxed());
         }
 
-        let (res, ..) = future::select_all(vfut).await;
-        res
+        vfut.push(start_stat.wait().boxed());
+
+        run_all_done(vfut).await
     }
 }

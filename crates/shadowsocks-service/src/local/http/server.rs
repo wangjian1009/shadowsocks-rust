@@ -16,7 +16,8 @@ use shadowsocks::{canceler::CancelWaiter, config::ServerAddr, context::Context, 
 use tracing::{error, info, info_span, trace, Instrument, Span};
 
 use crate::local::{
-    context::ServiceContext, http::connector::Connector, loadbalancing::PingBalancer, LOCAL_DEFAULT_KEEPALIVE_TIMEOUT,
+    context::ServiceContext, http::connector::Connector, loadbalancing::PingBalancer, start_stat::StartStat,
+    LOCAL_DEFAULT_KEEPALIVE_TIMEOUT,
 };
 
 use super::{client_cache::ProxyClientCache, dispatcher::HttpDispatcher};
@@ -89,7 +90,7 @@ impl Http {
     }
 
     /// Run server
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         let bypass_client = Client::builder()
             .http1_preserve_header_case(true)
             .http1_title_case_headers(true)
@@ -151,6 +152,7 @@ impl Http {
         };
 
         info!("shadowsocks HTTP listening on {}", server.local_addr());
+        start_stat.notify().await;
 
         let cancel_waiter = self.context.cancel_waiter();
         tokio::select! {

@@ -27,6 +27,7 @@ use crate::{
         context::ServiceContext,
         loadbalancing::PingBalancer,
         net::{UdpAssociationManager, UdpInboundWrite},
+        StartStat,
     },
     net::utils::to_ipv4_mapped,
 };
@@ -113,8 +114,9 @@ impl Socks5UdpServer {
     }
 
     /// Run server accept loop
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         info!("shadowsocks socks5 UDP listening on {}", self.listener.local_addr()?);
+        start_stat.notify().await;
 
         let (mut manager, mut close_rx) = UdpAssociationManager::new(
             self.context.clone(),
@@ -127,9 +129,13 @@ impl Socks5UdpServer {
         );
 
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
-
+        let cancel_waiter = self.context.cancel_waiter();
         loop {
             tokio::select! {
+                _ = cancel_waiter.wait() => {
+                    return Ok(());
+                }
+
                 close_opt = close_rx.recv() => {
                     let (peer_addr, reason) = close_opt.expect("close channel closed unexpectly");
                     manager.close_association(&peer_addr, reason);

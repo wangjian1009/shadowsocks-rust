@@ -1,7 +1,8 @@
 use hyper::Server as HttpServer;
+use shadowsocks::net::TcpListener;
 use std::{io, net::SocketAddr};
 
-use crate::local::ServiceContext;
+use crate::local::{start_stat::StartStat, ServiceContext};
 
 type GenericError = Box<dyn std::error::Error + Send + Sync>;
 type GenericResult<T> = std::result::Result<T, GenericError>;
@@ -24,12 +25,23 @@ impl MaintainServer {
         }
     }
 
-    pub async fn run(self) -> io::Result<()> {
-        let server = HttpServer::bind(&self.addr).serve(server::MakeSvc {
+    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
+        let listener = TcpListener::bind_with_opts(&self.addr, self.context.service_context.accept_opts()).await?;
+
+        let server = match HttpServer::from_tcp(listener.into_inner().into_std()?) {
+            Ok(s) => s,
+            Err(err) => {
+                tracing::error!(err = ?err, "HttpServer::from_tcp error");
+                return Err(io::Error::new(io::ErrorKind::Other, "HttpServer::from_tcp error"));
+            }
+        };
+
+        let server = server.serve(server::MakeSvc {
             context: self.context.clone(),
         });
 
         tracing::info!("shadowsocks maintain server listening on {}", self.addr);
+        start_stat.notify().await;
 
         let cancel_waiter = self.context.service_context.cancel_waiter();
         tokio::select! {

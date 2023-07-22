@@ -18,7 +18,10 @@ cfg_if! {
     }
 }
 
-use crate::config::{LocalConfig, ProtocolType};
+use crate::{
+    config::{LocalConfig, ProtocolType},
+    local::StartStat,
+};
 
 use super::ServiceContext;
 
@@ -83,7 +86,7 @@ impl Server {
         ) {
             Ok(t) => t,
             Err(_err) => {
-                tracing::error!(err = ?_err, "wg: create Tunn error");
+                tracing::error!(err = ?_err, "create Tunn error");
                 return Err(io::Error::new(io::ErrorKind::Other, "wireguard create Tunn error"));
             }
         };
@@ -92,7 +95,7 @@ impl Server {
         let udp_remote_addr = match peer_config.endpoint.as_ref() {
             Some(addr) => addr.clone(),
             None => {
-                tracing::error!("wg: no target error");
+                tracing::error!("no target error");
                 return Err(io::Error::new(io::ErrorKind::Other, "wireguard no target error"));
             }
         };
@@ -115,7 +118,7 @@ impl Server {
         })
     }
 
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         let Server {
             context,
             mut tun_device,
@@ -124,6 +127,8 @@ impl Server {
             udp_remote_addr,
             wg_rate_limiter,
         } = self;
+
+        let mut start_stat = Some(start_stat);
 
         #[cfg(feature = "local-fake-mode")]
         let mut fake_updated = false;
@@ -141,7 +146,7 @@ impl Server {
         let mut udp_socket = match create_outbound_udp_socket(af_family, context.connect_opts_ref()).await {
             Ok(sock) => Some(sock),
             Err(err) => {
-                tracing::error!(err = ?err, "wg: create udp socket error");
+                tracing::error!(err = ?err, "create udp socket error");
                 None
             }
         };
@@ -173,18 +178,18 @@ impl Server {
                     let src = match r {
                         Ok(n) => {
                             if n <= IFF_PI_PREFIX_LEN {
-                                tracing::error!("wg: tun packet too short, packet: {:?}", &tun_src_buf[..n]);
+                                tracing::error!("tun packet too short, packet: {:?}", &tun_src_buf[..n]);
                                 continue;
                             }
 
                             &tun_src_buf[IFF_PI_PREFIX_LEN..n]
                         },
                         Err(err) => {
-                            tracing::error!(err = ?err, "wg: tun read error");
+                            tracing::error!(err = ?err, "tun read error");
                             return Err(err);
                         }
                     };
-                    // tracing::error!("wg: tun recv, len={}", src.len());
+                    // tracing::error!("tun recv, len={}", src.len());
                     flow_state.incr_tx(src.len() as u64);
                     tun_processed += src.len();
 
@@ -193,12 +198,20 @@ impl Server {
                 r = udp_recv(&mut udp_socket, &mut udp_src_buf[..]) => {
                     match r {
                         Ok(src) => {
-                            // tracing::error!("wg: udp recv, len={}", src.len());
                             let r = wireguard_udp_input(&tunnel, &mut tun_device, &udp_socket, &udp_remote_addr, &mut dst_buf[..], src, &wg_rate_limiter).await;
                             match r {
                                 Ok(tun_writed) => {
                                     flow_state.incr_rx(tun_writed as u64);
                                     tun_processed = tun_writed;
+
+                                    if start_stat.is_some() {
+                                        let (duration, ..) = tunnel.stats();
+                                        if duration.is_some() {
+                                            tracing::info!("first handshake successed");
+                                            start_stat.take().unwrap().notify().await;
+                                        }
+                                    }
+
                                     Ok(())
                                 }
                                 Err(err) => Err(err),
@@ -213,7 +226,7 @@ impl Server {
                     Ok(())
                 }
                 _ = cancel_waiter.wait() => {
-                    tracing::info!("wg: canceled");
+                    tracing::info!("canceled");
                     return Ok(());
                 }
             };
@@ -226,14 +239,14 @@ impl Server {
                             match create_outbound_udp_socket(af_family, context.connect_opts_ref()).await {
                                 Ok(sock) => {
                                     udp_socket = Some(sock);
-                                    tracing::info!("wg: tick: udp_sock recreated");
+                                    tracing::info!("tick: udp_sock recreated");
                                 }
                                 Err(err) => {
                                     if err.kind() == io::ErrorKind::NotFound {
-                                        tracing::error!(err = ?err, "wg: re create udp socket error, app exited");
+                                        tracing::error!(err = ?err, "re create udp socket error, app exited");
                                         return Err(err);
                                     } else {
-                                        tracing::error!(err = ?err, "wg: re create udp socket error");
+                                        tracing::error!(err = ?err, "re create udp socket error");
                                     }
                                 }
                             };
@@ -251,14 +264,14 @@ impl Server {
                             tokio::select! {
                                 _ = tokio::time::sleep(duration) => {}
                                 _ = cancel_waiter.wait() => {
-                                    tracing::info!("wg: canceled");
+                                    tracing::info!("canceled");
                                     return Ok(());
                                 }
                             }
                         }
                         NegativeMultiDecision::InsufficientCapacity => {
                             // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个情况
-                            tracing::error!("wg: tun processed {}, rate-limit unexpected", tun_processed);
+                            tracing::error!("tun processed {}, rate-limit unexpected", tun_processed);
                         }
                     }
                 }
@@ -278,16 +291,16 @@ async fn wireguard_tick(
     match tunnel.update_timers(&mut dst_buf[..]) {
         wg::TunnResult::Done => Ok(()),
         wg::TunnResult::Err(wg::WireGuardError::ConnectionExpired) => {
-            tracing::info!("wg: tick: Connection Expired");
+            tracing::info!("tick: Connection Expired");
             Err(ProcessError::UdpReconnect)
         }
         wg::TunnResult::Err(e) => {
-            tracing::error!(error = ?e, "wg: tick: update_timers error");
+            tracing::error!(error = ?e, "tick: update_timers error");
             Ok(())
         }
         wg::TunnResult::WriteToNetwork(packet) => udp_send(udp_socket, udp_remote_addr, &packet).await,
         _ => {
-            tracing::error!("wg: tick: Unexpected result from update_timers");
+            tracing::error!("tick: Unexpected result from update_timers");
             Ok(())
         }
     }
@@ -304,12 +317,12 @@ async fn wireguard_tun_input(
     match tunnel.encapsulate(src, dst_buf) {
         wg::TunnResult::Done => Ok(()),
         wg::TunnResult::Err(e) => {
-            tracing::error!(error = ?e, "wg: tun_input: Encapsulate error");
+            tracing::error!(error = ?e, "tun_input: Encapsulate error");
             Ok(())
         }
         wg::TunnResult::WriteToNetwork(packet) => udp_send(udp_socket, udp_remote_addr, &packet).await,
         _ => {
-            tracing::error!("wg: tun_input: Unexpected result from encapsulate");
+            tracing::error!("tun_input: Unexpected result from encapsulate");
             Ok(())
         }
     }
@@ -333,7 +346,7 @@ async fn wireguard_udp_input(
             return Ok(0);
         }
         Err(err) => {
-            tracing::trace!(err = ?err, "wg: udp_input: verify packet error");
+            tracing::trace!(err = ?err, "udp_input: verify packet error");
             return Ok(0);
         }
     };
@@ -345,7 +358,7 @@ async fn wireguard_udp_input(
     match tunnel.handle_verified_packet(parsed_packet, dst_buf) {
         wg::TunnResult::Done => {}
         wg::TunnResult::Err(err) => {
-            tracing::trace!(err = ?err, "wg: udp_input: handle packet error");
+            tracing::trace!(err = ?err, "udp_input: handle packet error");
             return Ok(0);
         }
         wg::TunnResult::WriteToNetwork(packet) => {
@@ -354,19 +367,19 @@ async fn wireguard_udp_input(
         }
         wg::TunnResult::WriteToTunnelV4(packet, _addr) => match write_packet_with_pi(tun_device, packet).await {
             Err(err) => {
-                tracing::error!(err = ?err, "wg: udp_input: tun write packet(v4) error");
+                tracing::error!(err = ?err, "udp_input: tun write packet(v4) error");
             }
             Ok(()) => {
-                // tracing::error!("wg: udp_input: tun write packet(v4) {}", packet.len());
+                // tracing::error!("udp_input: tun write packet(v4) {}", packet.len());
                 tun_write += packet.len();
             }
         },
         wg::TunnResult::WriteToTunnelV6(packet, _addr) => match write_packet_with_pi(tun_device, packet).await {
             Err(err) => {
-                tracing::error!(err = ?err, "wg: udp_input: tun write packet(v6) error");
+                tracing::error!(err = ?err, "udp_input: tun write packet(v6) error");
             }
             Ok(()) => {
-                // tracing::error!("wg: udp_input: tun write packet(v6) {}", packet.len());
+                // tracing::error!("udp_input: tun write packet(v6) {}", packet.len());
                 tun_write += packet.len();
             }
         },
@@ -396,10 +409,10 @@ async fn sync_fake_mode(context: &ServiceContext, tunnel: &wg::Tunn) -> bool {
 
             match tunnel.set_static_private(dummy_private_key, dummy_public_key, None) {
                 Ok(()) => {
-                    tracing::info!("wg: fake update success");
+                    tracing::info!("fake update success");
                 }
                 Err(err) => {
-                    tracing::error!(err = ?err, "wg: fake update error");
+                    tracing::error!(err = ?err, "fake update error");
                 }
             }
             true
@@ -446,7 +459,7 @@ async fn udp_recv<'a>(udp_socket: &Option<UdpSocket>, buf: &'a mut [u8]) -> Resu
         Some(udp_socket) => match udp_socket.recv_from(buf).await {
             Ok((n, _addr)) => Ok(&buf[..n]),
             Err(err) => {
-                tracing::error!(err = ?err, "wg: udp read error");
+                tracing::error!(err = ?err, "udp read error");
                 Err(ProcessError::UdpReconnect)
             }
         },
@@ -470,12 +483,12 @@ async fn udp_send(
     let udp_socket = udp_socket.as_ref().unwrap();
     match udp_socket.send_to(&packet, udp_remote_addr).await {
         Err(err) => {
-            tracing::error!(err = ?err, "wg: udp send error, len={}", packet.len());
+            tracing::error!(err = ?err, "udp send error, len={}", packet.len());
             Err(ProcessError::UdpReconnect)
         }
         Ok(_) => {
             // if packet.len() > 1400 {
-            //     tracing::error!("wg: udp send success, len={}", packet.len());
+            //     tracing::error!("udp send success, len={}", packet.len());
             // }
             Ok(())
         }

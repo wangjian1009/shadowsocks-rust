@@ -16,10 +16,8 @@ use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use cfg_if::cfg_if;
 use tokio::net::lookup_host;
-#[cfg(feature = "trust-dns")]
+#[cfg(all(feature = "trust-dns", unix, not(target_os = "android")))]
 use tokio::task::JoinHandle;
-#[cfg(feature = "trust-dns")]
-use tracing::error;
 use tracing::{level_enabled, trace, Level};
 #[cfg(feature = "trust-dns")]
 use trust_dns_resolver::config::ResolverConfig;
@@ -34,6 +32,7 @@ pub trait DnsResolve {
     async fn resolve(&self, addr: &str, port: u16) -> io::Result<Vec<SocketAddr>>;
 }
 
+#[allow(dead_code)]
 #[cfg(feature = "trust-dns")]
 pub struct TrustDnsSystemResolver {
     resolver: ArcSwap<TrustDnsResolver>,
@@ -147,7 +146,6 @@ async fn trust_dns_notify_update_dns(resolver: Arc<TrustDnsSystemResolver>) -> n
 
     use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Result as NotifyResult, Watcher};
     use tokio::{sync::watch, time};
-    use tracing::debug;
 
     use super::trust_dns_resolver::create_resolver;
 
@@ -170,7 +168,7 @@ async fn trust_dns_notify_update_dns(resolver: Arc<TrustDnsSystemResolver>) -> n
                 }
             }
             Err(err) => {
-                error!("watching {DNS_RESOLV_FILE_PATH} error: {err}");
+                tracing::error!("watching {DNS_RESOLV_FILE_PATH} error: {err}");
             }
         })?;
 
@@ -197,12 +195,12 @@ async fn trust_dns_notify_update_dns(resolver: Arc<TrustDnsSystemResolver>) -> n
 
                 match create_resolver(None, resolver.dns_cache_size, resolver.connect_opts.clone()).await {
                     Ok(r) => {
-                        debug!("auto-reload {DNS_RESOLV_FILE_PATH}");
+                        tracing::debug!("auto-reload {DNS_RESOLV_FILE_PATH}");
 
                         resolver.resolver.store(Arc::new(r));
                     }
                     Err(err) => {
-                        error!("failed to reload {DNS_RESOLV_FILE_PATH}, error: {err}");
+                        tracing::error!("failed to reload {DNS_RESOLV_FILE_PATH}, error: {err}");
                     }
                 }
             })
@@ -211,7 +209,7 @@ async fn trust_dns_notify_update_dns(resolver: Arc<TrustDnsSystemResolver>) -> n
         update_task = Some(task);
     }
 
-    error!("auto-reload {DNS_RESOLV_FILE_PATH} task exited unexpectedly");
+    tracing::error!("auto-reload {DNS_RESOLV_FILE_PATH} task exited unexpectedly");
 
     Ok(())
 }
@@ -226,7 +224,10 @@ impl DnsResolver {
     ///
     /// On *nix system, it will try to read configurations from `/etc/resolv.conf`.
     #[cfg(feature = "trust-dns")]
-    pub async fn trust_dns_system_resolver(dns_cache_size: Option<usize>, connect_opts: ConnectOpts) -> io::Result<DnsResolver> {
+    pub async fn trust_dns_system_resolver(
+        dns_cache_size: Option<usize>,
+        connect_opts: ConnectOpts,
+    ) -> io::Result<DnsResolver> {
         use super::trust_dns_resolver::create_resolver;
 
         let resolver = create_resolver(None, dns_cache_size, connect_opts.clone()).await?;
@@ -243,7 +244,7 @@ impl DnsResolver {
                     let inner = inner.clone();
                     tokio::spawn(async {
                         if let Err(err) = trust_dns_notify_update_dns(inner).await {
-                            error!("failed to watch DNS system configuration changes, error: {}", err);
+                            tracing::error!("failed to watch DNS system configuration changes, error: {}", err);
                         }
                     })
                 };
@@ -257,9 +258,15 @@ impl DnsResolver {
 
     /// Use trust-dns DNS resolver (with DNS cache)
     #[cfg(feature = "trust-dns")]
-    pub async fn trust_dns_resolver(dns: ResolverConfig, dns_cache_size: Option<usize>, connect_opts: ConnectOpts) -> io::Result<DnsResolver> {
+    pub async fn trust_dns_resolver(
+        dns: ResolverConfig,
+        dns_cache_size: Option<usize>,
+        connect_opts: ConnectOpts,
+    ) -> io::Result<DnsResolver> {
         use super::trust_dns_resolver::create_resolver;
-        Ok(DnsResolver::TrustDns(create_resolver(Some(dns), dns_cache_size, connect_opts).await?))
+        Ok(DnsResolver::TrustDns(
+            create_resolver(Some(dns), dns_cache_size, connect_opts).await?,
+        ))
     }
 
     /// Custom DNS resolver

@@ -3,7 +3,6 @@
 use std::{
     future::Future,
     io::{self, ErrorKind},
-    os::fd::RawFd,
     pin::Pin,
     sync::Arc,
     task,
@@ -19,16 +18,19 @@ use shadowsocks::{
     relay::socks5::Address,
     ServerAddr,
 };
-use tokio::{io::AsyncWriteExt, task::JoinHandle};
+use tokio::task::JoinHandle;
 use tracing::{info_span, trace, Instrument};
 
 use crate::{
-    config::{Config, ConfigType, LocalConfig, ProtocolType},
+    config::{Config, ConfigType, ProtocolType},
     dns::build_dns_resolver,
 };
 
 #[cfg(feature = "local-maintain")]
 mod maintain;
+
+mod start_stat;
+use start_stat::StartStat;
 
 /// 解析证书等可以脱离Android运行，环境相关在模块内区分
 pub mod android;
@@ -73,6 +75,9 @@ mod wg;
 
 #[cfg(feature = "local-flow-stat")]
 mod reporter;
+
+#[cfg(feature = "local-flow-stat")]
+use crate::config::LocalFlowStatAddress;
 
 #[cfg(any(feature = "local-tun", feature = "wireguard"))]
 mod tun_sys;
@@ -197,7 +202,14 @@ impl Server {
         accept_opts.tcp.mptcp = config.mptcp;
         context.set_accept_opts(accept_opts);
 
-        if let Some(resolver) = build_dns_resolver(config.dns, config.ipv6_first, config.dns_cache_size, context.connect_opts_ref()).await {
+        if let Some(resolver) = build_dns_resolver(
+            config.dns,
+            config.ipv6_first,
+            config.dns_cache_size,
+            context.connect_opts_ref(),
+        )
+        .await
+        {
             context.set_dns_resolver(Arc::new(resolver));
         }
 
@@ -422,7 +434,27 @@ impl Server {
                 }
                 #[cfg(any(feature = "local-tun", feature = "wireguard"))]
                 ProtocolType::Tun => {
-                    let fd = read_fd(&local_config).await?;
+                    #[cfg(unix)]
+                    let fd = if let Some(fd) = local_config.tun_device_fd {
+                        fd
+                    } else if let Some(ref fd_path) = local_config.tun_device_fd_from_path {
+                        #[cfg(feature = "local-flow-stat")]
+                        let stat_addr = match config.local_stat_addr.as_ref() {
+                            Some(local_state_addr) => local_state_addr.clone(),
+                            None => return Err(io::Error::new(io::ErrorKind::Other, "tun no local_state_addr for fd")),
+                        };
+
+                        Self::read_local_fd(
+                            #[cfg(feature = "local-flow-stat")]
+                            &stat_addr,
+                            fd_path,
+                            Duration::from_secs(3),
+                        )
+                        .await?
+                    } else {
+                        tracing::error!("no tun fd setted");
+                        return Err(io::Error::new(io::ErrorKind::Other, "no tun fd setted"));
+                    };
 
                     #[cfg(feature = "wireguard")]
                     if let ServerProtocol::WG(wg_config) = config.server[0].config.protocol() {
@@ -481,53 +513,78 @@ impl Server {
     pub async fn run(self) -> io::Result<()> {
         let mut vfut = Vec::new();
 
+        let mut start_stat = StartStat::create();
+
         for svr in self.socks_servers {
-            vfut.push(ServerHandle(tokio::spawn(svr.run().instrument(info_span!("socks")))));
+            vfut.push(ServerHandle(tokio::spawn(
+                svr.run(start_stat.new_child("socks")).instrument(info_span!("socks")),
+            )));
         }
 
         #[cfg(feature = "local-tunnel")]
         for svr in self.tunnel_servers {
-            vfut.push(ServerHandle(tokio::spawn(svr.run().instrument(info_span!("tunnel")))));
+            vfut.push(ServerHandle(tokio::spawn(
+                svr.run(start_stat.new_child("tunnel")).instrument(info_span!("tunnel")),
+            )));
         }
 
         #[cfg(feature = "local-http")]
         for svr in self.http_servers {
-            vfut.push(ServerHandle(tokio::spawn(svr.run().instrument(info_span!("http")))));
+            vfut.push(ServerHandle(tokio::spawn(
+                svr.run(start_stat.new_child("http")).instrument(info_span!("http")),
+            )));
         }
 
         #[cfg(feature = "local-tun")]
         for svr in self.tun_servers {
-            vfut.push(ServerHandle(tokio::spawn(svr.run().instrument(info_span!("tun")))));
+            vfut.push(ServerHandle(tokio::spawn(
+                svr.run(start_stat.new_child("tun")).instrument(info_span!("tun")),
+            )));
         }
 
         #[cfg(feature = "local-dns")]
         for svr in self.dns_servers {
-            vfut.push(ServerHandle(tokio::spawn(svr.run().instrument(info_span!("dns")))));
+            vfut.push(ServerHandle(tokio::spawn(
+                svr.run(start_stat.new_child("dns")).instrument(info_span!("dns")),
+            )));
         }
 
         #[cfg(feature = "local-redir")]
         for svr in self.redir_servers {
-            vfut.push(ServerHandle(tokio::spawn(svr.run().instrument(info_span!("redir")))));
+            vfut.push(ServerHandle(tokio::spawn(
+                svr.run(start_stat.new_child("redir")).instrument(info_span!("redir")),
+            )));
         }
 
         #[cfg(feature = "wireguard")]
         if let Some(svr) = self.wg_server {
-            vfut.push(ServerHandle(tokio::spawn(svr.run().instrument(info_span!("wg")))));
+            vfut.push(ServerHandle(tokio::spawn(
+                svr.run(start_stat.new_child("wg")).instrument(info_span!("wg")),
+            )));
         }
 
         #[cfg(feature = "local-maintain")]
         if let Some(svr) = self.maintain_server {
-            vfut.push(ServerHandle(tokio::spawn(svr.run().instrument(info_span!("maintain")))));
+            vfut.push(ServerHandle(tokio::spawn(
+                svr.run(start_stat.new_child("maintain"))
+                    .instrument(info_span!("maintain")),
+            )));
         }
 
         #[cfg(feature = "local-flow-stat")]
         if let Some(svr) = self.reporter_server {
             // For Android's flow statistic
-            vfut.push(ServerHandle(tokio::spawn(svr.run().instrument(info_span!("reporter")))));
+            vfut.push(ServerHandle(tokio::spawn(
+                svr.run(start_stat).instrument(info_span!("reporter")),
+            )));
+        } else {
+            vfut.push(ServerHandle(tokio::spawn(start_stat.wait())));
         }
 
-        let (res, ..) = future::select_all(vfut).await;
-        res
+        #[cfg(not(feature = "local-flow-stat"))]
+        vfut.push(ServerHandle(tokio::spawn(start_stat.wait())));
+
+        run_all_done(vfut).await
     }
 
     /// Get the internal server balancer
@@ -569,15 +626,29 @@ impl Server {
     pub fn redir_servers(&self) -> &[Redir] {
         &self.redir_servers
     }
-}
 
-async fn read_fd(config: &LocalConfig) -> io::Result<RawFd> {
     #[cfg(unix)]
-    if let Some(fd) = config.tun_device_fd {
-        Ok(fd)
-    } else if let Some(ref fd_path) = config.tun_device_fd_from_path {
+    pub async fn read_local_fd(
+        #[cfg(feature = "local-flow-stat")] stat_addr: &LocalFlowStatAddress,
+        fd_path: &std::path::PathBuf,
+        timeout: Duration,
+    ) -> io::Result<std::os::fd::RawFd> {
+        tokio::select! {
+            r = Self::notify_send_fd(#[cfg(feature = "local-flow-stat")] stat_addr, timeout) => {
+                r?;
+                unreachable!("notify_send_fd should not return success");
+            }
+            r = Self::recv_fd(fd_path) => {
+                r
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    async fn recv_fd(fd_path: &std::path::PathBuf) -> io::Result<std::os::fd::RawFd> {
         use shadowsocks::net::UnixListener;
         use std::fs;
+        use tokio::io::AsyncWriteExt;
 
         let _ = fs::remove_file(fd_path);
 
@@ -625,10 +696,46 @@ async fn read_fd(config: &LocalConfig) -> io::Result<RawFd> {
                 }
             }
         }
-    } else {
-        tracing::error!("no tun fd setted");
-        Err(io::Error::new(io::ErrorKind::Other, "no tun fd setted"))
     }
+
+    #[cfg(feature = "local-flow-stat")]
+    async fn notify_send_fd(stat_addr: &LocalFlowStatAddress, timeout: Duration) -> io::Result<()> {
+        use tokio::time::Instant;
+
+        let begin = Instant::now();
+        reporter::send_local_notify(stat_addr, 2, &[]).await?;
+        let elapsed = begin.elapsed();
+
+        if let Some(left_timeout) = timeout.checked_sub(elapsed) {
+            tokio::time::sleep(left_timeout).await;
+        }
+
+        Err(io::ErrorKind::TimedOut.into())
+    }
+
+    #[cfg(not(feature = "local-flow-stat"))]
+    async fn notify_send_fd(timeout: Duration) -> io::Result<()> {
+        tokio::time::sleep(timeout).await;
+        Err(io::ErrorKind::TimedOut.into())
+    }
+}
+
+async fn run_all_done<T>(mut vfut: Vec<T>) -> io::Result<()>
+where
+    T: Future<Output = io::Result<()>> + Unpin,
+{
+    let mut first_res = None;
+
+    while !vfut.is_empty() {
+        let (res, _idx, left_vfut) = future::select_all(vfut).await;
+        vfut = left_vfut;
+
+        if first_res.is_none() && res.is_err() {
+            first_res = Some(res);
+        }
+    }
+
+    first_res.unwrap_or_else(|| Ok(()))
 }
 
 pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<Server> {

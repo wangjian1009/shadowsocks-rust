@@ -17,7 +17,9 @@ use tokio::io::AsyncReadExt;
 use tracing::{debug, error, info, trace, warn};
 use tun::{AsyncDevice, Configuration as TunConfiguration, Device as TunDevice, Error as TunError, Layer};
 
-use crate::local::{context::ServiceContext, loadbalancing::PingBalancer, net::UdpAssociationCloseReceiver};
+use crate::local::{
+    context::ServiceContext, loadbalancing::PingBalancer, net::UdpAssociationCloseReceiver, start_stat::StartStat,
+};
 
 use self::{
     ip_packet::IpPacket,
@@ -109,12 +111,13 @@ impl TunBuilder {
         );
 
         let tcp = TcpTun::new(
-            self.context,
+            self.context.clone(),
             self.balancer,
             device.get_ref().mtu().unwrap_or(1500) as u32,
         );
 
         Ok(Tun {
+            context: self.context,
             device,
             tcp,
             udp,
@@ -126,6 +129,7 @@ impl TunBuilder {
 
 /// Tun service
 pub struct Tun {
+    context: Arc<ServiceContext>,
     device: AsyncDevice,
     tcp: TcpTun,
     udp: UdpTun,
@@ -135,7 +139,7 @@ pub struct Tun {
 
 impl Tun {
     /// Start serving
-    pub async fn run(mut self) -> io::Result<()> {
+    pub async fn run(mut self, start_stat: StartStat) -> io::Result<()> {
         if let Ok(mtu) = self.device.get_ref().mtu() {
             assert!(mtu > 0 && mtu as usize > IFF_PI_PREFIX_LEN);
         }
@@ -145,11 +149,17 @@ impl Tun {
             self.device.get_ref().name(),
             self.mode,
         );
+        start_stat.notify().await;
 
         let mut packet_buffer = vec![0u8; 65536 + IFF_PI_PREFIX_LEN].into_boxed_slice();
+        let cancel_waiter = self.context.cancel_waiter();
 
         loop {
             tokio::select! {
+                _ = cancel_waiter.wait() => {
+                    return Ok(());
+                }
+
                 // tun device
                 n = self.device.read(&mut packet_buffer) => {
                     let n = n?;
