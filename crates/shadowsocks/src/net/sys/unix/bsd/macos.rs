@@ -1,4 +1,6 @@
 use std::{
+    cell::RefCell,
+    collections::HashMap,
     io::{self, ErrorKind},
     mem,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream as StdTcpStream},
@@ -7,6 +9,7 @@ use std::{
     ptr,
     sync::atomic::{AtomicBool, Ordering},
     task::{self, Poll},
+    time::{Duration, Instant},
 };
 
 use pin_project::pin_project;
@@ -21,7 +24,9 @@ use tracing::{debug, error, warn};
 use crate::net::{
     sys::{set_common_sockopt_after_connect, set_common_sockopt_for_connect, socket_bind_dual_stack},
     udp::{BatchRecvMessage, BatchSendMessage},
-    AcceptOpts, AddrFamily, ConnectOpts,
+    AcceptOpts,
+    AddrFamily,
+    ConnectOpts,
 };
 
 /// A `TcpStream` that supports TFO (TCP Fast Open)
@@ -230,11 +235,24 @@ pub async fn create_inbound_tcp_socket(bind_addr: &SocketAddr, _accept_opts: &Ac
     }
 }
 
-fn set_ip_bound_if<S: AsRawFd>(socket: &S, addr: &SocketAddr, iface: &str) -> io::Result<()> {
-    const IP_BOUND_IF: libc::c_int = 25; // bsd/netinet/in.h
-    const IPV6_BOUND_IF: libc::c_int = 125; // bsd/netinet6/in6.h
+fn find_interface_index_cached(iface: &str) -> io::Result<u32> {
+    const INDEX_EXPIRE_DURATION: Duration = Duration::from_secs(5);
 
-    unsafe {
+    thread_local! {
+        static INTERFACE_INDEX_CACHE: RefCell<HashMap<String, (u32, Instant)>> =
+            RefCell::new(HashMap::new());
+    }
+
+    let cache_index = INTERFACE_INDEX_CACHE.with(|cache| cache.borrow().get(iface).cloned());
+    if let Some((idx, insert_time)) = cache_index {
+        // short-path, cache hit for most cases
+        let now = Instant::now();
+        if now - insert_time < INDEX_EXPIRE_DURATION {
+            return Ok(idx);
+        }
+    }
+
+    let index = unsafe {
         let mut ciface = [0u8; libc::IFNAMSIZ];
         if iface.len() >= ciface.len() {
             return Err(ErrorKind::InvalidInput.into());
@@ -243,12 +261,28 @@ fn set_ip_bound_if<S: AsRawFd>(socket: &S, addr: &SocketAddr, iface: &str) -> io
         let iface_bytes = iface.as_bytes();
         ptr::copy_nonoverlapping(iface_bytes.as_ptr(), ciface.as_mut_ptr(), iface_bytes.len());
 
-        let index = libc::if_nametoindex(ciface.as_ptr() as *const libc::c_char);
-        if index == 0 {
-            let err = io::Error::last_os_error();
-            error!("if_nametoindex ifname: {} error: {}", iface, err);
-            return Err(err);
-        }
+        libc::if_nametoindex(ciface.as_ptr() as *const libc::c_char)
+    };
+
+    if index == 0 {
+        let err = io::Error::last_os_error();
+        error!("if_nametoindex ifname: {} error: {}", iface, err);
+        return Err(err);
+    }
+
+    INTERFACE_INDEX_CACHE.with(|cache| {
+        cache.borrow_mut().insert(iface.to_owned(), (index, Instant::now()));
+    });
+
+    Ok(index)
+}
+
+fn set_ip_bound_if<S: AsRawFd>(socket: &S, addr: &SocketAddr, iface: &str) -> io::Result<()> {
+    const IP_BOUND_IF: libc::c_int = 25; // bsd/netinet/in.h
+    const IPV6_BOUND_IF: libc::c_int = 125; // bsd/netinet6/in6.h
+
+    unsafe {
+        let index = find_interface_index_cached(iface)?;
 
         let ret = match addr {
             SocketAddr::V4(..) => libc::setsockopt(
@@ -361,6 +395,7 @@ pub async fn bind_outbound_udp_socket(bind_addr: &SocketAddr, config: &ConnectOp
 
 /// https://github.com/apple/darwin-xnu/blob/main/bsd/sys/socket.h
 #[repr(C)]
+#[allow(non_camel_case_types)]
 struct msghdr_x {
     msg_name: *mut libc::c_void,     //< optional address
     msg_namelen: libc::socklen_t,    //< size of address

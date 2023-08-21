@@ -89,6 +89,36 @@ For macOS and Linux, you can install it using [Homebrew](https://brew.sh/):
 brew install shadowsocks-rust
 ```
 
+### **Install using snap**
+
+```bash
+# Install from snapstore
+snap install shadowsocks-rust
+
+# List services
+snap services shadowsocks-rust
+
+# Enable and start shadowsocks-rust.sslocal-daemon snap service
+snap start --enable shadowsocks-rust.sslocal-daemon
+
+# Show generated systemd service status
+systemctl status snap.shadowsocks-rust.sslocal-daemon.service
+
+# Override generated systemd service (configure startup options)
+systemctl edit snap.shadowsocks-rust.sslocal-daemon.service
+
+## NOTE: you can pass args to sslocal:
+##  [Service]
+##  ExecStart=
+##  ExecStart=/usr/bin/snap run shadowsocks-rust.sslocal-daemon -b "127.0.0.1:1080" --server-url "ss://...."
+
+# Restart generated systemd service to apply changes
+systemctl restart snap.shadowsocks-rust.sslocal-daemon.service
+
+# ... and show service status
+systemctl status snap.shadowsocks-rust.sslocal-daemon.service
+```
+
 ### **Download release**
 
 Download static-linked build [here](https://github.com/shadowsocks/shadowsocks-rust/releases).
@@ -100,6 +130,8 @@ Download static-linked build [here](https://github.com/shadowsocks/shadowsocks-r
 ### **Docker**
 
 This project provided Docker images for the `linux/i386` and `linux/amd64` and `linux/arm64/v8` architectures.
+
+> :warning: **Docker containers do not have access to IPv6 by default**: Make sure to disable IPv6 Route in the client or [enable IPv6 access to docker containers](https://docs.docker.com/config/daemon/ipv6/#use-ipv6-for-the-default-bridge-network).
 
 #### Pull from GitHub Container Registry
 

@@ -474,6 +474,7 @@ impl ProxySocket {
     /// This function will use `recv_buf` to store intermediate data, so it has to be big enough to store the whole shadowsocks' packet
     ///
     /// It is recommended to allocate a buffer to have at least 65536 bytes.
+    #[allow(clippy::type_complexity)]
     pub async fn recv_from(&self, recv_buf: &mut [u8]) -> ProxySocketResult<(usize, SocketAddr, ServerAddr, usize)> {
         self.recv_from_with_ctrl(recv_buf)
             .await
@@ -485,6 +486,7 @@ impl ProxySocket {
     /// This function will use `recv_buf` to store intermediate data, so it has to be big enough to store the whole shadowsocks' packet
     ///
     /// It is recommended to allocate a buffer to have at least 65536 bytes.
+    #[allow(clippy::type_complexity)]
     pub async fn recv_from_with_ctrl(
         &self,
         recv_buf: &mut [u8],
@@ -518,6 +520,7 @@ impl ProxySocket {
 
     /// poll family functions.
     /// the recv_timeout is ignored.
+    #[allow(clippy::type_complexity)]
     pub fn poll_recv(
         &self,
         cx: &mut Context<'_>,
@@ -544,6 +547,8 @@ impl ProxySocket {
         }
     }
 
+    /// poll family functions
+    #[allow(clippy::type_complexity)]
     pub fn poll_recv_from(
         &self,
         cx: &mut Context<'_>,
@@ -553,6 +558,7 @@ impl ProxySocket {
             .map(|r| r.map(|(n, sa, a, rn, _)| (n, sa, a, rn)))
     }
 
+    /// poll family functions
     #[allow(clippy::type_complexity)]
     pub fn poll_recv_from_with_ctrl(
         &self,
@@ -568,6 +574,7 @@ impl ProxySocket {
         }
     }
 
+    /// poll family functions
     pub fn poll_recv_ready(&self, cx: &mut Context<'_>) -> Poll<ProxySocketResult<()>> {
         self.socket.poll_recv_ready(cx).map_err(|x| x.into())
     }

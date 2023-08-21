@@ -98,16 +98,18 @@ pub type ShadowDnsConnectionProvider = GenericConnector<ShadowDnsRuntimeProvider
 pub type DnsResolver = AsyncResolver<ShadowDnsConnectionProvider>;
 
 /// Create a `trust-dns` asynchronous DNS resolver
-pub async fn create_resolver(dns: Option<ResolverConfig>, dns_cache_size: Option<usize>, connect_opts: ConnectOpts) -> ResolveResult<DnsResolver> {
+pub async fn create_resolver(
+    dns: Option<ResolverConfig>,
+    opts: Option<ResolverOpts>,
+    connect_opts: ConnectOpts,
+) -> ResolveResult<DnsResolver> {
     // Customized dns resolution
     match dns {
         Some(conf) => {
-            let mut resolver_opts = ResolverOpts::default();
+            let mut resolver_opts = opts.unwrap_or_default();
             // Use Ipv4AndIpv6 strategy. Because Ipv4ThenIpv6 or Ipv6ThenIpv4 will return if the first query returned.
             // Since we want to use Happy Eyeballs to connect to both IPv4 and IPv6 addresses, we need both A and AAAA records.
             resolver_opts.ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
-
-            if let Some(size) = dns_cache_size { resolver_opts.cache_size = size }
 
             trace!(
                 "initializing DNS resolver with config {:?} opts {:?}",

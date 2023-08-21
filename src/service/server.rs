@@ -51,7 +51,8 @@ use shadowsocks_service::shadowsocks::{
 use crate::logging;
 use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
-    monitor, vparser,
+    monitor,
+    vparser,
 };
 
 #[cfg(feature = "statistics")]
