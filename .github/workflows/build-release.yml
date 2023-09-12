@@ -3,6 +3,12 @@ on:
   push:
     tags:
       - v*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release Tag'
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,6 +19,7 @@ jobs:
     env:
       RUST_BACKTRACE: full
     strategy:
+      fail-fast: false
       matrix:
         target:
           - i686-unknown-linux-musl
@@ -70,7 +77,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: build/release/*
-          prerelease: ${{ contains(github.ref, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
 
   build-unix:
     runs-on: ${{ matrix.os }}
@@ -78,6 +86,7 @@ jobs:
       BUILD_EXTRA_FEATURES: "local-redir local-tun"
       RUST_BACKTRACE: full
     strategy:
+      fail-fast: false
       matrix:
         # os: [ubuntu-latest, macos-latest]
         os: [macos-latest]
@@ -113,7 +122,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: build/release/*
-          prerelease: ${{ contains(github.ref, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
 
   build-windows:
     runs-on: windows-latest
@@ -140,4 +150,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: build/release/*
-          prerelease: ${{ contains(github.ref, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          tag_name: ${{ inputs.tag || github.ref_name }}

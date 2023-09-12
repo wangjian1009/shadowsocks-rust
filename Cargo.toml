@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks-rust"
-version = "1.16.0"
+version = "1.16.2"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -153,6 +153,10 @@ lib-entry = ["spin", "serde_json"]
 # Enables trust-dns for replacing tokio's builtin DNS resolver
 trust-dns = ["shadowsocks-service/trust-dns"]
 dns-over-tls = ["shadowsocks-service/dns-over-tls"]
+dns-over-native-tls = ["shadowsocks-service/dns-over-native-tls"]
+dns-over-native-tls-vendored = [
+    "shadowsocks-service/dns-over-native-tls-vendored",
+]
 dns-over-https = ["shadowsocks-service/dns-over-https"]
 
 # Enable logging output
@@ -176,7 +180,14 @@ local-dns = ["local", "shadowsocks-service/local-dns"]
 local-flow-stat = ["local", "shadowsocks-service/local-flow-stat"]
 # Enable HTTP protocol for sslocal
 local-http = ["local", "shadowsocks-service/local-http"]
-local-http-native-tls = ["local-http", "shadowsocks-service/local-http-native-tls"]
+local-http-native-tls = [
+    "local-http",
+    "shadowsocks-service/local-http-native-tls",
+]
+local-http-native-tls-vendored = [
+    "local-http",
+    "shadowsocks-service/local-http-native-tls-vendored",
+]
 local-http-rustls = ["local-http", "shadowsocks-service/local-http-rustls"]
 # Enable REDIR protocol for sslocal
 # (transparent proxy)
@@ -187,6 +198,9 @@ local-tunnel = ["local", "shadowsocks-service/local-tunnel"]
 local-socks4 = ["local", "shadowsocks-service/local-socks4"]
 # Enable Tun interface protocol for sslocal
 local-tun = ["local", "shadowsocks-service/local-tun", "ipnet"]
+
+# ssurl support outline (ssconf) URL
+utility-url-outline = ["reqwest"]
 
 # Enable jemalloc for binaries
 jemalloc = ["jemallocator"]
@@ -221,8 +235,12 @@ aead-cipher-2022-extra = ["shadowsocks-service/aead-cipher-2022-extra"]
 rate-limit = ["shadowsocks-service/rate-limit", "governor", "hyper", "tower"]
 
 # Enable detection against replay attack (Stream / AEAD)
-security-replay-attack-detect = ["shadowsocks-service/security-replay-attack-detect"]
-replay-attack-detect = ["security-replay-attack-detect"] # Backward compatibility. DO NOT USE.
+security-replay-attack-detect = [
+    "shadowsocks-service/security-replay-attack-detect",
+]
+replay-attack-detect = [
+    "security-replay-attack-detect",
+] # Backward compatibility. DO NOT USE.
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -258,7 +276,7 @@ metrics-exporter-prometheus = { version = "0.11", optional = true }
 clap = { version = "4.3", features = ["wrap_help", "suggestions"] }
 cfg-if = "1"
 qrcode = { version = "0.12", default-features = false, optional = true }
-sysexits = "0.6"
+sysexits = "0.7"
 exitcode = "1"
 bytes = "1.0"
 byteorder = "1.3"
@@ -292,10 +310,23 @@ serde_json = { version = "1.0", optional = true }
 hyper = { version = "*", optional = true}
 tower = { version = "*", optional = true }
 
-shadowsocks-service = { version = "1.16.0", path = "./crates/shadowsocks-service", default-features = false }
+shadowsocks-service = { version = "1.16.1", path = "./crates/shadowsocks-service", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5"
+
+[target.'cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
+reqwest = { version = "0.11", features = [
+    "blocking",
+    "rustls-tls",
+    "rustls-tls-native-roots",
+], default-features = false, optional = true }
+
+[target.'cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
+reqwest = { version = "0.11", features = [
+    "blocking",
+    "native-tls-vendored",
+], optional = true }
 
 [dev-dependencies]
 byteorder = "1.3"

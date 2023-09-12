@@ -382,6 +382,6 @@ pub extern "C" fn lib_local_string_free(s: *mut c_char) {
         if s.is_null() {
             return;
         }
-        CString::from_raw(s)
+        let _ = CString::from_raw(s);
     };
 }
