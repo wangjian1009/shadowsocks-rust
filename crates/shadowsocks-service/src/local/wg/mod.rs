@@ -1,4 +1,5 @@
 use cfg_if::cfg_if;
+use std::cmp::Ordering;
 use std::sync::Arc;
 use std::{net::SocketAddr, os::fd::RawFd};
 use tokio::{
@@ -33,7 +34,13 @@ const RATE_LIMITER_RESET_DURATION: Duration = Duration::from_secs(1);
 use super::tun_sys::{write_packet_with_pi, IFF_PI_PREFIX_LEN};
 
 enum ProcessError {
+    NextTick,
     UdpReconnect,
+}
+
+struct ProcessResult {
+    tun_writed: usize,
+    net_writed: usize,
 }
 
 pub struct Server {
@@ -52,8 +59,6 @@ impl Server {
         local_config: &LocalConfig,
         wg_config: &wg::Config,
     ) -> io::Result<Self> {
-        tracing::error!("xxxxx create_wg_server: {:?}", wg_config);
-
         if !matches!(local_config.protocol, ProtocolType::Tun) {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -134,6 +139,8 @@ impl Server {
         let mut fake_updated = false;
 
         let cancel_waiter = context.cancel_waiter();
+
+        #[cfg(feature = "rate-limit")]
         let rate_limit = context.rate_limiter();
 
         // Socket 重建
@@ -161,8 +168,28 @@ impl Server {
 
         let mut next_tick = Instant::now();
         let mut next_rate_limiter_rest = Instant::now() + RATE_LIMITER_RESET_DURATION;
+
+        #[cfg(feature = "rate-limit")]
+        let mut next_net_read_write: Option<Instant> = None;
+
         loop {
-            let mut tun_processed = 0;
+            #[cfg(feature = "rate-limit")]
+            if next_net_read_write
+                .map(|e| match e.cmp(&Instant::now()) {
+                    Ordering::Greater => false,
+                    Ordering::Equal => true,
+                    Ordering::Less => true,
+                })
+                .unwrap_or(false)
+            {
+                // tracing::error!(
+                //     "XXXXXXX: net-block clear 2 next_net_read_write={:?}, now={:?}",
+                //     next_net_read_write.unwrap(),
+                //     Instant::now()
+                // );
+                next_net_read_write = None;
+            }
+
             let r = tokio::select! {
                 _ = time::sleep_until(next_tick) => {
                     next_tick = Instant::now() + TICK_DURATION; // tick 时间扣除处理实现
@@ -172,7 +199,7 @@ impl Server {
                         fake_updated = sync_fake_mode(&context, &tunnel).await;
                     }
 
-                    wireguard_tick(&tunnel, &mut udp_socket, &udp_remote_addr, &mut dst_buf[..]).await
+                    wireguard_tick(&tunnel, &mut udp_socket, &udp_remote_addr, &mut dst_buf[..],#[cfg(feature = "rate-limit")] next_net_read_write.as_ref()).await
                 }
                 r = tun_device.read(&mut tun_src_buf[..]) => {
                     let src = match r {
@@ -191,31 +218,39 @@ impl Server {
                     };
                     // tracing::error!("tun recv, len={}", src.len());
                     flow_state.incr_tx(src.len() as u64);
-                    tun_processed += src.len();
 
-                    wireguard_tun_input(&tunnel, &mut udp_socket, &udp_remote_addr, &mut dst_buf[..], src).await
+                    wireguard_tun_input(&tunnel, &mut udp_socket, &udp_remote_addr, &mut dst_buf[..], src, #[cfg(feature = "rate-limit")] next_net_read_write.as_ref()).await
                 }
-                r = udp_recv(&mut udp_socket, &mut udp_src_buf[..]) => {
+                r = udp_recv(&mut udp_socket, &mut udp_src_buf[..], #[cfg(feature = "rate-limit")] next_net_read_write.as_ref()) => {
                     match r {
                         Ok(src) => {
-                            let r = wireguard_udp_input(&tunnel, &mut tun_device, &udp_socket, &udp_remote_addr, &mut dst_buf[..], src, &wg_rate_limiter).await;
-                            match r {
-                                Ok(tun_writed) => {
-                                    flow_state.incr_rx(tun_writed as u64);
-                                    tun_processed = tun_writed;
-
-                                    if start_stat.is_some() {
-                                        let (duration, ..) = tunnel.stats();
-                                        if duration.is_some() {
-                                            tracing::info!("first handshake successed");
-                                            start_stat.take().unwrap().notify().await;
-                                        }
+                            #[cfg(feature = "rate-limit")]
+                            if let Err(err) = rate_limit.check_n((src.len() as u32).into_nonzero().unwrap()) {
+                                match err {
+                                    NegativeMultiDecision::BatchNonConforming(duration) => {
+                                        // tracing::error!("XXXXXXX: net-block begin, duration={:?}", duration);
+                                        next_net_read_write = Some(Instant::now() + duration);
                                     }
-
-                                    Ok(())
+                                    NegativeMultiDecision::InsufficientCapacity => {
+                                        // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个情况
+                                        tracing::error!("tun processed {}, rate-limit unexpected", src.len());
+                                    }
                                 }
-                                Err(err) => Err(err),
                             }
+
+                            let r = wireguard_udp_input(&tunnel, &mut tun_device, &udp_socket, &udp_remote_addr, &mut dst_buf[..], src, &wg_rate_limiter,
+                                                        #[cfg(feature = "rate-limit")] next_net_read_write.as_ref()).await;
+                            if r.is_ok() {
+                                if start_stat.is_some() {
+                                    let (duration, ..) = tunnel.stats();
+                                    if duration.is_some() {
+                                        tracing::info!("first handshake successed");
+                                        start_stat.take().unwrap().notify().await;
+                                    }
+                                }
+                            }
+
+                            r
                         }
                         Err(err) => Err(err),
                     }
@@ -223,7 +258,10 @@ impl Server {
                 _ = time::sleep_until(next_rate_limiter_rest) => {
                     next_rate_limiter_rest = Instant::now() + RATE_LIMITER_RESET_DURATION;
                     wg_rate_limiter.reset_count();
-                    Ok(())
+                    Ok(ProcessResult {
+                        tun_writed: 0,
+                        net_writed: 0,
+                    })
                 }
                 _ = cancel_waiter.wait() => {
                     tracing::info!("canceled");
@@ -231,15 +269,40 @@ impl Server {
                 }
             };
 
-            if let Err(err) = r {
-                match err {
+            match r {
+                Ok(result) => {
+                    if result.tun_writed > 0 {
+                        flow_state.incr_rx(result.tun_writed as u64);
+                    }
+
+                    if result.net_writed > 0 {
+                        #[cfg(feature = "rate-limit")]
+                        if let Err(err) = rate_limit.check_n((result.net_writed as u32).into_nonzero().unwrap()) {
+                            match err {
+                                NegativeMultiDecision::BatchNonConforming(duration) => {
+                                    // tracing::error!("XXXXXXX: net-block begin2, duration={:?}", duration);
+                                    next_net_read_write = Some(Instant::now() + duration);
+                                }
+                                NegativeMultiDecision::InsufficientCapacity => {
+                                    // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个情况
+                                    tracing::error!("tun processed {}, rate-limit unexpected", result.net_writed);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(err) => match err {
+                    ProcessError::NextTick => {}
                     ProcessError::UdpReconnect => {
                         if udp_socket_create_time.elapsed() > Duration::from_secs(1) {
                             udp_socket_create_time = Instant::now();
                             match create_outbound_udp_socket(af_family, context.connect_opts_ref()).await {
                                 Ok(sock) => {
                                     udp_socket = Some(sock);
-                                    tracing::info!("tick: udp_sock recreated");
+                                    tracing::info!(
+                                        "tick: udp_sock recreated, port={:?}",
+                                        udp_socket.as_ref().unwrap().local_addr()
+                                    );
                                 }
                                 Err(err) => {
                                     if err.kind() == io::ErrorKind::NotFound {
@@ -252,29 +315,7 @@ impl Server {
                             };
                         }
                     }
-                }
-            }
-
-            #[cfg(feature = "rate-limit")]
-            if tun_processed > 0 {
-                if let Err(err) = rate_limit.check_n((tun_processed as u32).into_nonzero().unwrap()) {
-                    match err {
-                        NegativeMultiDecision::BatchNonConforming(duration) => {
-                            // tracing::error!("xxxxx: rate_limit: {:?}", duration);
-                            tokio::select! {
-                                _ = tokio::time::sleep(duration) => {}
-                                _ = cancel_waiter.wait() => {
-                                    tracing::info!("canceled");
-                                    return Ok(());
-                                }
-                            }
-                        }
-                        NegativeMultiDecision::InsufficientCapacity => {
-                            // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个情况
-                            tracing::error!("tun processed {}, rate-limit unexpected", tun_processed);
-                        }
-                    }
-                }
+                },
             }
         }
     }
@@ -287,21 +328,47 @@ async fn wireguard_tick(
     udp_socket: &mut Option<UdpSocket>,
     udp_remote_addr: &SocketAddr,
     dst_buf: &mut [u8],
-) -> Result<(), ProcessError> {
+    #[cfg(feature = "rate-limit")] next_net_read_write: Option<&Instant>,
+) -> Result<ProcessResult, ProcessError> {
     match tunnel.update_timers(&mut dst_buf[..]) {
-        wg::TunnResult::Done => Ok(()),
+        wg::TunnResult::Done => Ok(ProcessResult {
+            tun_writed: 0,
+            net_writed: 0,
+        }),
         wg::TunnResult::Err(wg::WireGuardError::ConnectionExpired) => {
             tracing::info!("tick: Connection Expired");
-            Err(ProcessError::UdpReconnect)
+            Ok(ProcessResult {
+                tun_writed: 0,
+                net_writed: 0,
+            })
         }
         wg::TunnResult::Err(e) => {
             tracing::error!(error = ?e, "tick: update_timers error");
-            Ok(())
+            Ok(ProcessResult {
+                tun_writed: 0,
+                net_writed: 0,
+            })
         }
-        wg::TunnResult::WriteToNetwork(packet) => udp_send(udp_socket, udp_remote_addr, &packet).await,
+        wg::TunnResult::WriteToNetwork(packet) => {
+            let writed = udp_send(
+                udp_socket,
+                udp_remote_addr,
+                &packet,
+                #[cfg(feature = "rate-limit")]
+                next_net_read_write,
+            )
+            .await?;
+            Ok(ProcessResult {
+                tun_writed: 0,
+                net_writed: writed,
+            })
+        }
         _ => {
             tracing::error!("tick: Unexpected result from update_timers");
-            Ok(())
+            Ok(ProcessResult {
+                tun_writed: 0,
+                net_writed: 0,
+            })
         }
     }
 }
@@ -313,17 +380,41 @@ async fn wireguard_tun_input(
     udp_remote_addr: &SocketAddr,
     dst_buf: &mut [u8],
     src: &[u8],
-) -> Result<(), ProcessError> {
+    #[cfg(feature = "rate-limit")] next_net_read_write: Option<&Instant>,
+) -> Result<ProcessResult, ProcessError> {
     match tunnel.encapsulate(src, dst_buf) {
-        wg::TunnResult::Done => Ok(()),
+        wg::TunnResult::Done => Ok(ProcessResult {
+            tun_writed: 0,
+            net_writed: 0,
+        }),
         wg::TunnResult::Err(e) => {
             tracing::error!(error = ?e, "tun_input: Encapsulate error");
-            Ok(())
+            Ok(ProcessResult {
+                tun_writed: 0,
+                net_writed: 0,
+            })
         }
-        wg::TunnResult::WriteToNetwork(packet) => udp_send(udp_socket, udp_remote_addr, &packet).await,
+        wg::TunnResult::WriteToNetwork(packet) => {
+            let writed = udp_send(
+                udp_socket,
+                udp_remote_addr,
+                &packet,
+                #[cfg(feature = "rate-limit")]
+                next_net_read_write,
+            )
+            .await?;
+
+            Ok(ProcessResult {
+                tun_writed: 0,
+                net_writed: writed,
+            })
+        }
         _ => {
             tracing::error!("tun_input: Unexpected result from encapsulate");
-            Ok(())
+            Ok(ProcessResult {
+                tun_writed: 0,
+                net_writed: 0,
+            })
         }
     }
 }
@@ -337,21 +428,38 @@ async fn wireguard_udp_input(
     dst_buf: &mut [u8],
     packet: &[u8],
     rate_limiter: &wg::RateLimiter,
-) -> Result<usize, ProcessError> {
+    #[cfg(feature = "rate-limit")] next_net_read_write: Option<&Instant>,
+) -> Result<ProcessResult, ProcessError> {
     // The rate limiter initially checks mac1 and mac2, and optionally asks to send a cookie
     let parsed_packet = match rate_limiter.verify_packet(Some(udp_remote_addr.ip()), packet, dst_buf) {
         Ok(packet) => packet,
         Err(wg::TunnResult::WriteToNetwork(cookie)) => {
-            udp_send(udp_socket, udp_remote_addr, cookie).await?;
-            return Ok(0);
+            let writed = udp_send(
+                udp_socket,
+                udp_remote_addr,
+                cookie,
+                #[cfg(feature = "rate-limit")]
+                next_net_read_write,
+            )
+            .await?;
+            return Ok(ProcessResult {
+                tun_writed: 0,
+                net_writed: writed,
+            });
         }
         Err(err) => {
             tracing::trace!(err = ?err, "udp_input: verify packet error");
-            return Ok(0);
+            return Ok(ProcessResult {
+                tun_writed: 0,
+                net_writed: 0,
+            });
         }
     };
 
-    let mut tun_write = 0;
+    let mut process_result = ProcessResult {
+        tun_writed: 0,
+        net_writed: 0,
+    };
 
     // We found a peer, use it to decapsulate the message+
     let mut flush = false; // Are there packets to send from the queue?
@@ -359,40 +467,58 @@ async fn wireguard_udp_input(
         wg::TunnResult::Done => {}
         wg::TunnResult::Err(err) => {
             tracing::trace!(err = ?err, "udp_input: handle packet error");
-            return Ok(0);
+            return Ok(process_result);
         }
         wg::TunnResult::WriteToNetwork(packet) => {
             flush = true;
-            udp_send(udp_socket, udp_remote_addr, packet).await?;
+            process_result.net_writed += udp_send(
+                udp_socket,
+                udp_remote_addr,
+                packet,
+                #[cfg(feature = "rate-limit")]
+                next_net_read_write,
+            )
+            .await?;
         }
-        wg::TunnResult::WriteToTunnelV4(packet, _addr) => match write_packet_with_pi(tun_device, packet).await {
-            Err(err) => {
-                tracing::error!(err = ?err, "udp_input: tun write packet(v4) error");
+        wg::TunnResult::WriteToTunnelV4(packet, _addr) => {
+            match write_packet_with_pi(tun_device, packet).await {
+                Err(err) => {
+                    tracing::error!(err = ?err, "udp_input: tun write packet(v4) error");
+                }
+                Ok(()) => {
+                    // tracing::error!("udp_input: tun write packet(v4) {}", packet.len());
+                    process_result.tun_writed += packet.len();
+                }
             }
-            Ok(()) => {
-                // tracing::error!("udp_input: tun write packet(v4) {}", packet.len());
-                tun_write += packet.len();
+        }
+        wg::TunnResult::WriteToTunnelV6(packet, _addr) => {
+            match write_packet_with_pi(tun_device, packet).await {
+                Err(err) => {
+                    tracing::error!(err = ?err, "udp_input: tun write packet(v6) error");
+                }
+                Ok(()) => {
+                    // tracing::error!("udp_input: tun write packet(v6) {}", packet.len());
+                    process_result.tun_writed += packet.len();
+                }
             }
-        },
-        wg::TunnResult::WriteToTunnelV6(packet, _addr) => match write_packet_with_pi(tun_device, packet).await {
-            Err(err) => {
-                tracing::error!(err = ?err, "udp_input: tun write packet(v6) error");
-            }
-            Ok(()) => {
-                // tracing::error!("udp_input: tun write packet(v6) {}", packet.len());
-                tun_write += packet.len();
-            }
-        },
+        }
     };
 
     if flush {
         // Flush pending queue
         while let wg::TunnResult::WriteToNetwork(packet) = tunnel.decapsulate(None, &[], dst_buf) {
-            udp_send(udp_socket, udp_remote_addr, packet).await?;
+            process_result.net_writed += udp_send(
+                udp_socket,
+                udp_remote_addr,
+                packet,
+                #[cfg(feature = "rate-limit")]
+                next_net_read_write,
+            )
+            .await?;
         }
     }
 
-    Ok(tun_write)
+    Ok(process_result)
 }
 
 #[cfg(feature = "local-fake-mode")]
@@ -454,15 +580,30 @@ async fn read_tun_device(config: &LocalConfig, fd: RawFd) -> io::Result<AsyncDev
 }
 
 #[inline]
-async fn udp_recv<'a>(udp_socket: &Option<UdpSocket>, buf: &'a mut [u8]) -> Result<&'a [u8], ProcessError> {
+async fn udp_recv<'a>(
+    udp_socket: &Option<UdpSocket>,
+    buf: &'a mut [u8],
+    #[cfg(feature = "rate-limit")] next_net_read_write: Option<&Instant>,
+) -> Result<&'a [u8], ProcessError> {
     match udp_socket.as_ref() {
-        Some(udp_socket) => match udp_socket.recv_from(buf).await {
-            Ok((n, _addr)) => Ok(&buf[..n]),
-            Err(err) => {
-                tracing::error!(err = ?err, "udp read error");
-                Err(ProcessError::UdpReconnect)
+        Some(udp_socket) => {
+            #[cfg(feature = "rate-limit")]
+            if let Some(next_net_read_write) = next_net_read_write {
+                time::sleep_until(next_net_read_write.clone()).await;
+                return Err(ProcessError::NextTick);
             }
-        },
+
+            match udp_socket.recv_from(buf).await {
+                Ok((n, _addr)) => {
+                    // tracing::error!("udp recv, len={}", n);
+                    Ok(&buf[..n])
+                }
+                Err(err) => {
+                    tracing::error!(err = ?err, "udp read error");
+                    Err(ProcessError::UdpReconnect)
+                }
+            }
+        }
         None => {
             time::sleep(Duration::from_secs(1)).await; // 等待一秒后触发重连
             Err(ProcessError::UdpReconnect)
@@ -475,22 +616,41 @@ async fn udp_send(
     udp_socket: &Option<UdpSocket>,
     udp_remote_addr: &SocketAddr,
     packet: &[u8],
-) -> Result<(), ProcessError> {
+    #[cfg(feature = "rate-limit")] next_net_read_write: Option<&Instant>,
+) -> Result<usize, ProcessError> {
     if udp_socket.is_none() {
         return Err(ProcessError::UdpReconnect);
     }
 
+    #[cfg(feature = "rate-limit")]
+    if next_net_read_write.is_some() {
+        // tracing::error!(
+        //     "udp send ignore, len={}, left={:?}, now={:?}, next={:?}",
+        //     packet.len(),
+        //     next_net_read_write.unwrap().duration_since(Instant::now()),
+        //     Instant::now(),
+        //     next_net_read_write.unwrap()
+        // );
+        return Ok(0);
+    }
+
     let udp_socket = udp_socket.as_ref().unwrap();
     match udp_socket.send_to(&packet, udp_remote_addr).await {
-        Err(err) => {
-            tracing::error!(err = ?err, "udp send error, len={}", packet.len());
-            Err(ProcessError::UdpReconnect)
-        }
+        Err(err) => match err.raw_os_error() {
+            Some(libc::EMSGSIZE) => {
+                tracing::error!(err = ?err, "udp send error 11, len={}", packet.len());
+                Ok(0)
+            }
+            _ => {
+                tracing::error!(err = ?err, "udp send error, len={}", packet.len());
+                Err(ProcessError::UdpReconnect)
+            }
+        },
         Ok(_) => {
             // if packet.len() > 1400 {
-            //     tracing::error!("udp send success, len={}", packet.len());
+            //   tracing::error!("udp send success, len={}", packet.len());
             // }
-            Ok(())
+            Ok(packet.len())
         }
     }
 }
