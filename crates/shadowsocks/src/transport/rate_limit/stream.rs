@@ -127,19 +127,20 @@ impl Debug for RateLimiter {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
-enum State {
-    ReadInner,
-    CheckNextRead,
-    Wait,
+#[derive(Debug, Clone)]
+enum RWState {
+    RWInner,
+    CheckNext(NonZeroU32),
+    Wait(NonZeroU32),
 }
 
 struct RateLimitedContext {
     limiter: Arc<RateLimiter>,
-    delay: Delay,
     jitter: Jitter,
-    state: State,
-    readed: Option<NonZeroU32>,
+    read_state: RWState,
+    read_delay: Option<Delay>,
+    write_state: RWState,
+    write_delay: Option<Delay>,
 }
 
 pub struct RateLimitedStream<S> {
@@ -154,10 +155,11 @@ impl<S> RateLimitedStream<S> {
             stream,
             limiter_ctx: limiter.map(|limiter| RateLimitedContext {
                 limiter,
-                delay: Delay::new(Duration::new(0, 0)),
                 jitter: Jitter::new(Duration::new(0, 0), Duration::new(0, 0)),
-                state: State::ReadInner,
-                readed: None,
+                read_state: RWState::RWInner,
+                read_delay: None,
+                write_state: RWState::RWInner,
+                write_delay: None,
             }),
         }
     }
@@ -175,10 +177,11 @@ impl<S: StreamConnection> StreamConnection for RateLimitedStream<S> {
             Some(limiter) => {
                 self.limiter_ctx = Some(RateLimitedContext {
                     limiter,
-                    delay: Delay::new(Duration::new(0, 0)),
                     jitter: Jitter::new(Duration::new(0, 0), Duration::new(0, 0)),
-                    state: State::ReadInner,
-                    readed: None,
+                    read_state: RWState::RWInner,
+                    read_delay: None,
+                    write_state: RWState::RWInner,
+                    write_delay: None,
                 });
             }
             None => {
@@ -199,76 +202,49 @@ where
     #[inline]
     fn poll_read(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         if self.limiter_ctx.is_none() {
-            let stream = Pin::new(&mut self.stream);
-            return stream.poll_read(cx, buf);
+            return Pin::new(&mut self.stream).poll_read(cx, buf);
         }
 
-        loop {
-            match self.limiter_ctx.as_ref().unwrap().state.clone() {
-                State::ReadInner => {
-                    let max_once_size = self.limiter_ctx.as_ref().unwrap().limiter.max_receive_once();
-                    let buf_capacity = std::cmp::min(max_once_size.unwrap_or_else(|| buf.capacity()), buf.capacity());
-                    let mut recv_buf = buf.take(buf_capacity);
-                    let stream = Pin::new(&mut self.stream);
-                    match stream.poll_read(cx, &mut recv_buf) {
-                        Poll::Pending => return Poll::Pending,
+        let max_once_size = self
+            .limiter_ctx
+            .as_ref()
+            .unwrap()
+            .limiter
+            .max_receive_once()
+            .unwrap_or(buf.capacity());
+
+        while buf.remaining() > 0 {
+            match self.limiter_ctx.as_ref().unwrap().read_state.clone() {
+                RWState::RWInner => {
+                    let mut recv_buf = buf.take(std::cmp::min(max_once_size, buf.remaining()));
+                    match Pin::new(&mut self.stream).poll_read(cx, &mut recv_buf) {
+                        Poll::Pending => break,
                         Poll::Ready(Ok(())) => {
                             let readed = recv_buf.filled().len();
                             unsafe { buf.assume_init(readed) };
                             buf.advance(readed);
                             if readed == 0 {
                                 return Poll::Ready(Ok(()));
-                            } else {
-                                // tracing::error!(
-                                //     "xxxxxxx: limit: received {} data, max-once-size={:?}",
-                                //     buf.filled().len(),
-                                //     max_once_size
-                                // );
-                                // 读取到数据进入CheckNextRead进行检测
-                                let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
-                                limiter_ctx.state = State::CheckNextRead;
-                                limiter_ctx.readed = Some((buf.filled().len() as u32).into_nonzero().unwrap());
-                                continue;
                             }
+
+                            // 读取到数据进入CheckNextRead进行检测
+                            let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
+                            limiter_ctx.read_state =
+                                RWState::CheckNext((buf.filled().len() as u32).into_nonzero().unwrap());
                         }
                         Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-                    }
+                    };
                 }
-                State::CheckNextRead => {
+                RWState::CheckNext(readed) => {
                     let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
-                    let readed = limiter_ctx.readed.unwrap();
                     match limiter_ctx.limiter.check_n(readed) {
                         Err(err) => match err {
                             // 检测不通过，需要处理错误情况
                             NegativeMultiDecision::BatchNonConforming(duration) => {
                                 // 需要等待一定时间，设置好定时器后尝试等待
                                 let duration = limiter_ctx.jitter + duration;
-                                limiter_ctx.delay.reset(duration);
-                                let future = Pin::new(&mut limiter_ctx.delay);
-                                match future.poll(cx) {
-                                    Poll::Pending => {
-                                        // 定时器启动，进入等待状态，此时如果有数据，返回数据，等待只影响下一次读取
-                                        limiter_ctx.state = State::Wait;
-                                        if !buf.filled().is_empty() {
-                                            // tracing::error!(
-                                            //     "xxxxxxx: limit: sleep begin, duration={:?}, return {}",
-                                            //     duration,
-                                            //     buf.filled().len()
-                                            // );
-                                            return Poll::Ready(Ok(()));
-                                        } else {
-                                            // tracing::error!(
-                                            //     "xxxxxxx: limit: sleep begin, duration={:?}, no data",
-                                            //     duration
-                                            // );
-                                            return Poll::Pending;
-                                        }
-                                    }
-                                    Poll::Ready(_) => {
-                                        // tracing::error!("xxxxxxx: limit: sleep skip");
-                                        // 定时器反馈无需等待，则再次检测(下一个循环还是CheckNextRead状态)
-                                    }
-                                }
+                                limiter_ctx.read_delay = Some(Delay::new(duration));
+                                limiter_ctx.read_state = RWState::Wait(readed);
                             }
                             NegativeMultiDecision::InsufficientCapacity => {
                                 // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个请客
@@ -277,33 +253,27 @@ where
                         },
                         Ok(..) => {
                             // 检查通过，直接进入下一个循环读取数据
-                            limiter_ctx.state = State::ReadInner;
-                            limiter_ctx.readed = None;
-
-                            if !buf.filled().is_empty() {
-                                // 从State::ReadInner进入检测状态时，已经可能读取过数据，直接返回上层
-                                // tracing::error!("xxxxxxx: limit: check passed, return {}", buf.filled().len());
-                                return Poll::Ready(Ok(()));
-                            }
-
-                            // 没有已经读取的数据，直接进行一次读取
-                            // tracing::error!("xxxxxxx: limit: check passed, no data");
+                            limiter_ctx.read_state = RWState::RWInner;
                         }
                     }
                 }
-                State::Wait => {
+                RWState::Wait(readed) => {
                     let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
-                    let future = Pin::new(&mut limiter_ctx.delay);
-                    match future.poll(cx) {
-                        Poll::Pending => {
-                            return Poll::Pending;
-                        }
-                        Poll::Ready(_) => {
-                            limiter_ctx.state = State::CheckNextRead;
+                    match Pin::new(limiter_ctx.read_delay.as_mut().unwrap()).poll(cx) {
+                        Poll::Pending => break,
+                        Poll::Ready(()) => {
+                            limiter_ctx.read_state = RWState::CheckNext(readed);
+                            limiter_ctx.read_delay = None;
                         }
                     }
                 }
             }
+        }
+
+        if !buf.filled().is_empty() {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
         }
     }
 }
@@ -314,8 +284,73 @@ where
 {
     #[inline]
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        let stream = Pin::new(&mut self.stream);
-        stream.poll_write(cx, buf)
+        if self.limiter_ctx.is_none() {
+            return Pin::new(&mut self.stream).poll_write(cx, buf);
+        }
+
+        let mut total_writed = 0;
+        while total_writed < buf.len() {
+            match self.limiter_ctx.as_ref().unwrap().write_state.clone() {
+                RWState::RWInner => {
+                    let max_once_size = self.limiter_ctx.as_ref().unwrap().limiter.max_receive_once();
+                    let left_write_size = buf.len() - total_writed;
+                    let once_write = std::cmp::min(max_once_size.unwrap_or(left_write_size), left_write_size);
+                    let send_buf = &buf[total_writed..(total_writed + once_write)];
+                    match Pin::new(&mut self.stream).poll_write(cx, send_buf) {
+                        Poll::Pending => break,
+                        Poll::Ready(Ok(writed)) => {
+                            if writed == 0 {
+                                return Poll::Ready(Ok(total_writed));
+                            }
+
+                            // 读取到数据进入CheckNextRead进行检测
+                            let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
+                            total_writed += writed;
+                            limiter_ctx.write_state = RWState::CheckNext((writed as u32).into_nonzero().unwrap());
+                        }
+                        Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                    }
+                }
+                RWState::CheckNext(writed) => {
+                    let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
+                    match limiter_ctx.limiter.check_n(writed) {
+                        Err(err) => match err {
+                            // 检测不通过，需要处理错误情况
+                            NegativeMultiDecision::BatchNonConforming(duration) => {
+                                // 需要等待一定时间，设置好定时器后尝试等待
+                                let duration = limiter_ctx.jitter + duration;
+                                limiter_ctx.write_delay = Some(Delay::new(duration));
+                                limiter_ctx.write_state = RWState::Wait(writed);
+                            }
+                            NegativeMultiDecision::InsufficientCapacity => {
+                                // 读入的数据超过了最大读取数据，在读取时已经保护过，不应该再进入这个请客
+                                unreachable!()
+                            }
+                        },
+                        Ok(..) => {
+                            // 检查通过，直接进入下一个循环读取数据
+                            limiter_ctx.write_state = RWState::RWInner;
+                        }
+                    }
+                }
+                RWState::Wait(writed) => {
+                    let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
+                    match Pin::new(limiter_ctx.write_delay.as_mut().unwrap()).poll(cx) {
+                        Poll::Pending => break,
+                        Poll::Ready(()) => {
+                            limiter_ctx.write_state = RWState::CheckNext(writed);
+                            limiter_ctx.write_delay = None;
+                        }
+                    }
+                }
+            }
+        }
+
+        if total_writed > 0 {
+            Poll::Ready(Ok(total_writed))
+        } else {
+            Poll::Pending
+        }
     }
 
     #[inline]
