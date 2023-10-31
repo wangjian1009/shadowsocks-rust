@@ -10,6 +10,7 @@ use std::{
 };
 
 use futures::Future;
+use futures_core::ready;
 use futures_timer::Delay;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -213,26 +214,27 @@ where
             .max_receive_once()
             .unwrap_or(buf.capacity());
 
-        while buf.remaining() > 0 {
+        loop {
             match self.limiter_ctx.as_ref().unwrap().read_state.clone() {
                 RWState::RWInner => {
                     let mut recv_buf = buf.take(std::cmp::min(max_once_size, buf.remaining()));
-                    match Pin::new(&mut self.stream).poll_read(cx, &mut recv_buf) {
-                        Poll::Pending => break,
-                        Poll::Ready(Ok(())) => {
+                    match ready!(Pin::new(&mut self.stream).poll_read(cx, &mut recv_buf)) {
+                        Ok(()) => {
                             let readed = recv_buf.filled().len();
-                            unsafe { buf.assume_init(readed) };
-                            buf.advance(readed);
-                            if readed == 0 {
-                                return Poll::Ready(Ok(()));
+
+                            if readed > 0 {
+                                unsafe { buf.assume_init(readed) };
+                                buf.advance(readed);
+
+                                // 读取到数据进入CheckNextRead进行检测
+                                let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
+                                limiter_ctx.read_state =
+                                    RWState::CheckNext((buf.filled().len() as u32).into_nonzero().unwrap());
                             }
 
-                            // 读取到数据进入CheckNextRead进行检测
-                            let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
-                            limiter_ctx.read_state =
-                                RWState::CheckNext((buf.filled().len() as u32).into_nonzero().unwrap());
+                            return Poll::Ready(Ok(()));
                         }
-                        Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                        Err(err) => return Poll::Ready(Err(err)),
                     };
                 }
                 RWState::CheckNext(readed) => {
@@ -259,21 +261,11 @@ where
                 }
                 RWState::Wait(readed) => {
                     let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
-                    match Pin::new(limiter_ctx.read_delay.as_mut().unwrap()).poll(cx) {
-                        Poll::Pending => break,
-                        Poll::Ready(()) => {
-                            limiter_ctx.read_state = RWState::CheckNext(readed);
-                            limiter_ctx.read_delay = None;
-                        }
-                    }
+                    ready!(Pin::new(limiter_ctx.read_delay.as_mut().unwrap()).poll(cx));
+                    limiter_ctx.read_state = RWState::CheckNext(readed);
+                    limiter_ctx.read_delay = None;
                 }
             }
-        }
-
-        if !buf.filled().is_empty() {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
         }
     }
 }
@@ -288,27 +280,28 @@ where
             return Pin::new(&mut self.stream).poll_write(cx, buf);
         }
 
-        let mut total_writed = 0;
-        while total_writed < buf.len() {
+        loop {
             match self.limiter_ctx.as_ref().unwrap().write_state.clone() {
                 RWState::RWInner => {
-                    let max_once_size = self.limiter_ctx.as_ref().unwrap().limiter.max_receive_once();
-                    let left_write_size = buf.len() - total_writed;
-                    let once_write = std::cmp::min(max_once_size.unwrap_or(left_write_size), left_write_size);
-                    let send_buf = &buf[total_writed..(total_writed + once_write)];
-                    match Pin::new(&mut self.stream).poll_write(cx, send_buf) {
-                        Poll::Pending => break,
-                        Poll::Ready(Ok(writed)) => {
-                            if writed == 0 {
-                                return Poll::Ready(Ok(total_writed));
+                    let max_once_size = self
+                        .limiter_ctx
+                        .as_ref()
+                        .unwrap()
+                        .limiter
+                        .max_receive_once()
+                        .unwrap_or(buf.len());
+                    let once_write = std::cmp::min(max_once_size, buf.len());
+                    match ready!(Pin::new(&mut self.stream).poll_write(cx, &buf[..once_write])) {
+                        Ok(writed) => {
+                            if writed > 0 {
+                                // 读取到数据进入CheckNextRead进行检测
+                                let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
+                                limiter_ctx.write_state = RWState::CheckNext((writed as u32).into_nonzero().unwrap());
                             }
 
-                            // 读取到数据进入CheckNextRead进行检测
-                            let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
-                            total_writed += writed;
-                            limiter_ctx.write_state = RWState::CheckNext((writed as u32).into_nonzero().unwrap());
+                            return Poll::Ready(Ok(writed));
                         }
-                        Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                        Err(err) => return Poll::Ready(Err(err)),
                     }
                 }
                 RWState::CheckNext(writed) => {
@@ -335,21 +328,11 @@ where
                 }
                 RWState::Wait(writed) => {
                     let limiter_ctx = self.limiter_ctx.as_mut().unwrap();
-                    match Pin::new(limiter_ctx.write_delay.as_mut().unwrap()).poll(cx) {
-                        Poll::Pending => break,
-                        Poll::Ready(()) => {
-                            limiter_ctx.write_state = RWState::CheckNext(writed);
-                            limiter_ctx.write_delay = None;
-                        }
-                    }
+                    ready!(Pin::new(limiter_ctx.write_delay.as_mut().unwrap()).poll(cx));
+                    limiter_ctx.write_state = RWState::CheckNext(writed);
+                    limiter_ctx.write_delay = None;
                 }
             }
-        }
-
-        if total_writed > 0 {
-            Poll::Ready(Ok(total_writed))
-        } else {
-            Poll::Pending
         }
     }
 
