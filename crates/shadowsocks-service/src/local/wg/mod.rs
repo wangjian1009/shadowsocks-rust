@@ -1,15 +1,17 @@
 use cfg_if::cfg_if;
 use std::cmp::Ordering;
 use std::sync::Arc;
-use std::{net::SocketAddr, os::fd::RawFd};
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    os::fd::RawFd,
+};
 use tokio::{
     io::{self, AsyncReadExt},
-    net::UdpSocket,
     time::{self, Duration, Instant},
 };
 use tun::{AsyncDevice, Configuration as TunConfiguration, Error as TunError, Layer};
 
-use shadowsocks::net::{sys::create_outbound_udp_socket, AddrFamily};
+use shadowsocks::net::{AddrFamily, ConnectOpts, UdpSocket};
 use shadowsocks::wg;
 
 cfg_if! {
@@ -45,6 +47,7 @@ struct ProcessResult {
 
 pub struct Server {
     context: ServiceContext,
+    connect_opts: ConnectOpts,
     tun_device: AsyncDevice,
     tunnel: Box<wg::Tunn>,
     mtu: usize,
@@ -70,6 +73,8 @@ impl Server {
             return Err(io::Error::new(io::ErrorKind::Other, "wireguard only support one peer"));
         }
         let peer_config = &wg_config.peers[0];
+
+        let connect_opts = context.connect_opts_ref().clone();
 
         let itf_private_key: wg::Secret = wg_config.itf.private_key.clone().into();
         let itf_public_key = wg::PublicKey::from(&itf_private_key);
@@ -115,6 +120,7 @@ impl Server {
 
         Ok(Self {
             context,
+            connect_opts,
             tun_device,
             tunnel,
             mtu,
@@ -126,6 +132,7 @@ impl Server {
     pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         let Server {
             context,
+            connect_opts,
             mut tun_device,
             tunnel,
             mtu,
@@ -150,7 +157,14 @@ impl Server {
             SocketAddr::V4(..) => AddrFamily::Ipv4,
             SocketAddr::V6(..) => AddrFamily::Ipv6,
         };
-        let mut udp_socket = match create_outbound_udp_socket(af_family, context.connect_opts_ref()).await {
+
+        let bind_addr = match (af_family, connect_opts.bind_local_addr) {
+            (AddrFamily::Ipv4, Some(IpAddr::V4(ip))) => SocketAddr::new(ip.into(), 0),
+            (AddrFamily::Ipv6, Some(IpAddr::V6(ip))) => SocketAddr::new(ip.into(), 0),
+            (AddrFamily::Ipv4, ..) => SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0),
+            (AddrFamily::Ipv6, ..) => SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 0),
+        };
+        let mut udp_socket = match UdpSocket::bind_with_opts(&bind_addr, &connect_opts).await {
             Ok(sock) => Some(sock),
             Err(err) => {
                 tracing::error!(err = ?err, "create udp socket error");
@@ -296,7 +310,7 @@ impl Server {
                     ProcessError::UdpReconnect => {
                         if udp_socket_create_time.elapsed() > Duration::from_secs(1) {
                             udp_socket_create_time = Instant::now();
-                            match create_outbound_udp_socket(af_family, context.connect_opts_ref()).await {
+                            match UdpSocket::bind_with_opts(&bind_addr, &connect_opts).await {
                                 Ok(sock) => {
                                     udp_socket = Some(sock);
                                     tracing::info!(
