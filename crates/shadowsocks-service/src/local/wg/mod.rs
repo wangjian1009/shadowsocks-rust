@@ -58,7 +58,7 @@ pub struct Server {
 impl Server {
     pub async fn create(
         context: ServiceContext,
-        fd: RawFd,
+        fd: Option<RawFd>,
         local_config: &LocalConfig,
         wg_config: &wg::Config,
     ) -> io::Result<Self> {
@@ -561,7 +561,7 @@ async fn sync_fake_mode(context: &ServiceContext, tunnel: &wg::Tunn) -> bool {
     }
 }
 
-async fn read_tun_device(config: &LocalConfig, fd: RawFd) -> io::Result<AsyncDevice> {
+async fn read_tun_device(config: &LocalConfig, fd: Option<RawFd>) -> io::Result<AsyncDevice> {
     let mut tun_config = TunConfiguration::default();
 
     if let Some(addr) = config.tun_interface_address {
@@ -574,7 +574,9 @@ async fn read_tun_device(config: &LocalConfig, fd: RawFd) -> io::Result<AsyncDev
         tun_config.name(name);
     }
 
-    tun_config.raw_fd(fd);
+    if let Some(fd) = fd {
+        tun_config.raw_fd(fd);
+    }
 
     tun_config.layer(Layer::L3).up();
 

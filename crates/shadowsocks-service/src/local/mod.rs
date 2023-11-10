@@ -434,26 +434,26 @@ impl Server {
                 }
                 #[cfg(any(feature = "local-tun", feature = "wireguard"))]
                 ProtocolType::Tun => {
+                    let mut fd = None;
                     #[cfg(unix)]
-                    let fd = if let Some(fd) = local_config.tun_device_fd {
-                        fd
-                    } else if let Some(ref fd_path) = local_config.tun_device_fd_from_path {
+                    if let Some(f) = local_config.tun_device_fd {
+                        fd = Some(f);
+                    } else if let Some(fd_path) = local_config.tun_device_fd_from_path.as_ref() {
                         #[cfg(feature = "local-flow-stat")]
                         let stat_addr = match config.local_stat_addr.as_ref() {
                             Some(local_state_addr) => local_state_addr.clone(),
                             None => return Err(io::Error::new(io::ErrorKind::Other, "tun no local_state_addr for fd")),
                         };
 
-                        Self::read_local_fd(
-                            #[cfg(feature = "local-flow-stat")]
-                            &stat_addr,
-                            fd_path,
-                            Duration::from_secs(3),
-                        )
-                        .await?
-                    } else {
-                        tracing::error!("no tun fd setted");
-                        return Err(io::Error::new(io::ErrorKind::Other, "no tun fd setted"));
+                        fd = Some(
+                            Self::read_local_fd(
+                                #[cfg(feature = "local-flow-stat")]
+                                &stat_addr,
+                                fd_path,
+                                Duration::from_secs(3),
+                            )
+                            .await?,
+                        );
                     };
 
                     #[cfg(feature = "wireguard")]
@@ -482,7 +482,10 @@ impl Server {
                             builder.udp_expiry_duration(d);
                         }
                         builder.mode(local_config.mode);
-                        builder.file_descriptor(fd);
+
+                        if let Some(fd) = fd {
+                            builder.file_descriptor(fd);
+                        }
 
                         let server = builder.build().await?;
                         local_server.tun_servers.push(server);
