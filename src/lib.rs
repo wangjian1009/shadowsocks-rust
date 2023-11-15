@@ -12,9 +12,6 @@ pub mod service;
 pub mod sys;
 pub mod vparser;
 
-#[cfg(feature = "lib-entry")]
-mod libentry;
-
 #[cfg(feature = "statistics")]
 pub mod statistics;
 
@@ -34,3 +31,5 @@ pub const BUILD_TIME: &str = build_time::build_time_utc!();
 
 /// shadowsocks version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub use shadowsocks_service;

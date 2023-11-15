@@ -20,12 +20,7 @@ use shadowsocks_service::config::RedirType;
 use shadowsocks_service::{
     acl::AccessControl,
     config::{
-        read_variable_field_value,
-        Config,
-        ConfigType,
-        LocalConfig,
-        LocalInstanceConfig,
-        ProtocolType,
+        read_variable_field_value, Config, ConfigType, LocalConfig, LocalInstanceConfig, ProtocolType,
         ServerInstanceConfig,
     },
     create_local,
@@ -56,8 +51,7 @@ use shadowsocks_service::shadowsocks::{config::VlessConfig, vless::UUID};
 
 use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
-    monitor,
-    vparser,
+    monitor, vparser,
 };
 
 #[cfg(feature = "local-dns")]
@@ -610,23 +604,6 @@ pub fn define_command_line_options(mut app: Command) -> Command {
 
     app
 }
-
-// >>>>>>> variant B
-//     let (config, runtime) = {
-//         let config_path_opt = matches.get_one::<PathBuf>("CONFIG").cloned().or_else(|| {
-//             if !matches.contains_id("SERVER_CONFIG") {
-//                 match crate::config::get_default_config_path("local.json") {
-//                     None => None,
-//                     Some(p) => {
-//                         println!("loading default config {p:?}");
-//                         Some(p)
-//                     }
-//                 }
-//             } else {
-//                 None
-//             }
-//         });
-// ======= end
 
 /// Program entrance `main`
 pub fn main(matches: &ArgMatches) -> ExitCode {
