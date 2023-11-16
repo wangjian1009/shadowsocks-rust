@@ -4,6 +4,10 @@ use block_modes::{block_padding::Pkcs7, BlockMode, Cbc};
 
 type Aes256Cbc = Cbc<Aes256, Pkcs7>;
 
+const IV: [u8; 16] = [
+    0xae, 0x80, 0xed, 0xcb, 0x37, 0xc2, 0x70, 0x33, 0x21, 0xb3, 0x31, 0x07, 0xcf, 0x35, 0x88, 0xc3,
+];
+
 // fn parse_package_name(path: &str) -> &str {
 //     let parts: Vec<&str> = path.split("/").collect();
 //     if parts.len() < 5 {
@@ -12,24 +16,49 @@ type Aes256Cbc = Cbc<Aes256, Pkcs7>;
 //     return parts[4];
 // }
 
-pub fn decrypt(enc_password: &str) -> Result<String, String> {
+pub fn decrypt_no_base64(msg: &[u8]) -> Result<String, String> {
     let key = getkey()?;
-    let iv: [u8; 16] = [
-        0xae, 0x80, 0xed, 0xcb, 0x37, 0xc2, 0x70, 0x33, 0x21, 0xb3, 0x31, 0x07, 0xcf, 0x35, 0x88, 0xc3,
-    ];
 
+    let decrypted = aes256_cbc_decrypt(msg, &key, &IV)?;
+
+    return match String::from_utf8(decrypted) {
+        Ok(result) => Ok(result),
+        Err(code) => Err(format!("{:?}", code)),
+    };
+}
+
+pub fn encrypt_no_base64(plaintext: &str) -> Result<Vec<u8>, String> {
+    let key = getkey()?;
+
+    let cipher = Aes256Cbc::new_from_slices(&key, &IV)
+        .map_err(|e| format!("aes256_cbc_encrypt: cipher create iv fail {}", e))?;
+
+    let encrypted = cipher.encrypt_vec(plaintext.as_bytes());
+
+    Ok(encrypted)
+}
+
+pub fn decrypt(enc_password: &str) -> Result<String, String> {
     let enc_password = match base64::engine::general_purpose::STANDARD.decode(enc_password) {
         Ok(r) => r,
         Err(code) => {
             return Err(format!("{:?}", code));
         }
     };
-    let decrypt_password = aes256_cbc_decrypt(enc_password.as_ref(), &key, &iv)?;
+    decrypt_no_base64(&enc_password)
+}
 
-    return match String::from_utf8(decrypt_password) {
-        Ok(result) => Ok(result),
-        Err(code) => Err(format!("{:?}", code)),
-    };
+pub fn encrypt(origin_password: &str) -> Result<String, String> {
+    let key = getkey()?;
+
+    let encrypt_password = aes256_cbc_encrypt(origin_password.as_bytes(), &key, &IV);
+    Ok(base64::engine::general_purpose::STANDARD.encode(encrypt_password))
+}
+
+fn aes256_cbc_encrypt(data: &[u8], key: &[u8], iv: &[u8; 16]) -> Vec<u8> {
+    let cipher = Aes256Cbc::new_from_slices(&key, iv).unwrap();
+    let encrypted_data = cipher.encrypt_vec(data);
+    encrypted_data
 }
 
 fn getkey() -> Result<Vec<u8>, String> {
@@ -80,7 +109,7 @@ mod tests {
 
     #[test]
     fn decrypt_password_works() {
-        let encryped_passwd = encrypt_password("*!hvk9^4baX#Y%Ja");
+        let encryped_passwd = assert_ok!(encrypt("*!hvk9^4baX#Y%Ja"));
         let decrypt_passwd = decrypt(&encryped_passwd).unwrap();
         // println!("xxxx: hexkey: {}", hex::encode(getkey().to_vec()));
         // println!("xxxx: encryped_passwd: {}", encryped_passwd);
@@ -121,22 +150,5 @@ mod tests {
             assert_ok!(String::from_utf8(assert_ok!(getkey()))),
             String::from("3,B]6e9Lnm2X(92)/Y_Mx#hjx-F-MvxD")
         );
-    }
-
-    fn encrypt_password(origin_password: &str) -> String {
-        let key = assert_ok!(getkey());
-        // let iv = md5(pkg);
-        let iv: [u8; 16] = [
-            0xae, 0x80, 0xed, 0xcb, 0x37, 0xc2, 0x70, 0x33, 0x21, 0xb3, 0x31, 0x07, 0xcf, 0x35, 0x88, 0xc3,
-        ];
-
-        let encrypt_password = aes256_cbc_encrypt(origin_password.as_bytes(), &key, &iv);
-        base64::encode(encrypt_password)
-    }
-
-    fn aes256_cbc_encrypt(data: &[u8], key: &[u8], iv: &[u8; 16]) -> Vec<u8> {
-        let cipher = Aes256Cbc::new_from_slices(&key, iv).unwrap();
-        let encrypted_data = cipher.encrypt_vec(data);
-        encrypted_data
     }
 }

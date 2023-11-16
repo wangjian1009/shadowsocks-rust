@@ -78,7 +78,7 @@ pub mod sniffer;
 #[cfg(feature = "env-crypt")]
 mod env_crypt;
 #[cfg(feature = "env-crypt")]
-pub use env_crypt::decrypt;
+pub use env_crypt::{decrypt, decrypt_no_base64, encrypt, encrypt_no_base64};
 
 #[cfg(test)]
 #[macro_use]
