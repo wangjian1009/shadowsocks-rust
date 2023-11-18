@@ -86,8 +86,8 @@ pub async fn send_local_notify(stat_addr: &LocalFlowStatAddress, cmd: u8, buf: &
             let mut stream = match time::timeout(timeout, UnixStream::connect(stat_path)).await {
                 Ok(Ok(s)) => s,
                 Ok(Err(err)) => {
-                    debug!(path = stat_path.to_str(), "send client flow statistic error: {}", err);
-                    return Err(err);
+                    tracing::error!(path = stat_path.to_str(), "send client flow statistic error: {}", err);
+                    return Ok(());
                 }
                 Err(..) => {
                     debug!(path = stat_path.to_str(), "send client flow statistic error: timeout");
