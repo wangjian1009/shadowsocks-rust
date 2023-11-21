@@ -14,9 +14,7 @@ use tokio::{
 
 use crate::net::{
     sys::{set_common_sockopt_after_connect, set_common_sockopt_for_connect},
-    AcceptOpts,
-    AddrFamily,
-    ConnectOpts,
+    AcceptOpts, AddrFamily, ConnectOpts,
 };
 
 /// A wrapper of `TcpStream`
@@ -96,7 +94,10 @@ pub async fn bind_outbound_udp_socket(bind_addr: &SocketAddr, _config: &ConnectO
     let af = AddrFamily::from(bind_addr);
 
     let socket = UdpSocket::bind(bind_addr).await?;
-    let _ = set_disable_ip_fragmentation(af, &socket);
+
+    if config.disable_ip_fragmentation.unwrap_or(true) {
+        let _ = set_disable_ip_fragmentation(af, &socket);
+    }
 
     Ok(socket)
 }

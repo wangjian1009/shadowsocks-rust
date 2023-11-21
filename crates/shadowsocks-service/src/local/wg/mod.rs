@@ -110,7 +110,7 @@ impl Server {
             }
         };
 
-        let mtu = wg_config.itf.mtu.unwrap_or(1420);
+        let mtu = wg_config.itf.mtu.unwrap_or(1280);
         if mtu > MAX_UDP_SIZE - 32 {
             return Err(io::Error::new(
                 io::ErrorKind::Other,

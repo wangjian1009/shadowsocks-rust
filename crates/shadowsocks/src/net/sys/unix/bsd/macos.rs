@@ -24,9 +24,7 @@ use tracing::{debug, error, warn};
 use crate::net::{
     sys::{set_common_sockopt_after_connect, set_common_sockopt_for_connect, socket_bind_dual_stack},
     udp::{BatchRecvMessage, BatchSendMessage},
-    AcceptOpts,
-    AddrFamily,
-    ConnectOpts,
+    AcceptOpts, AddrFamily, ConnectOpts,
 };
 
 /// A `TcpStream` that supports TFO (TCP Fast Open)
@@ -381,8 +379,10 @@ pub async fn bind_outbound_udp_socket(bind_addr: &SocketAddr, config: &ConnectOp
         UdpSocket::from_std(socket.into())?
     };
 
-    if let Err(err) = set_disable_ip_fragmentation(af, &socket) {
-        warn!("failed to disable IP fragmentation, error: {}", err);
+    if config.disable_ip_fragmentation.unwrap_or(true) {
+        if let Err(err) = set_disable_ip_fragmentation(af, &socket) {
+            warn!("failed to disable IP fragmentation, error: {}", err);
+        }
     }
 
     // Set IP_BOUND_IF for BSD-like

@@ -201,6 +201,9 @@ struct SSConfig {
     mptcp: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    disable_ip_fragmentation: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg(any(target_os = "linux", target_os = "android"))]
     outbound_fwmark: Option<u32>,
 
@@ -1139,6 +1142,8 @@ pub struct Config {
     pub keep_alive: Option<Duration>,
     /// Multipath-TCP
     pub mptcp: bool,
+    /// disable_ip_fragmentation
+    pub disable_ip_fragmentation: Option<bool>,
 
     /// Speed limit
     #[cfg(feature = "rate-limit")]
@@ -1303,6 +1308,7 @@ impl Config {
             fast_open: false,
             keep_alive: None,
             mptcp: false,
+            disable_ip_fragmentation: None,
 
             #[cfg(feature = "rate-limit")]
             rate_limit: None,
@@ -2075,6 +2081,11 @@ impl Config {
         // Multipath-TCP
         if let Some(b) = config.mptcp {
             nconfig.mptcp = b;
+        }
+
+        // disable_ip_fragmentation
+        if let Some(b) = config.disable_ip_fragmentation {
+            nconfig.disable_ip_fragmentation = Some(b);
         }
 
         // Speed limit

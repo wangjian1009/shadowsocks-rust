@@ -58,6 +58,9 @@ pub struct ConnectOpts {
 
     /// TCP options
     pub tcp: TcpSocketOpts,
+
+    /// disable_ip_fragmentation
+    pub disable_ip_fragmentation: Option<bool>,
 }
 
 /// Inbound connection options

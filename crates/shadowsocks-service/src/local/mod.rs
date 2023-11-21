@@ -180,6 +180,7 @@ impl Server {
             bind_interface: config.outbound_bind_interface,
             bind_local_addr: config.outbound_bind_addr,
 
+            disable_ip_fragmentation: config.disable_ip_fragmentation,
             ..Default::default()
         };
         connect_opts.tcp.send_buffer_size = config.outbound_send_buffer_size;
