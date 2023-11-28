@@ -121,7 +121,7 @@ impl RedirTcpServer {
             "shadowsocks TCP redirect ({}) listening on {}",
             self.redir_ty, actual_local_addr
         );
-        start_stat.notify().await;
+        start_stat.notify().await?;
 
         let cancel_waiter = self.context.cancel_waiter();
         loop {

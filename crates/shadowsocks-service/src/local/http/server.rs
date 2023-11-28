@@ -152,7 +152,7 @@ impl Http {
         };
 
         info!("shadowsocks HTTP listening on {}", server.local_addr());
-        start_stat.notify().await;
+        start_stat.notify().await?;
 
         let cancel_waiter = self.context.cancel_waiter();
         tokio::select! {

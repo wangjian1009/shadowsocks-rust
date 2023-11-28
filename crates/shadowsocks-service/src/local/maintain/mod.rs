@@ -41,7 +41,7 @@ impl MaintainServer {
         });
 
         tracing::info!("shadowsocks maintain server listening on {}", self.addr);
-        start_stat.notify().await;
+        start_stat.notify().await?;
 
         let cancel_waiter = self.context.service_context.cancel_waiter();
         tokio::select! {

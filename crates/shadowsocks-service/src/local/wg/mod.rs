@@ -259,7 +259,7 @@ impl Server {
                                     let (duration, ..) = tunnel.stats();
                                     if duration.is_some() {
                                         tracing::info!("first handshake successed");
-                                        start_stat.take().unwrap().notify().await;
+                                        start_stat.take().unwrap().notify().await?;
                                     }
                                 }
                             }

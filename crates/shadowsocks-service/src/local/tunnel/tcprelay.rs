@@ -57,7 +57,7 @@ impl TunnelTcpServer {
     /// Start serving
     pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         info!("shadowsocks TCP tunnel listening on {}", self.listener.local_addr()?);
-        start_stat.notify().await;
+        start_stat.notify().await?;
 
         let forward_addr = Arc::new(self.forward_addr);
         let cancel_waiter = self.context.cancel_waiter();

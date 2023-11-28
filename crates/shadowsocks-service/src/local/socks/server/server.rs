@@ -60,7 +60,7 @@ impl SocksTcpServer {
     /// Start TCP accept loop
     pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         info!("shadowsocks socks TCP listening on {}", self.listener.local_addr()?);
-        start_stat.notify().await;
+        start_stat.notify().await?;
 
         // If UDP is enabled, SOCK5 UDP_ASSOCIATE command will let client to send requests to this address
         let udp_bind_addr = Arc::new(self.udp_bind_addr);

@@ -116,7 +116,7 @@ impl Socks5UdpServer {
     /// Run server accept loop
     pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         info!("shadowsocks socks5 UDP listening on {}", self.listener.local_addr()?);
-        start_stat.notify().await;
+        start_stat.notify().await?;
 
         let (mut manager, mut close_rx) = UdpAssociationManager::new(
             self.context.clone(),

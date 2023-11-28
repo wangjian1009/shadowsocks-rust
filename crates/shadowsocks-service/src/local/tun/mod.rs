@@ -149,7 +149,7 @@ impl Tun {
             self.device.get_ref().name(),
             self.mode,
         );
-        start_stat.notify().await;
+        start_stat.notify().await?;
 
         let mut packet_buffer = vec![0u8; 65536 + IFF_PI_PREFIX_LEN].into_boxed_slice();
         let cancel_waiter = self.context.cancel_waiter();

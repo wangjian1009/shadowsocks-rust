@@ -65,7 +65,8 @@ impl StartStat {
             match parent_sender.send(self.name.clone().unwrap()).await {
                 Ok(()) => {}
                 Err(_err) => {
-                    panic!("{self}: send notify error")
+                    tracing::error!(err = ?_err, "{self}: send notify error");
+                    return Err(io::Error::new(io::ErrorKind::Other, "send notify error"));
                 }
             }
         }
@@ -73,7 +74,7 @@ impl StartStat {
         Ok(())
     }
 
-    pub async fn notify(&self) {
+    pub async fn notify(&self) -> io::Result<()> {
         if self.child.lock().is_some() {
             panic!("{self}: can`t notify with child");
         }
@@ -82,13 +83,16 @@ impl StartStat {
             Some(parent_sender) => match parent_sender.send(self.name.clone().unwrap()).await {
                 Ok(()) => {}
                 Err(_err) => {
-                    panic!("{self}: send notify error")
+                    tracing::error!(err = ?_err, "{self}: send notify error");
+                    return Err(io::Error::new(io::ErrorKind::Other, "send notify error"));
                 }
             },
             None => {
                 panic!("{self}: no parent sender");
             }
         }
+
+        Ok(())
     }
 
     pub fn new_child(&mut self, child_name: &str) -> StartStat {

@@ -266,7 +266,7 @@ impl RedirUdpServer {
             "shadowsocks UDP redirect ({}) listening on {}",
             self.redir_ty, local_addr
         );
-        start_stat.notify().await;
+        start_stat.notify().await?;
 
         #[allow(clippy::needless_update)]
         let (mut manager, mut close_rx) = UdpAssociationManager::new(

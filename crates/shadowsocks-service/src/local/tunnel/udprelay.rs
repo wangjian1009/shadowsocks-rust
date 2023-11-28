@@ -81,7 +81,7 @@ impl TunnelUdpServer {
     /// Start serving
     pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
         info!("shadowsocks UDP tunnel listening on {}", self.listener.local_addr()?);
-        start_stat.notify().await;
+        start_stat.notify().await?;
 
         let (mut manager, mut close_rx) = UdpAssociationManager::new(
             self.context.clone(),

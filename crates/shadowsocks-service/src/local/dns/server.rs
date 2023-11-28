@@ -173,7 +173,7 @@ impl DnsTcpServer {
             "shadowsocks dns TCP listening on {}",
             self.listener.local_addr()?,
         );
-        start_stat.notify().await;
+        start_stat.notify().await?;
 
         let cancel_waiter = self.context.cancel_waiter();
         loop {
@@ -331,7 +331,7 @@ impl DnsUdpServer {
             "shadowsocks dns UDP listening on {}",
             self.listener.local_addr()?,
         );
-        start_stat.notify().await;
+        start_stat.notify().await?;
 
         let cancel_waiter = self.context.cancel_waiter();
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
