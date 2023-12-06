@@ -127,6 +127,27 @@ fn string_decode(input: &[u8]) -> String {
     String::from_utf8(buf).unwrap()
 }
 
+pub struct FakeCheckServer {
+    context: ServiceContext,
+}
+
+impl FakeCheckServer {
+    pub fn new(context: ServiceContext) -> Self {
+        Self { context }
+    }
+
+    pub async fn run(mut self) -> tokio::io::Result<()> {
+        tokio::time::sleep(Duration::from_millis(500 + rand::random::<u64>() % 1500)).await;
+        let result = crate::local::android::validate_sign();
+        if result.error.is_some() {
+            self.context.set_fake_mode(FakeMode::ParamError);
+        }
+
+        futures::future::pending::<()>().await;
+        panic!("check completed");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

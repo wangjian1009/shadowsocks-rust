@@ -88,7 +88,11 @@ cfg_if! {
         use crate::sniffer::SnifferProtocol;
         use crate::local::context::ProtocolAction;
     }
+
 }
+
+#[cfg(all(feature = "local-fake-mode", target_os = "android"))]
+use crate::local::context::FakeCheckServer;
 
 /// Default TCP Keep Alive timeout
 ///
@@ -134,6 +138,8 @@ pub struct Server {
     wg_server: Option<wg::Server>,
     #[cfg(feature = "local-maintain")]
     maintain_server: Option<maintain::MaintainServer>,
+    #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
+    fake_check_server: Option<FakeCheckServer>,
     #[cfg(feature = "local-flow-stat")]
     reporter_server: Option<reporter::ReporterServer>,
 }
@@ -306,6 +312,8 @@ impl Server {
             wg_server: None,
             #[cfg(feature = "local-maintain")]
             maintain_server: None,
+            #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
+            fake_check_server: None,
             #[cfg(feature = "local-flow-stat")]
             reporter_server: None,
         };
@@ -501,6 +509,13 @@ impl Server {
             local_server.maintain_server = Some(maintain::MaintainServer::new(context.clone(), maintain_addr))
         }
 
+        // 延迟检测 FakeMode
+        #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
+        {
+            local_server.fake_check_server = Some(FakeCheckServer::new(context.clone()));
+        }
+
+        // 流量上报服务
         #[cfg(feature = "local-flow-stat")]
         if let Some(local_stat_addr) = config.local_stat_addr {
             local_server.reporter_server = Some(reporter::ReporterServer::create(
@@ -573,6 +588,11 @@ impl Server {
                 svr.run(start_stat.new_child("maintain"))
                     .instrument(info_span!("maintain")),
             )));
+        }
+
+        #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
+        if let Some(svr) = self.fake_check_server {
+            vfut.push(ServerHandle(tokio::spawn(svr.run().instrument(info_span!("fake")))));
         }
 
         #[cfg(feature = "local-flow-stat")]

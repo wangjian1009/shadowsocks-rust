@@ -46,7 +46,7 @@ cfg_if! {
 cfg_if! {
     if #[cfg(feature = "local-fake-mode")] {
         mod fake_mode;
-        pub use fake_mode::FakeMode;
+        pub use fake_mode::{FakeMode, FakeCheckServer};
     }
 }
 
