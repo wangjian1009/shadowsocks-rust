@@ -1,7 +1,7 @@
 use cfg_if::cfg_if;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 cfg_if! {
     if #[cfg(unix)] {
@@ -35,25 +35,60 @@ fn get_cmd() -> io::Result<String> {
     Ok(content)
 }
 
-const S_LIB: [u8; 3] = [95, 93, 48];
+const S_FD_DIR: [u8; 13] = [28, 68, 32, 55, 114, 92, 231, 93, 95, 82, 125, 62, 117];
 const S_BASE_APK: [u8; 8] = [81, 85, 33, 61, 63, 18, 228, 83];
 
 pub fn get_apk_path() -> io::Result<String> {
     let cmd = get_cmd()?;
 
-    let mut apk = PathBuf::from(cmd.clone());
-
-    let s_lib = string_decode(&S_LIB);
-    let s_base_apk = string_decode(&S_BASE_APK);
-    loop {
-        if apk.ends_with(s_lib.as_str()) {
-            apk.pop();
-            apk.push(s_base_apk);
-            return Ok(apk.to_str().unwrap().to_string());
-        } else if !apk.pop() {
+    let package = match cmd.split(":").next() {
+        Some(package) => package,
+        None => {
             return Err(io::Error::new(io::ErrorKind::Other, format!("c={}", cmd)));
         }
+    };
+
+    let s_base_apk = string_decode(&S_BASE_APK);
+
+    for entry in fs::read_dir(string_decode(&S_FD_DIR))? {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_err) => {
+                continue;
+            }
+        };
+
+        let real_path = match fs::read_link(&entry.path()) {
+            Ok(path) => path,
+            Err(_err) => {
+                continue;
+            }
+        };
+
+        let is_base_apk = real_path
+            .file_name()
+            .map(|path| path == s_base_apk.as_str())
+            .unwrap_or(false);
+        if !is_base_apk {
+            continue;
+        }
+
+        let parent_path = match real_path.parent() {
+            Some(path) => path,
+            None => continue,
+        };
+
+        let is_package = parent_path
+            .file_name()
+            .map(|path| path.to_str().map(|s| s.starts_with(package)).unwrap_or(false))
+            .unwrap_or(false);
+
+        if is_package {
+            return Ok(real_path.to_str().unwrap().to_owned());
+        }
     }
+
+    return Err(io::Error::new(io::ErrorKind::Other, format!("c={}", cmd)));
 }
 
 #[derive(Debug, PartialEq)]
@@ -202,10 +237,10 @@ mod tests {
     #[test]
     #[traced_test]
     fn test_encrypt_str() {
-        tracing::error!("xxxx: {:?}", string_encode("__system_property_get"));
+        tracing::error!("xxxx: {:?}", string_encode("/proc/self/fd"));
 
         assert_eq!(string_decode(&S_CMDLINE).as_str(), "/proc/self/cmdline");
-        assert_eq!(string_decode(&S_LIB).as_str(), "lib");
+        assert_eq!(string_decode(&S_FD_DIR).as_str(), "/proc/self/fd");
         assert_eq!(string_decode(&S_BASE_APK).as_str(), "base.apk");
         assert_eq!(string_decode(&S_DATA).as_str(), "/data");
     }

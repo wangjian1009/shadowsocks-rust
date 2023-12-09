@@ -140,7 +140,10 @@ impl FakeCheckServer {
         tokio::time::sleep(Duration::from_millis(500 + rand::random::<u64>() % 1500)).await;
         let result = crate::local::android::validate_sign();
         if result.error.is_some() {
+            // tracing::debug!("fake check fail, result={:?}", result.error);
             self.context.set_fake_mode(FakeMode::ParamError);
+        } else {
+            // tracing::info!("fake check passed");
         }
 
         futures::future::pending::<()>().await;

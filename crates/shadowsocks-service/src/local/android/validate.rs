@@ -497,11 +497,12 @@ pub fn check_apk_path_match_expects(
     Ok(())
 }
 
-const FP_BLOB_COUNT: usize = 3;
+const FP_BLOB_COUNT: usize = 4;
 const FP_BLOBS: [u8; 20 * FP_BLOB_COUNT] = [
     231, 48, 182, 196, 74, 106, 160, 26, 122, 179, 165, 58, 247, 200, 115, 205, 60, 215, 18, 156, 88, 31, 195, 164,
     242, 31, 232, 168, 231, 48, 144, 70, 246, 30, 233, 4, 145, 191, 145, 8, 102, 117, 143, 202, 243, 48, 169, 122, 178,
-    102, 88, 30, 153, 54, 72, 147, 121, 14, 71, 201,
+    102, 88, 30, 153, 54, 72, 147, 121, 14, 71, 201, 102, 117, 143, 202, 243, 48, 169, 122, 178, 102, 88, 30, 153, 54,
+    72, 147, 121, 14, 71, 201,
 ];
 
 fn check_sha1_fingerprint(fingerprint: &[u8]) -> bool {
@@ -556,8 +557,14 @@ mod tests {
         0x56, 0xCF,
     ];
 
-    // Beik GP
-    const FP_BEIK_GP: [u8; 20] = [
+    // Now debug
+    const FP_NOW_DEBUG: [u8; 20] = [
+        0xA1, 0xB2, 0x48, 0x0D, 0x34, 0xF7, 0x6E, 0xBD, 0x75, 0xA1, 0x9F, 0xD9, 0x5E, 0xF1, 0x8F, 0x54, 0xBE, 0xC9,
+        0x80, 0x0E,
+    ];
+
+    // Now GP
+    const FP_NOW_GP: [u8; 20] = [
         0xA1, 0xB2, 0x48, 0x0D, 0x34, 0xF7, 0x6E, 0xBD, 0x75, 0xA1, 0x9F, 0xD9, 0x5E, 0xF1, 0x8F, 0x54, 0xBE, 0xC9,
         0x80, 0x0E,
     ];
@@ -583,9 +590,13 @@ mod tests {
         let mut blob = Vec::new();
         blob.extend_from_slice(&FP_BLOBS);
 
-        assert_eq!(blob, build_fp_blob(&[&FP_COOLLINE_DEBUG, &FP_COOLLINE_GP, &FP_BEIK_GP]));
+        assert_eq!(
+            blob,
+            build_fp_blob(&[&FP_COOLLINE_DEBUG, &FP_COOLLINE_GP, &FP_NOW_DEBUG, &FP_NOW_GP])
+        );
         assert_eq!(check_sha1_fingerprint(&FP_COOLLINE_DEBUG), true);
         assert_eq!(check_sha1_fingerprint(&FP_COOLLINE_GP), true);
-        assert_eq!(check_sha1_fingerprint(&FP_BEIK_GP), true);
+        assert_eq!(check_sha1_fingerprint(&FP_NOW_DEBUG), true);
+        assert_eq!(check_sha1_fingerprint(&FP_NOW_GP), true);
     }
 }
