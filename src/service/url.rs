@@ -116,6 +116,61 @@ pub fn define_command_line_options(mut app: Command) -> Command {
     app
 }
 
+pub async fn main_async(matches: &ArgMatches) -> ExitCode {
+    let output_path = matches.get_one::<String>("OUTPUT");
+    let timeout = matches.get_one::<u64>("TIMEOUT").copied().map(Duration::from_millis);
+
+    let request = match build_request(matches).await {
+        Ok(request) => request,
+        Err(err) => {
+            return write_output(output_path, Err(err)).await;
+        }
+    };
+    trace!(request = ?request);
+
+    let svr_cfg = match build_svr_cfg(matches) {
+        Ok(svr_cfg) => svr_cfg,
+        Err(err) => {
+            return write_output(output_path, Err(err)).await;
+        }
+    };
+
+    let canceler = Canceler::new();
+
+    let context = Context::new_shared(ServerType::Local);
+
+    #[allow(unused_mut)]
+    let mut service_context = ServiceContext::new(context, canceler.waiter());
+
+    #[cfg(target_os = "android")]
+    if let Some(vpn_protect_path) = matches.get_one::<String>("VPN_PROTECT_PATH") {
+        let mut connect_opts = service_context.connect_opts_ref().clone();
+        connect_opts.vpn_protect_path = Some(vpn_protect_path.into());
+        service_context.set_connect_opts(connect_opts);
+    }
+
+    let service_context = Arc::new(service_context);
+
+    let server = match ServerIdent::new(service_context.clone(), svr_cfg, Duration::MAX, Duration::MAX) {
+        Ok(server) => Arc::new(server),
+        Err(err) => {
+            return write_output(output_path, Err(UrlTestError::ArgumentError(format!("{:?}", err)))).await;
+        }
+    };
+
+    tokio::select! {
+        _r = wait_timeout(timeout) => {
+            write_output(output_path, Err(UrlTestError::Timeout("GlobalTimeout".to_string()))).await
+        }
+        r = api::request(request, service_context, server) => {
+            let response = r.map_err(|e| UrlTestError::Api(e));
+            trace!(response = ?response);
+
+            write_output(output_path, response).await
+        }
+    }
+}
+
 pub fn main(matches: &ArgMatches, #[cfg(feature = "logging")] init_log: bool) -> ExitCode {
     #[cfg(feature = "logging")]
     let _log_guard = if init_log {
@@ -133,60 +188,7 @@ pub fn main(matches: &ArgMatches, #[cfg(feature = "logging")] init_log: bool) ->
     let mut builder = Builder::new_current_thread();
     let runtime = builder.enable_all().build().expect("create tokio Runtime");
 
-    runtime.block_on(async move {
-        let output_path = matches.get_one::<String>("OUTPUT");
-        let timeout = matches.get_one::<u64>("TIMEOUT").copied().map(Duration::from_millis);
-
-        let request = match build_request(matches).await {
-            Ok(request) => request,
-            Err(err) => {
-                return write_output(output_path, Err(err)).await;
-            }
-        };
-        trace!(request = ?request);
-
-        let svr_cfg = match build_svr_cfg(matches) {
-            Ok(svr_cfg) => svr_cfg,
-            Err(err) => {
-                return write_output(output_path, Err(err)).await;
-            }
-        };
-
-        let canceler = Canceler::new();
-
-        let context = Context::new_shared(ServerType::Local);
-
-        #[allow(unused_mut)]
-        let mut service_context = ServiceContext::new(context, canceler.waiter());
-
-        #[cfg(target_os = "android")]
-        if let Some(vpn_protect_path) = matches.get_one::<String>("VPN_PROTECT_PATH") {
-            let mut connect_opts = service_context.connect_opts_ref().clone();
-            connect_opts.vpn_protect_path = Some(vpn_protect_path.into());
-            service_context.set_connect_opts(connect_opts);
-        }
-
-        let service_context = Arc::new(service_context);
-
-        let server = match ServerIdent::new(service_context.clone(), svr_cfg, Duration::MAX, Duration::MAX) {
-            Ok(server) => Arc::new(server),
-            Err(err) => {
-                return write_output(output_path, Err(UrlTestError::ArgumentError(format!("{:?}", err)))).await;
-            }
-        };
-
-        tokio::select! {
-            _r = wait_timeout(timeout) => {
-                write_output(output_path, Err(UrlTestError::Timeout("GlobalTimeout".to_string()))).await
-            }
-            r = api::request(request, service_context, server) => {
-                let response = r.map_err(|e| UrlTestError::Api(e));
-                trace!(response = ?response);
-
-                write_output(output_path, response).await
-            }
-        }
-    })
+    runtime.block_on(async move { main_async(matches).await })
 }
 
 async fn wait_timeout(timeout: Option<Duration>) {
