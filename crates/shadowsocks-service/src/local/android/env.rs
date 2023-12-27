@@ -38,15 +38,19 @@ fn get_cmd() -> io::Result<String> {
 const S_FD_DIR: [u8; 13] = [28, 68, 32, 55, 114, 92, 231, 93, 95, 82, 125, 62, 117];
 const S_BASE_APK: [u8; 8] = [81, 85, 33, 61, 63, 18, 228, 83];
 
-pub fn get_apk_path() -> io::Result<String> {
+pub fn get_package_name() -> io::Result<String> {
     let cmd = get_cmd()?;
 
-    let package = match cmd.split(":").next() {
-        Some(package) => package,
+    match cmd.split(":").next() {
+        Some(package) => Ok(package.into()),
         None => {
             return Err(io::Error::new(io::ErrorKind::Other, format!("c={}", cmd)));
         }
-    };
+    }
+}
+
+pub fn get_apk_path() -> io::Result<String> {
+    let package = get_package_name()?;
 
     let s_base_apk = string_decode(&S_BASE_APK);
 
@@ -80,7 +84,7 @@ pub fn get_apk_path() -> io::Result<String> {
 
         let is_package = parent_path
             .file_name()
-            .map(|path| path.to_str().map(|s| s.starts_with(package)).unwrap_or(false))
+            .map(|path| path.to_str().map(|s| s.starts_with(&package)).unwrap_or(false))
             .unwrap_or(false);
 
         if is_package {
@@ -88,7 +92,7 @@ pub fn get_apk_path() -> io::Result<String> {
         }
     }
 
-    return Err(io::Error::new(io::ErrorKind::Other, format!("c={}", cmd)));
+    return Err(io::Error::new(io::ErrorKind::Other, format!("c={}", package)));
 }
 
 #[derive(Debug, PartialEq)]

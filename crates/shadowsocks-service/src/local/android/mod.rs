@@ -7,6 +7,7 @@ cfg_if! {
         mod signed_data;
         mod sha1;
 
+        pub use env::{get_apk_path, get_package_name};
         pub use validate::{ValidateResult, validate_sign, ValidateError};
     }
 }
