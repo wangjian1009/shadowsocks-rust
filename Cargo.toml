@@ -298,7 +298,7 @@ libc = { version = "0.2", features = ["extra_traits"] }
 rand = "0.8"
 
 futures = "0.3"
-tokio = { version = "*", features = ["rt", "signal", "io-std", "fs"] }
+tokio = { version = "1.9", features = ["rt", "signal", "io-std", "fs"] }
 console-subscriber = { version = "0.1.8", optional = true }
 num_cpus = "1.15"
 
@@ -338,7 +338,7 @@ tracing-test = { version = "*", features = ["no-env-filter"] }
 byteorder = "1.5"
 env_logger = "0.10"
 byte_string = "1.0"
-tokio = { version = "1", features = ["net", "time", "macros", "io-util"] }
+tokio = { version = "1.9", features = ["net", "time", "macros", "io-util"] }
 tokio-test = "*"
 
 [patch.crates-io]
