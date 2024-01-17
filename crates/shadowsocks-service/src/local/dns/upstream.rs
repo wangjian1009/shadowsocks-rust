@@ -6,6 +6,10 @@ use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{BufMut, BytesMut};
+use hickory_resolver::proto::{
+    error::{ProtoError, ProtoErrorKind},
+    op::Message,
+};
 use rand::{thread_rng, Rng};
 use shadowsocks::{
     config::ServerProtocol,
@@ -25,11 +29,6 @@ use tokio::{
     net::UdpSocket,
     sync::Notify,
     time,
-};
-
-use trust_dns_resolver::proto::{
-    error::{ProtoError, ProtoErrorKind},
-    op::Message,
 };
 
 use crate::{

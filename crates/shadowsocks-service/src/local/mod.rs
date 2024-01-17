@@ -15,8 +15,6 @@ use shadowsocks::{
     config::{Mode, ServerProtocol, ServerType},
     context::Context,
     net::{AcceptOpts, ConnectOpts},
-    relay::socks5::Address,
-    ServerAddr,
 };
 use tokio::task::JoinHandle;
 use tracing::{info_span, trace, Instrument};
@@ -195,6 +193,7 @@ impl Server {
         connect_opts.tcp.fastopen = config.fast_open;
         connect_opts.tcp.keepalive = config.keep_alive.or(Some(LOCAL_DEFAULT_KEEPALIVE_TIMEOUT));
         connect_opts.tcp.mptcp = config.mptcp;
+        connect_opts.udp.mtu = config.udp_mtu;
         context.set_connect_opts(connect_opts);
 
         let mut accept_opts = AcceptOpts {
@@ -207,6 +206,7 @@ impl Server {
         accept_opts.tcp.fastopen = config.fast_open;
         accept_opts.tcp.keepalive = config.keep_alive.or(Some(LOCAL_DEFAULT_KEEPALIVE_TIMEOUT));
         accept_opts.tcp.mptcp = config.mptcp;
+        accept_opts.udp.mtu = config.udp_mtu;
         context.set_accept_opts(accept_opts);
 
         if let Some(resolver) = build_dns_resolver(
@@ -353,11 +353,22 @@ impl Server {
                         server_builder.set_udp_bind_addr(b.clone());
                     }
 
+                    #[cfg(target_os = "macos")]
+                    if let Some(n) = local_config.launchd_tcp_socket_name {
+                        server_builder.set_launchd_tcp_socket_name(n);
+                    }
+                    #[cfg(target_os = "macos")]
+                    if let Some(n) = local_config.launchd_udp_socket_name {
+                        server_builder.set_launchd_udp_socket_name(n);
+                    }
+
                     let server = server_builder.build().await?;
                     local_server.socks_servers.push(server);
                 }
                 #[cfg(feature = "local-tunnel")]
                 ProtocolType::Tunnel => {
+                    use shadowsocks::{relay::socks5::Address, ServerAddr};
+
                     let client_addr = match local_config.addr {
                         Some(a) => a,
                         None => return Err(io::Error::new(ErrorKind::Other, "tunnel requires local address")),
@@ -382,6 +393,15 @@ impl Server {
                         server_builder.set_udp_bind_addr(udp_addr);
                     }
 
+                    #[cfg(target_os = "macos")]
+                    if let Some(n) = local_config.launchd_tcp_socket_name {
+                        server_builder.set_launchd_tcp_socket_name(n);
+                    }
+                    #[cfg(target_os = "macos")]
+                    if let Some(n) = local_config.launchd_udp_socket_name {
+                        server_builder.set_launchd_udp_socket_name(n);
+                    }
+
                     let server = server_builder.build().await?;
                     local_server.tunnel_servers.push(server);
                 }
@@ -392,7 +412,14 @@ impl Server {
                         None => return Err(io::Error::new(ErrorKind::Other, "http requires local address")),
                     };
 
-                    let builder = HttpBuilder::with_context(Arc::new(context), client_addr, balancer);
+                    #[allow(unused_mut)]
+                    let mut builder = HttpBuilder::with_context(Arc::new(context.clone()), client_addr, balancer);
+
+                    #[cfg(target_os = "macos")]
+                    if let Some(n) = local_config.launchd_tcp_socket_name {
+                        builder.set_launchd_tcp_socket_name(n);
+                    }
+
                     let server = builder.build().await?;
                     local_server.http_servers.push(server);
                 }
@@ -428,15 +455,28 @@ impl Server {
                     };
 
                     let mut server_builder = {
-                        let local_addr = local_config.local_dns_addr;
-                        let remote_addr = match local_config.remote_dns_addr.expect("missing remote_dns_addr") {
-                            ServerAddr::SocketAddr(addr) => Address::SocketAddress(addr),
-                            ServerAddr::DomainName(path, port) => Address::DomainNameAddress(path, port),
-                        };
+                        let remote_addr = local_config.remote_dns_addr.expect("missing remote_dns_addr");
+                        let client_cache_size = local_config.client_cache_size.unwrap_or(5);
 
-                        DnsBuilder::with_context(Arc::new(context), client_addr, local_addr, remote_addr, balancer)
+                        DnsBuilder::with_context(
+                            Arc::new(context.clone()),
+                            client_addr,
+                            local_config.local_dns_addr.clone(),
+                            remote_addr.clone().into(),
+                            balancer,
+                            client_cache_size,
+                        )
                     };
                     server_builder.set_mode(local_config.mode);
+
+                    #[cfg(target_os = "macos")]
+                    if let Some(n) = local_config.launchd_tcp_socket_name {
+                        server_builder.set_launchd_tcp_socket_name(n);
+                    }
+                    #[cfg(target_os = "macos")]
+                    if let Some(n) = local_config.launchd_udp_socket_name {
+                        server_builder.set_launchd_udp_socket_name(n);
+                    }
 
                     let server = server_builder.build().await?;
                     local_server.dns_servers.push(server);

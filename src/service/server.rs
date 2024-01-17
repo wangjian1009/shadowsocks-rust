@@ -1,6 +1,7 @@
 //! Server launchers
 
 use std::{
+    future::Future,
     net::{IpAddr, SocketAddr},
     path::PathBuf,
     process::ExitCode,
@@ -10,7 +11,10 @@ use std::{
 
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
 use futures::future::{self, Either};
-use tokio::{self, runtime::Builder};
+use tokio::{
+    self,
+    runtime::{Builder, Runtime},
+};
 use tracing::{error, info};
 
 use shadowsocks_service::{
@@ -51,8 +55,7 @@ use shadowsocks_service::shadowsocks::{
 use crate::logging;
 use crate::{
     config::{Config as ServiceConfig, RuntimeMode},
-    monitor,
-    vparser,
+    monitor, vparser,
 };
 
 #[cfg(feature = "statistics")]
@@ -526,8 +529,8 @@ pub fn define_command_line_options(mut app: Command) -> Command {
     app
 }
 
-/// Program entrance `main`
-pub fn main(matches: &ArgMatches) -> ExitCode {
+/// Create `Runtime` and `main` entry
+pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = ExitCode> + '_), ExitCode> {
     let (config, runtime, service_config) = {
         let config_path_opt = matches.get_one::<PathBuf>("CONFIG").cloned().or_else(|| {
             if !matches.contains_id("SERVER_CONFIG") {
@@ -548,7 +551,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 Ok(c) => c,
                 Err(err) => {
                     eprintln!("loading config {config_path:?}, {err}");
-                    return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
+                    return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                 }
             },
             None => ServiceConfig::default(),
@@ -560,7 +563,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 Ok(cfg) => cfg,
                 Err(err) => {
                     eprintln!("loading config {cpath:?}, {err}");
-                    return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
+                    return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                 }
             },
             None => Config::new(ConfigType::Server),
@@ -579,7 +582,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                     }
                     None => {
                         eprintln!("missing `vless-user`");
-                        return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
+                        return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
                     }
                 };
 
@@ -660,7 +663,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
             if protocol.is_none() {
                 eprintln!("No protocol specfic");
-                return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
+                return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
             }
 
             let svr_addr = svr_addr.parse::<ServerAddr>().expect("server-addr");
@@ -815,7 +818,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                 Ok(acl) => acl,
                 Err(err) => {
                     eprintln!("loading ACL \"{acl_file}\", {err}");
-                    return crate::EXIT_CODE_LOAD_ACL_FAILURE.into();
+                    return Err(crate::EXIT_CODE_LOAD_ACL_FAILURE.into());
                 }
             };
             config.acl = Some(acl);
@@ -866,12 +869,12 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
                     --server-addr, --encrypt-method, --password command line option, \
                         or configuration file, check more details in https://shadowsocks.org/guide/configs.html"
             );
-            return crate::EXIT_CODE_INSUFFICIENT_PARAMS.into();
+            return Err(crate::EXIT_CODE_INSUFFICIENT_PARAMS.into());
         }
 
         if let Err(err) = config.check_integrity() {
             eprintln!("config integrity check failed, {err}");
-            return crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into();
+            return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
         }
 
         #[cfg(unix)]
@@ -882,7 +885,10 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 
         #[cfg(unix)]
         if let Some(uname) = matches.get_one::<String>("USER") {
-            crate::sys::run_as_user(uname);
+            if let Err(err) = crate::sys::run_as_user(uname) {
+                eprintln!("failed to change as user, error: {err}");
+                return Err(crate::EXIT_CODE_INSUFFICIENT_PARAMS.into());
+            }
         }
 
         let mut worker_count = 1;
@@ -908,7 +914,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
         (config, runtime, service_config)
     };
 
-    runtime.block_on(async move {
+    let main_fut = async move {
         #[cfg(feature = "logging")]
         let log_guard = logging::init_with_config("ssserver", &service_config.log);
 
@@ -942,9 +948,6 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
             );
         }
 
-        info!("shadowsocks server {} build {}", crate::VERSION, crate::BUILD_TIME);
-        info!("{:?}", service_config);
-
         let app_cancel = Arc::new(Canceler::new());
 
         let abort_signal = monitor::create_signal_monitor(app_cancel.clone());
@@ -972,7 +975,18 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
         log_guard.close().await;
 
         exit_code
-    })
+    };
+
+    Ok((runtime, main_fut))
+}
+
+/// Program entrance `main`
+#[inline]
+pub fn main(matches: &ArgMatches) -> ExitCode {
+    match create(matches) {
+        Ok((runtime, main_fut)) => runtime.block_on(main_fut),
+        Err(code) => code,
+    }
 }
 
 #[cfg(test)]

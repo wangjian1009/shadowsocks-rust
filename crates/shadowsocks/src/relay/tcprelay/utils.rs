@@ -154,7 +154,7 @@ where
     Copy {
         reader,
         writer,
-        buf: CopyBuffer::new(encrypted_read_buffer_size(method), idle_timeout),
+        buf: CopyBuffer::new(plain_read_buffer_size(method), idle_timeout),
     }
     .await
 }
@@ -178,17 +178,6 @@ where
     .await
 }
 
-fn encrypted_read_buffer_size(method: CipherKind) -> usize {
-    match method.category() {
-        CipherCategory::Aead => super::aead::MAX_PACKET_SIZE + method.tag_len(),
-        #[cfg(feature = "stream-cipher")]
-        CipherCategory::Stream => 1 << 14,
-        CipherCategory::None => 1 << 14,
-        #[cfg(feature = "aead-cipher-2022")]
-        CipherCategory::Aead2022 => super::aead_2022::MAX_PACKET_SIZE + method.tag_len(),
-    }
-}
-
 fn plain_read_buffer_size(method: CipherKind) -> usize {
     match method.category() {
         CipherCategory::Aead => super::aead::MAX_PACKET_SIZE,
@@ -198,12 +187,6 @@ fn plain_read_buffer_size(method: CipherKind) -> usize {
         #[cfg(feature = "aead-cipher-2022")]
         CipherCategory::Aead2022 => super::aead_2022::MAX_PACKET_SIZE,
     }
-}
-
-/// Create a buffer for reading from shadowsocks' encrypted channel
-#[inline]
-pub fn alloc_encrypted_read_buffer(method: CipherKind) -> Box<[u8]> {
-    vec![0u8; encrypted_read_buffer_size(method)].into_boxed_slice()
 }
 
 /// Create a buffer for reading from plain channel (not encrypted), for copying data into encrypted channel
@@ -380,7 +363,7 @@ where
         a: encrypted,
         b: plain,
         timeout_waiter,
-        a_to_b: TransferState::Running(CopyBuffer::new(encrypted_read_buffer_size(method), timeout_ticker_a)),
+        a_to_b: TransferState::Running(CopyBuffer::new(plain_read_buffer_size(method), timeout_ticker_a)),
         b_to_a: TransferState::Running(CopyBuffer::new(plain_read_buffer_size(method), timeout_ticker_b)),
     }
     .await

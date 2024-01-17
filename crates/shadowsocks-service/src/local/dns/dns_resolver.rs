@@ -7,11 +7,11 @@ use std::{
 
 use async_trait::async_trait;
 use futures::future;
-use tracing::{debug_span, trace, Instrument};
-use trust_dns_resolver::proto::{
+use hickory_resolver::proto::{
     op::{Message, Query},
     rr::{DNSClass, Name, RData, RecordType},
 };
+use tracing::{debug_span, trace, Instrument};
 
 use shadowsocks::{config::Mode, dns_resolver::DnsResolve, net::ConnectOpts};
 

@@ -10,9 +10,9 @@ use std::{
     time::Duration,
 };
 
+use hickory_resolver::proto::{error::ProtoError, op::Message};
 use tokio::sync::Mutex;
 use tracing::{debug, trace};
-use trust_dns_resolver::proto::{error::ProtoError, op::Message};
 
 use shadowsocks::{net::ConnectOpts, relay::socks5::Address};
 
@@ -197,7 +197,7 @@ impl DnsClientCache {
                 }
             }
             Entry::Vacant(vac) => {
-                let mut q = VecDeque::with_capacity(5);
+                let mut q = VecDeque::with_capacity(self.max_client_per_addr);
                 q.push_back(client);
                 vac.insert(q);
             }

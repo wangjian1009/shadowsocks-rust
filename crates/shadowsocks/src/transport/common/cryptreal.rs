@@ -1,5 +1,6 @@
 use super::crypt::AEAD;
-use aes_gcm::aead::{Aead, NewAead};
+use aead::KeyInit;
+use aes_gcm::aead::Aead;
 use aes_gcm::{Aes128Gcm, Key, Nonce};
 use sha2::{Digest, Sha256};
 use std::io;
@@ -11,7 +12,7 @@ pub struct AEADAESGCMBasedOnSeed {
 impl AEADAESGCMBasedOnSeed {
     pub fn new(seed: &str) -> Self {
         let hashed_seed = Sha256::digest(seed.as_bytes());
-        let key = Key::from_slice(&hashed_seed.as_slice()[..16]);
+        let key = Key::<Aes128Gcm>::from_slice(&hashed_seed.as_slice()[..16]);
         Self {
             block: Aes128Gcm::new(key),
         }

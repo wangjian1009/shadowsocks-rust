@@ -1,6 +1,6 @@
 //! Resolver Alternatives
 
-#[cfg(feature = "trust-dns")]
+#[cfg(feature = "hickory-dns")]
 use std::sync::Arc;
 use std::{
     fmt::{self, Debug},
@@ -9,23 +9,23 @@ use std::{
     time::Instant,
 };
 
-#[cfg(feature = "trust-dns")]
-use crate::net::ConnectOpts;
-#[cfg(feature = "trust-dns")]
+#[cfg(feature = "hickory-dns")]
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use cfg_if::cfg_if;
+#[cfg(feature = "hickory-dns")]
+use hickory_resolver::config::ResolverConfig;
+#[cfg(feature = "hickory-dns")]
+use hickory_resolver::config::ResolverOpts;
 use tokio::net::lookup_host;
-#[cfg(all(feature = "trust-dns", unix, not(target_os = "android")))]
+#[cfg(all(feature = "hickory-dns", unix, not(target_os = "android")))]
 use tokio::task::JoinHandle;
-use tracing::{level_enabled, trace, Level};
-#[cfg(feature = "trust-dns")]
-use trust_dns_resolver::config::ResolverConfig;
-#[cfg(feature = "trust-dns")]
-use trust_dns_resolver::config::ResolverOpts;
 
-#[cfg(feature = "trust-dns")]
-use super::trust_dns_resolver::DnsResolver as TrustDnsResolver;
+#[cfg(feature = "hickory-dns")]
+use crate::net::ConnectOpts;
+
+#[cfg(feature = "hickory-dns")]
+use super::hickory_dns_resolver::DnsResolver as HickoryDnsResolver;
 
 /// Abstract DNS resolver
 #[async_trait]
@@ -34,13 +34,12 @@ pub trait DnsResolve {
     async fn resolve(&self, addr: &str, port: u16) -> io::Result<Vec<SocketAddr>>;
 }
 
-#[allow(dead_code)]
-#[cfg(feature = "trust-dns")]
-pub struct TrustDnsSystemResolver {
-    resolver: ArcSwap<TrustDnsResolver>,
-    #[cfg_attr(windows, allow(dead_code))]
+#[cfg(feature = "hickory-dns")]
+pub struct HickoryDnsSystemResolver {
+    resolver: ArcSwap<HickoryDnsResolver>,
+    #[allow(dead_code)]
     connect_opts: ConnectOpts,
-    #[cfg_attr(windows, allow(dead_code))]
+    #[allow(dead_code)]
     opts: Option<ResolverOpts>,
 }
 
@@ -50,15 +49,15 @@ pub enum DnsResolver {
     /// System Resolver, which is tokio's builtin resolver
     System,
     /// Trust-DNS's system resolver
-    #[cfg(feature = "trust-dns")]
-    TrustDnsSystem {
-        inner: Arc<TrustDnsSystemResolver>,
-        #[cfg(all(feature = "trust-dns", unix, not(target_os = "android")))]
+    #[cfg(feature = "hickory-dns")]
+    HickoryDnsSystem {
+        inner: Arc<HickoryDnsSystemResolver>,
+        #[cfg(all(feature = "hickory-dns", unix, not(target_os = "android")))]
         abortable: JoinHandle<()>,
     },
     /// Trust-DNS resolver
-    #[cfg(feature = "trust-dns")]
-    TrustDns(TrustDnsResolver),
+    #[cfg(feature = "hickory-dns")]
+    HickoryDns(HickoryDnsResolver),
     /// Customized Resolver
     Custom(Box<dyn DnsResolve + Send + Sync>),
 }
@@ -73,32 +72,32 @@ impl Debug for DnsResolver {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             DnsResolver::System => f.write_str("System"),
-            #[cfg(feature = "trust-dns")]
-            DnsResolver::TrustDnsSystem { .. } => f.write_str("TrustDnsSystem(..)"),
-            #[cfg(feature = "trust-dns")]
-            DnsResolver::TrustDns(..) => f.write_str("TrustDns(..)"),
+            #[cfg(feature = "hickory-dns")]
+            DnsResolver::HickoryDnsSystem { .. } => f.write_str("HickoryDnsSystem(..)"),
+            #[cfg(feature = "hickory-dns")]
+            DnsResolver::HickoryDns(..) => f.write_str("HickoryDns(..)"),
             DnsResolver::Custom(..) => f.write_str("Custom(..)"),
         }
     }
 }
 
-#[cfg(feature = "trust-dns")]
+#[cfg(feature = "hickory-dns")]
 impl Drop for DnsResolver {
     fn drop(&mut self) {
-        #[cfg(all(feature = "trust-dns", unix, not(target_os = "android")))]
-        if let DnsResolver::TrustDnsSystem { ref abortable, .. } = *self {
+        #[cfg(all(feature = "hickory-dns", unix, not(target_os = "android")))]
+        if let DnsResolver::HickoryDnsSystem { ref abortable, .. } = *self {
             abortable.abort();
         }
     }
 }
 
 cfg_if! {
-    if #[cfg(feature = "trust-dns")] {
+    if #[cfg(feature = "hickory-dns")] {
         /// Resolved result
         enum EitherResolved<A, B, C, D> {
             Tokio(A),
-            TrustDnsSystem(B),
-            TrustDns(C),
+            HickoryDnsSystem(B),
+            HickoryDns(C),
             Custom(D),
         }
 
@@ -114,8 +113,8 @@ cfg_if! {
             fn next(&mut self) -> Option<SocketAddr> {
                 match *self {
                     EitherResolved::Tokio(ref mut a) => a.next(),
-                    EitherResolved::TrustDnsSystem(ref mut b) => b.next(),
-                    EitherResolved::TrustDns(ref mut c) => c.next(),
+                    EitherResolved::HickoryDnsSystem(ref mut b) => b.next(),
+                    EitherResolved::HickoryDns(ref mut c) => c.next(),
                     EitherResolved::Custom(ref mut d) => d.next(),
                 }
             }
@@ -144,19 +143,19 @@ cfg_if! {
     }
 }
 
-#[cfg(all(feature = "trust-dns", unix, not(target_os = "android")))]
-async fn trust_dns_notify_update_dns(resolver: Arc<TrustDnsSystemResolver>) -> notify::Result<()> {
+#[cfg(all(feature = "hickory-dns", unix, not(target_os = "android")))]
+async fn hickory_dns_notify_update_dns(resolver: Arc<HickoryDnsSystemResolver>) -> notify::Result<()> {
     use std::{path::Path, time::Duration};
 
     use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Result as NotifyResult, Watcher};
     use tokio::{sync::watch, time};
 
-    use super::trust_dns_resolver::create_resolver;
+    use super::hickory_dns_resolver::create_resolver;
 
     static DNS_RESOLV_FILE_PATH: &str = "/etc/resolv.conf";
 
     if !Path::new(DNS_RESOLV_FILE_PATH).exists() {
-        trace!("resolv file {DNS_RESOLV_FILE_PATH} doesn't exist");
+        tracing::trace!("resolv file {DNS_RESOLV_FILE_PATH} doesn't exist");
         return Ok(());
     }
 
@@ -165,7 +164,7 @@ async fn trust_dns_notify_update_dns(resolver: Arc<TrustDnsSystemResolver>) -> n
     let mut watcher: RecommendedWatcher =
         notify::recommended_watcher(move |ev_result: NotifyResult<Event>| match ev_result {
             Ok(ev) => {
-                trace!("received {DNS_RESOLV_FILE_PATH} event {ev:?}");
+                tracing::trace!("received {DNS_RESOLV_FILE_PATH} event {ev:?}");
 
                 if let EventKind::Modify(..) = ev.kind {
                     tx.send(ev).expect("watcher.send");
@@ -183,7 +182,7 @@ async fn trust_dns_notify_update_dns(resolver: Arc<TrustDnsSystemResolver>) -> n
     let mut update_task: Option<JoinHandle<()>> = None;
 
     while rx.changed().await.is_ok() {
-        trace!("received notify {DNS_RESOLV_FILE_PATH} changed");
+        tracing::trace!("received notify {DNS_RESOLV_FILE_PATH} changed");
 
         // Kill the pending task
         if let Some(t) = update_task.take() {
@@ -197,7 +196,7 @@ async fn trust_dns_notify_update_dns(resolver: Arc<TrustDnsSystemResolver>) -> n
                 // Update once for all those Modify events
                 time::sleep(Duration::from_secs(1)).await;
 
-                match create_resolver(None, resolver.opts, resolver.connect_opts.clone()).await {
+                match create_resolver(None, resolver.opts.clone(), resolver.connect_opts.clone()).await {
                     Ok(r) => {
                         tracing::debug!("auto-reload {DNS_RESOLV_FILE_PATH}");
 
@@ -224,51 +223,51 @@ impl DnsResolver {
         DnsResolver::System
     }
 
-    /// Use trust-dns DNS system resolver (with DNS cache)
+    /// Use hickory-dns DNS system resolver (with DNS cache)
     ///
     /// On *nix system, it will try to read configurations from `/etc/resolv.conf`.
-    #[cfg(feature = "trust-dns")]
-    pub async fn trust_dns_system_resolver(
+    #[cfg(feature = "hickory-dns")]
+    pub async fn hickory_dns_system_resolver(
         opts: Option<ResolverOpts>,
         connect_opts: ConnectOpts,
     ) -> io::Result<DnsResolver> {
-        use super::trust_dns_resolver::create_resolver;
+        use super::hickory_dns_resolver::create_resolver;
 
-        let resolver = create_resolver(None, opts, connect_opts.clone()).await?;
+        let resolver = create_resolver(None, opts.clone(), connect_opts.clone()).await?;
 
-        let inner = Arc::new(TrustDnsSystemResolver {
+        let inner = Arc::new(HickoryDnsSystemResolver {
             resolver: ArcSwap::from(Arc::new(resolver)),
             connect_opts,
             opts,
         });
 
         cfg_if! {
-            if #[cfg(all(feature = "trust-dns", unix, not(target_os = "android")))] {
+            if #[cfg(all(feature = "hickory-dns", unix, not(target_os = "android")))] {
                 let abortable = {
                     let inner = inner.clone();
                     tokio::spawn(async {
-                        if let Err(err) = trust_dns_notify_update_dns(inner).await {
+                        if let Err(err) = hickory_dns_notify_update_dns(inner).await {
                             tracing::error!("failed to watch DNS system configuration changes, error: {}", err);
                         }
                     })
                 };
 
-                Ok(DnsResolver::TrustDnsSystem { inner, abortable })
+                Ok(DnsResolver::HickoryDnsSystem { inner, abortable })
             } else {
-                Ok(DnsResolver::TrustDnsSystem { inner })
+                Ok(DnsResolver::HickoryDnsSystem { inner })
             }
         }
     }
 
-    /// Use trust-dns DNS resolver (with DNS cache)
-    #[cfg(feature = "trust-dns")]
-    pub async fn trust_dns_resolver(
+    /// Use hickory-dns DNS resolver (with DNS cache)
+    #[cfg(feature = "hickory-dns")]
+    pub async fn hickory_resolver(
         dns: ResolverConfig,
         opts: Option<ResolverOpts>,
         connect_opts: ConnectOpts,
     ) -> io::Result<DnsResolver> {
-        use super::trust_dns_resolver::create_resolver;
-        Ok(DnsResolver::TrustDns(
+        use super::hickory_dns_resolver::create_resolver;
+        Ok(DnsResolver::HickoryDns(
             create_resolver(Some(dns), opts, connect_opts).await?,
         ))
     }
@@ -293,7 +292,7 @@ impl DnsResolver {
 
         impl<'x, 'y> ResolverLogger<'x, 'y> {
             fn new(resolver: &'x DnsResolver, addr: &'y str, port: u16) -> ResolverLogger<'x, 'y> {
-                let start_time = if level_enabled!(Level::TRACE) {
+                let start_time = if tracing::enabled!(tracing::Level::TRACE) {
                     Some(Instant::now())
                 } else {
                     None
@@ -317,24 +316,24 @@ impl DnsResolver {
 
                         match *self.resolver {
                             DnsResolver::System => {
-                                trace!(
+                                tracing::trace!(
                                     "DNS resolved {}:{} with tokio {}s",
                                     self.addr,
                                     self.port,
                                     elapsed.as_secs_f32()
                                 );
                             }
-                            #[cfg(feature = "trust-dns")]
-                            DnsResolver::TrustDnsSystem { .. } | DnsResolver::TrustDns(..) => {
-                                trace!(
-                                    "DNS resolved {}:{} with trust-dns {}s",
+                            #[cfg(feature = "hickory-dns")]
+                            DnsResolver::HickoryDnsSystem { .. } | DnsResolver::HickoryDns(..) => {
+                                tracing::trace!(
+                                    "DNS resolved {}:{} with hickory-dns {}s",
                                     self.addr,
                                     self.port,
                                     elapsed.as_secs_f32()
                                 );
                             }
                             DnsResolver::Custom(..) => {
-                                trace!(
+                                tracing::trace!(
                                     "DNS resolved {}:{} with customized {}s",
                                     self.addr,
                                     self.port,
@@ -345,14 +344,14 @@ impl DnsResolver {
                     }
                     None => match *self.resolver {
                         DnsResolver::System => {
-                            trace!("DNS resolved {}:{} with tokio", self.addr, self.port);
+                            tracing::trace!("DNS resolved {}:{} with tokio", self.addr, self.port);
                         }
-                        #[cfg(feature = "trust-dns")]
-                        DnsResolver::TrustDnsSystem { .. } | DnsResolver::TrustDns(..) => {
-                            trace!("DNS resolved {}:{} with trust-dns", self.addr, self.port);
+                        #[cfg(feature = "hickory-dns")]
+                        DnsResolver::HickoryDnsSystem { .. } | DnsResolver::HickoryDns(..) => {
+                            tracing::trace!("DNS resolved {}:{} with hickory-dns", self.addr, self.port);
                         }
                         DnsResolver::Custom(..) => {
-                            trace!("DNS resolved {}:{} with customized", self.addr, self.port);
+                            tracing::trace!("DNS resolved {}:{} with customized", self.addr, self.port);
                         }
                     },
                 }
@@ -369,9 +368,9 @@ impl DnsResolver {
                     Err(err)
                 }
             },
-            #[cfg(feature = "trust-dns")]
-            DnsResolver::TrustDnsSystem { ref inner, .. } => match inner.resolver.load().lookup_ip(addr).await {
-                Ok(lookup_result) => Ok(EitherResolved::TrustDnsSystem(
+            #[cfg(feature = "hickory-dns")]
+            DnsResolver::HickoryDnsSystem { ref inner, .. } => match inner.resolver.load().lookup_ip(addr).await {
+                Ok(lookup_result) => Ok(EitherResolved::HickoryDnsSystem(
                     lookup_result.into_iter().map(move |ip| SocketAddr::new(ip, port)),
                 )),
                 Err(err) => {
@@ -379,9 +378,9 @@ impl DnsResolver {
                     Err(err)
                 }
             },
-            #[cfg(feature = "trust-dns")]
-            DnsResolver::TrustDns(ref resolver) => match resolver.lookup_ip(addr).await {
-                Ok(lookup_result) => Ok(EitherResolved::TrustDns(
+            #[cfg(feature = "hickory-dns")]
+            DnsResolver::HickoryDns(ref resolver) => match resolver.lookup_ip(addr).await {
+                Ok(lookup_result) => Ok(EitherResolved::HickoryDns(
                     lookup_result.into_iter().map(move |ip| SocketAddr::new(ip, port)),
                 )),
                 Err(err) => {

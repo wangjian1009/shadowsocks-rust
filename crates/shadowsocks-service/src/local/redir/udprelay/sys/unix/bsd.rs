@@ -9,10 +9,10 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{future::poll_fn, ready};
-use log::{error, trace, warn};
 use shadowsocks::net::is_dual_stack_addr;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::unix::AsyncFd;
+use tracing::{error, trace, warn};
 
 use crate::{
     config::RedirType,

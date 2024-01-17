@@ -27,7 +27,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     sync::mpsc,
 };
-use tracing::{error, info_span, trace, Instrument};
+use tracing::{debug, error, info_span, trace, Instrument};
 
 use crate::{
     local::{
@@ -391,7 +391,11 @@ impl TcpTun {
                             && !socket.may_recv()
                             && !matches!(
                                 socket.state(),
-                                TcpState::SynReceived | TcpState::Established | TcpState::FinWait1 | TcpState::FinWait2
+                                TcpState::Listen
+                                    | TcpState::SynReceived
+                                    | TcpState::Established
+                                    | TcpState::FinWait1
+                                    | TcpState::FinWait2
                             )
                         {
                             trace!("closed TCP Read Half, {:?}", socket.state());
@@ -504,7 +508,7 @@ impl TcpTun {
                 return Err(io::Error::new(ErrorKind::Other, format!("listen error: {:?}", err)));
             }
 
-            trace!("created TCP connection for {} <-> {}", src_addr, dst_addr);
+            debug!("created TCP connection for {} <-> {}", src_addr, dst_addr);
 
             let connection = TcpConnection::new(
                 socket,

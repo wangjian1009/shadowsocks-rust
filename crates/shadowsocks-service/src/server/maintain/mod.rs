@@ -1,46 +1,74 @@
-type GenericError = Box<dyn std::error::Error + Send + Sync>;
-type GenericResult<T> = std::result::Result<T, GenericError>;
+use hyper::server::conn::http1;
+use hyper_util::rt::TokioIo;
+use std::{io, net::SocketAddr, sync::Arc};
 
-mod context;
+use shadowsocks::canceler::CancelWaiter;
+use shadowsocks::net::{AcceptOpts, TcpListener};
+
 mod data;
 mod server;
 use tracing::{error, info};
 
-use hyper::Server as HttpServer;
+use server::Svc;
 
-use std::{io, net::SocketAddr, sync::Arc};
-
-use shadowsocks::canceler::CancelWaiter;
-
-use context::MaintainServerContext;
 pub use data::ServerInfo;
 
 pub struct MaintainServer {
-    context: Arc<MaintainServerContext>,
+    servers: Vec<ServerInfo>,
 }
 
 impl MaintainServer {
     pub fn new(servers: Vec<ServerInfo>) -> MaintainServer {
-        MaintainServer {
-            context: Arc::new(MaintainServerContext { servers }),
-        }
+        MaintainServer { servers }
     }
 
     pub async fn run<'a, 'b>(self, cancel_waiter: CancelWaiter, addr: SocketAddr) -> io::Result<()> {
-        let server = HttpServer::bind(&addr)
-            .serve(server::MakeSvc {
-                context: self.context.clone(),
-            })
-            .with_graceful_shutdown(async move { cancel_waiter.wait().await });
+        let MaintainServer { servers } = self;
+        let listener = TcpListener::bind_with_opts(&addr, AcceptOpts::default()).await?;
 
         info!("maintain server listening on {}", addr);
 
-        if let Err(e) = server.await {
-            error!(error = ?e, "maintain server exited with error");
-            Err(io::Error::new(io::ErrorKind::Other, e))
-        } else {
-            info!("maintain server exited success");
-            Ok(())
+        let svc = Svc {
+            servers: Arc::new(servers),
+        };
+
+        tokio::select! {
+            r = Self::serve(svc, listener) => {
+                if let Err(e) = r {
+                    error!(error = ?e, "maintain server exited with error");
+                    Err(io::Error::new(io::ErrorKind::Other, e))
+                } else {
+                    info!("maintain server exited success");
+                    Ok(())
+                }
+            }
+            _ = cancel_waiter.wait() => {
+                tracing::trace!("canceld");
+                Ok(())
+            }
+        }
+    }
+
+    async fn serve(svc: Svc, listener: TcpListener) -> io::Result<()> {
+        loop {
+            let (stream, _) = listener.accept().await?;
+
+            // Use an adapter to access something implementing `tokio::io` traits as if they implement
+            // `hyper::rt` IO traits.
+            let io = TokioIo::new(stream);
+            let svc = svc.clone();
+
+            // Spawn a tokio task to serve multiple connections concurrently
+            tokio::task::spawn(async move {
+                // Finally, we bind the incoming connection to our `hello` service
+                if let Err(err) = http1::Builder::new()
+                // `service_fn` converts our function in a `Service`
+                .serve_connection(io, svc)
+                .await
+                {
+                    println!("Error serving connection: {:?}", err);
+                }
+            });
         }
     }
 }

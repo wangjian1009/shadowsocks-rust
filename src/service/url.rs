@@ -1,4 +1,6 @@
+use bytes::Bytes;
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
+use http_body_util::{BodyExt, Full};
 use std::{future, io, process::ExitCode, sync::Arc};
 
 use tokio::{fs::File, io::AsyncWriteExt, runtime::Builder, time::Duration};
@@ -10,11 +12,12 @@ use shadowsocks_service::{
 };
 
 use hyper::{
+    body::Incoming,
     http::{
-        self,
+        header,
         uri::{PathAndQuery, Scheme, Uri},
     },
-    Body,
+    Method, Request, Response,
 };
 
 #[derive(Debug)]
@@ -232,7 +235,7 @@ fn build_svr_cfg(matches: &ArgMatches) -> Result<ServerConfig, UrlTestError> {
     Ok(svr_cfg)
 }
 
-async fn build_request(matches: &ArgMatches) -> Result<http::Request<Body>, UrlTestError> {
+async fn build_request(matches: &ArgMatches) -> Result<Request<Full<Bytes>>, UrlTestError> {
     // 构造目标URL
     let target_url = match matches.get_one::<String>("TARGET_URL") {
         Some(v) => v.clone(),
@@ -270,11 +273,11 @@ async fn build_request(matches: &ArgMatches) -> Result<http::Request<Body>, UrlT
     trace!(target_url = ?target_url);
 
     // 构造http请求
-    let mut req_builder = http::Request::builder().uri(target_url);
+    let mut req_builder = Request::builder().uri(target_url);
 
     // - method
     if let Some(request) = matches.get_one::<String>("REQUEST") {
-        let method: http::Method = match request.parse() {
+        let method: Method = match request.parse() {
             Ok(m) => m,
             Err(err) => {
                 error!(error = ?err, method = request, "unknown request");
@@ -324,16 +327,16 @@ async fn build_request(matches: &ArgMatches) -> Result<http::Request<Body>, UrlT
                 )));
             }
         };
-        req_builder.body(Body::from(body))
+        req_builder.body(Full::new(Bytes::from(body)))
     } else {
-        req_builder.body(Body::empty())
+        req_builder.body(Full::new(Bytes::new()))
     }
     .expect("generate body error");
 
     Ok(request)
 }
 
-async fn write_output(output_path: Option<&String>, result: Result<http::Response<Body>, UrlTestError>) -> ExitCode {
+async fn write_output(output_path: Option<&String>, result: Result<Response<Incoming>, UrlTestError>) -> ExitCode {
     if let Some(output_path) = output_path {
         let mut writing_result = Some(result);
         let mut write_count = 0;
@@ -396,16 +399,13 @@ enum WriteResultError {
     LocalIoError(io::Error),
 }
 
-async fn write_result<S>(
-    w: &mut S,
-    response: Result<http::Response<Body>, UrlTestError>,
-) -> Result<(), WriteResultError>
+async fn write_result<S>(w: &mut S, response: Result<Response<Incoming>, UrlTestError>) -> Result<(), WriteResultError>
 where
     S: AsyncWriteExt + Unpin,
 {
     match response {
         Ok(response) => {
-            let content_length = if let Some(content_length) = response.headers().get(http::header::CONTENT_LENGTH) {
+            let content_length = if let Some(content_length) = response.headers().get(header::CONTENT_LENGTH) {
                 if let Ok(content_length) = content_length.to_str() {
                     match content_length.parse::<usize>() {
                         Ok(v) => Some(v),
@@ -481,7 +481,7 @@ where
     Ok(())
 }
 
-async fn write_response<S>(w: &mut S, response: http::Response<Body>) -> Result<usize, WriteResultError>
+async fn write_response<S>(w: &mut S, response: Response<Incoming>) -> Result<usize, WriteResultError>
 where
     S: AsyncWriteExt + Unpin,
 {
@@ -497,9 +497,11 @@ where
 
     write_line(w, "").await?;
 
-    let body_data = hyper::body::to_bytes(response.into_body())
+    let body_data = response
+        .collect()
         .await
-        .map_err(|e| WriteResultError::TransferError(e))?;
+        .map_err(|e| WriteResultError::TransferError(e))?
+        .to_bytes();
 
     w.write_all(&body_data)
         .await

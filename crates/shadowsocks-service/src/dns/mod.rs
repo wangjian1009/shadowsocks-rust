@@ -1,8 +1,8 @@
 //! DNS resolvers
 
+#[cfg(feature = "hickory-dns")]
+use hickory_resolver::config::ResolverOpts;
 use shadowsocks::{dns_resolver::DnsResolver, net::ConnectOpts};
-#[cfg(feature = "trust-dns")]
-use trust_dns_resolver::config::ResolverOpts;
 
 use crate::config::DnsConfig;
 
@@ -15,7 +15,7 @@ pub async fn build_dns_resolver(
 ) -> Option<DnsResolver> {
     match dns {
         DnsConfig::System => {
-            #[cfg(feature = "trust-dns")]
+            #[cfg(feature = "hickory-dns")]
             if crate::hint_support_default_system_resolver() {
                 use std::env;
                 use tracing::warn;
@@ -36,11 +36,11 @@ pub async fn build_dns_resolver(
                         opts_opt = Some(opts);
                     }
 
-                    return match DnsResolver::trust_dns_system_resolver(opts_opt, connect_opts.clone()).await {
+                    return match DnsResolver::hickory_dns_system_resolver(opts_opt, connect_opts.clone()).await {
                         Ok(r) => Some(r),
                         Err(err) => {
                             warn!(
-                            "initialize trust-dns DNS system resolver failed, fallback to default system resolver, error: {}",
+                            "initialize hickory-dns DNS system resolver failed, fallback to default system resolver, error: {}",
                             err
                         );
                             None
@@ -53,8 +53,8 @@ pub async fn build_dns_resolver(
 
             None
         }
-        #[cfg(feature = "trust-dns")]
-        DnsConfig::TrustDns(dns) => {
+        #[cfg(feature = "hickory-dns")]
+        DnsConfig::HickoryDns(dns) => {
             let mut opts_opt = None;
             if let Some(dns_cache_size) = dns_cache_size {
                 let mut opts = ResolverOpts::default();
@@ -62,13 +62,13 @@ pub async fn build_dns_resolver(
                 opts_opt = Some(opts);
             }
 
-            match DnsResolver::trust_dns_resolver(dns, opts_opt, connect_opts.clone()).await {
+            match DnsResolver::hickory_resolver(dns, opts_opt, connect_opts.clone()).await {
                 Ok(r) => Some(r),
                 Err(err) => {
                     use tracing::warn;
 
                     warn!(
-                        "initialize trust-dns DNS resolver failed, fallback to default system resolver, error: {}",
+                        "initialize hickory-dns DNS resolver failed, fallback to default system resolver, error: {}",
                         err
                     );
                     None

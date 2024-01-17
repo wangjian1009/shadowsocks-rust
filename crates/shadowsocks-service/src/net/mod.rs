@@ -5,6 +5,9 @@ pub use self::{
     mon_stream::MonProxyStream,
 };
 
+// pub mod flow;
+#[cfg(target_os = "macos")]
+pub mod launch_activate_socket;
 pub mod mon_socket;
 pub mod mon_stream;
 pub mod packet_window;

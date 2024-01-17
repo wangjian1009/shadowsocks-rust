@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks-rust"
-version = "1.16.2"
+version = "1.17.2"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -48,6 +48,11 @@ name = "sscheck"
 path = "bin/sscheck.rs"
 required-features = ["local"]
 
+[[bin]]
+name = "sswinservice"
+path = "bin/sswinservice.rs"
+required-features = ["winservice"]
+
 [workspace]
 members = [
     "crates/shadowsocks",
@@ -74,6 +79,7 @@ default = [
     "statistics-prometheus",
     "trust-dns",
     "stream-cipher",
+    "hickory-dns",
     "local",
     "local-maintain",
     "local-url",
@@ -110,7 +116,7 @@ default = [
 
 # Enable local server
 local = ["shadowsocks-service/local"]
-local-url = ["local", "hyper", "url", "shadowsocks-service/local-api"]
+local-url = ["local", "hyper", "http-body-util", "url", "shadowsocks-service/local-api"]
 local-maintain = ["shadowsocks-service/local-maintain"]
 local-signed-info = ["shadowsocks-service/local-signed-info"]
 local-fake-mode = ["shadowsocks-service/local-fake-mode"]
@@ -145,15 +151,20 @@ manager = ["shadowsocks-service/manager"]
 utility = ["qrcode"]
 # Enable service
 service = ["local", "server", "manager"]
+# Enable Windows Service
+winservice = ["service", "windows-service"]
 
-# Enables trust-dns for replacing tokio's builtin DNS resolver
-trust-dns = ["shadowsocks-service/trust-dns"]
+# Enables Hickory-DNS for replacing tokio's builtin DNS resolver
+hickory-dns = ["shadowsocks-service/hickory-dns"]
+# Hickory-DNS was renamed from Trust-DNS, keep compatibility.
+trust-dns = ["hickory-dns"]
 dns-over-tls = ["shadowsocks-service/dns-over-tls"]
 dns-over-native-tls = ["shadowsocks-service/dns-over-native-tls"]
 dns-over-native-tls-vendored = [
     "shadowsocks-service/dns-over-native-tls-vendored",
 ]
 dns-over-https = ["shadowsocks-service/dns-over-https"]
+dns-over-h3 = ["shadowsocks-service/dns-over-h3"]
 
 # Enable logging output
 logging = ["tracing-futures", "tracing-subscriber"]
@@ -228,7 +239,7 @@ aead-cipher-2022 = ["shadowsocks-service/aead-cipher-2022"]
 aead-cipher-2022-extra = ["shadowsocks-service/aead-cipher-2022-extra"]
 
 # Enable rate limit
-rate-limit = ["shadowsocks-service/rate-limit", "governor", "hyper", "tower"]
+rate-limit = ["shadowsocks-service/rate-limit", "governor", "hyper", "http-body-util"]
 
 # Enable detection against replay attack (Stream / AEAD)
 security-replay-attack-detect = [
@@ -269,9 +280,9 @@ metrics = { version = "0.20", optional = true }
 metrics-util = { version = "^0.14", optional = true }
 metrics-exporter-prometheus = { version = "0.11", optional = true }
 
-clap = { version = "4.3", features = ["wrap_help", "suggestions"] }
+clap = { version = "4.4", features = ["wrap_help", "suggestions"] }
 cfg-if = "1"
-qrcode = { version = "0.12", default-features = false, optional = true }
+qrcode = { version = "0.13", default-features = false, optional = true }
 sysexits = "0.7"
 exitcode = "1"
 bytes = "1.0"
@@ -281,7 +292,7 @@ trust-dns-resolver = { version = "0.23.0-alpha", optional = true, features = ["s
 build-time = "0.1"
 directories = "5.0"
 xdg = "2.5"
-rpassword = "7.0"
+rpassword = "7.3"
 spin = { version = "0.9", features = ["std"], optional = true }
 libc = { version = "0.2", features = ["extra_traits"] }
 rand = "0.8"
@@ -293,18 +304,18 @@ num_cpus = "1.15"
 
 governor = { version = "0.3.2", optional = true }
 
-ipnet = { version = "2.7", optional = true }
-
+ipnet = { version = "2.9", optional = true }
 mimalloc = { version = "0.1", default-features = false, optional = true }
 tcmalloc = { version = "0.3", optional = true }
 jemallocator = { version = "0.5", optional = true }
 snmalloc-rs = { version = "0.3", optional = true }
 rpmalloc = { version = "0.2", optional = true }
 
-hyper = { version = "*", optional = true}
-tower = { version = "*", optional = true }
+hyper = { version = "1.1", optional = true }
+http-body-util = { version = "0.1", optional = true }
 
-shadowsocks-service = { version = "1.16.1", path = "./crates/shadowsocks-service", default-features = false }
+shadowsocks-service = { version = "1.17.2", path = "./crates/shadowsocks-service", default-features = false }
+windows-service = { version = "0.6", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5"
@@ -323,8 +334,9 @@ reqwest = { version = "0.11", features = [
 ], optional = true }
 
 [dev-dependencies]
-byteorder = "1.3"
 tracing-test = { version = "*", features = ["no-env-filter"] }
+byteorder = "1.5"
+env_logger = "0.10"
 byte_string = "1.0"
 tokio = { version = "1", features = ["net", "time", "macros", "io-util"] }
 tokio-test = "*"

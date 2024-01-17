@@ -1,11 +1,8 @@
-use std::{future::Future, io, pin::Pin, sync::Arc, task};
-
-use hyper::{
-    client::Client,
-    http::{self, uri::Uri},
-    Body,
-};
-use tower::Service;
+use bytes::Bytes;
+use http_body_util::Full;
+use hyper::{body::Incoming, client::conn::http1, Request, Response};
+use hyper_util::rt::TokioIo;
+use std::sync::Arc;
 use tracing::{error, trace};
 
 use shadowsocks::relay::socks5::Address;
@@ -18,68 +15,52 @@ pub enum ApiError {
 }
 
 pub async fn request(
-    request: http::Request<Body>,
+    request: Request<Full<Bytes>>,
     service_context: Arc<ServiceContext>,
     server: Arc<ServerIdent>,
-) -> Result<http::Response<Body>, ApiError> {
-    let connector = Connector {
-        service_context,
-        server,
+) -> Result<Response<Incoming>, ApiError> {
+    // 从URL获取目标地址
+    let port = match request.uri().port() {
+        Some(port) => port.as_u16(),
+        None => match request.uri().scheme().map(|s| s.as_str()) {
+            None => 80,
+            Some("http") => 80,
+            Some("https") => 443,
+            Some(..) => {
+                error!(uri = ?request.uri(), "target url no port");
+                return Err(ApiError::Other(Some("target url no port".to_string())));
+            }
+        },
     };
 
-    let client = Client::builder().build(connector);
+    let target_addr = match request.uri().host() {
+        Some(host) => Address::parse_str_host(host, port),
+        None => {
+            return Err(ApiError::Other(Some("target url no host".to_string())));
+        }
+    };
+    trace!(target_addr = ?target_addr);
 
-    client
-        .request(request)
+    let stream = AutoProxyClientStream::connect_proxied(&service_context, &server, &target_addr)
+        .await
+        .map_err(|e| ApiError::Other(Some(format!("{:?}", e))))?;
+
+    let stream = ProxyHttpStream::connect_http(stream);
+
+    let io = TokioIo::new(stream);
+
+    let (mut sender, conn) = http1::handshake(io)
+        .await
+        .map_err(|e| ApiError::Other(Some(format!("{:?}", e))))?;
+
+    tokio::spawn(async move {
+        if let Err(err) = conn.await {
+            println!("Connection failed: {:?}", err);
+        }
+    });
+
+    sender
+        .send_request(request)
         .await
         .map_err(|e| ApiError::Other(Some(format!("{:?}", e))))
-}
-
-#[derive(Clone)]
-struct Connector {
-    service_context: Arc<ServiceContext>,
-    server: Arc<ServerIdent>,
-}
-
-impl Service<Uri> for Connector {
-    type Response = ProxyHttpStream;
-    type Error = std::io::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, _: &mut task::Context<'_>) -> task::Poll<Result<(), Self::Error>> {
-        task::Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, uri: Uri) -> Self::Future {
-        let service_context = self.service_context.clone();
-        let server = self.server.clone();
-
-        Box::pin(async move {
-            // 从URL获取目标地址
-            let port = match uri.port() {
-                Some(port) => port.as_u16(),
-                None => match uri.scheme().map(|s| s.as_str()) {
-                    None => 80,
-                    Some("http") => 80,
-                    Some("https") => 443,
-                    Some(..) => {
-                        error!(uri = ?uri, "target url no port");
-                        return Err(io::Error::new(io::ErrorKind::Other, "target url no host"));
-                    }
-                },
-            };
-
-            let target_addr = match uri.host() {
-                Some(host) => Address::parse_str_host(host, port),
-                None => {
-                    return Err(io::Error::new(io::ErrorKind::Other, "target url no host"));
-                }
-            };
-            trace!(target_addr = ?target_addr);
-
-            let stream = AutoProxyClientStream::connect_proxied(&service_context, &server, &target_addr).await?;
-
-            Ok(ProxyHttpStream::connect_http(stream))
-        })
-    }
 }
