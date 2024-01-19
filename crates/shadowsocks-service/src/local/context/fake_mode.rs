@@ -1,4 +1,5 @@
 use super::*;
+use tokio::time;
 
 #[derive(Debug, Clone)]
 pub enum FakeMode {
@@ -137,7 +138,7 @@ impl FakeCheckServer {
     }
 
     pub async fn run(mut self) -> tokio::io::Result<()> {
-        tokio::time::sleep(Duration::from_millis(500 + rand::random::<u64>() % 1500)).await;
+        time::sleep(time::Duration::from_millis(500 + rand::random::<u64>() % 1500)).await;
         let result = crate::local::android::validate_sign();
         if result.error.is_some() {
             // tracing::debug!("fake check fail, result={:?}", result.error);
