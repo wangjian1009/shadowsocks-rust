@@ -4,7 +4,6 @@ use http_body_util::{BodyExt, Full};
 use std::{future, io, process::ExitCode, sync::Arc};
 
 use tokio::{fs::File, io::AsyncWriteExt, runtime::Builder, time::Duration};
-use tracing::{error, trace};
 
 use shadowsocks_service::{
     local::{api, context::ServiceContext, loadbalancing::ServerIdent},
@@ -17,7 +16,7 @@ use hyper::{
         header,
         uri::{PathAndQuery, Scheme, Uri},
     },
-    Method, Request, Response,
+    Method, Request, Response, Version,
 };
 
 #[derive(Debug)]
@@ -129,7 +128,6 @@ pub async fn main_async(matches: &ArgMatches) -> ExitCode {
             return write_output(output_path, Err(err)).await;
         }
     };
-    trace!(request = ?request);
 
     let svr_cfg = match build_svr_cfg(matches) {
         Ok(svr_cfg) => svr_cfg,
@@ -137,6 +135,8 @@ pub async fn main_async(matches: &ArgMatches) -> ExitCode {
             return write_output(output_path, Err(err)).await;
         }
     };
+    let svr_addr = svr_cfg.addr().clone();
+    tracing::debug!(svr =? svr_addr, request = ?request);
 
     let canceler = Canceler::new();
 
@@ -163,11 +163,12 @@ pub async fn main_async(matches: &ArgMatches) -> ExitCode {
 
     tokio::select! {
         _r = wait_timeout(timeout) => {
+            tracing::debug!(svr =? svr_addr, "timeout");
             write_output(output_path, Err(UrlTestError::Timeout("GlobalTimeout".to_string()))).await
         }
         r = api::request(request, service_context, server) => {
+            tracing::debug!(svr =? svr_addr, response = ?r);
             let response = r.map_err(|e| UrlTestError::Api(e));
-            trace!(response = ?response);
 
             write_output(output_path, response).await
         }
@@ -185,7 +186,7 @@ pub fn main(matches: &ArgMatches, #[cfg(feature = "logging")] init_log: bool) ->
         None
     };
 
-    trace!("shadowsocks url {} build {}", crate::VERSION, crate::BUILD_TIME);
+    tracing::trace!("shadowsocks url {} build {}", crate::VERSION, crate::BUILD_TIME);
 
     // 构造tokio环境并执行任务
     let mut builder = Builder::new_current_thread();
@@ -215,7 +216,7 @@ fn build_svr_cfg(matches: &ArgMatches) -> Result<ServerConfig, UrlTestError> {
         server_url = match shadowsocks_service::decrypt(&server_url) {
             Ok(v) => v,
             Err(_err) => {
-                trace!(error = ?_err, server_url = server_url, "decode error");
+                tracing::trace!(error = ?_err, server_url = server_url, "decode error");
                 server_url
             }
         };
@@ -224,7 +225,7 @@ fn build_svr_cfg(matches: &ArgMatches) -> Result<ServerConfig, UrlTestError> {
     let svr_cfg = match ServerConfig::from_url(&server_url) {
         Ok(t) => t,
         Err(err) => {
-            error!(error = ?err, url = server_url, "server url parse error");
+            tracing::error!(error = ?err, url = server_url, "server url parse error");
             return Err(UrlTestError::ArgumentError(format!(
                 "server url parse error, url = {}, error = {}",
                 server_url, err,
@@ -263,24 +264,24 @@ async fn build_request(matches: &ArgMatches) -> Result<Request<Full<Bytes>>, Url
             }
         }
         Err(err) => {
-            error!(error = ?err, url = target_url, "target url parse error");
+            tracing::error!(error = ?err, url = target_url, "target url parse error");
             return Err(UrlTestError::ArgumentError(format!(
                 "TARGET_URL format error, url={}, error={:?}",
                 target_url, err
             )));
         }
     };
-    trace!(target_url = ?target_url);
+    tracing::trace!(target_url = ?target_url);
 
     // 构造http请求
-    let mut req_builder = Request::builder().uri(target_url);
+    let mut req_builder = Request::builder().uri(target_url).version(Version::HTTP_10);
 
     // - method
     if let Some(request) = matches.get_one::<String>("REQUEST") {
         let method: Method = match request.parse() {
             Ok(m) => m,
             Err(err) => {
-                error!(error = ?err, method = request, "unknown request");
+                tracing::error!(error = ?err, method = request, "unknown request");
                 return Err(UrlTestError::ArgumentError(format!(
                     "method {} not support, error={:?}",
                     request, err
@@ -302,7 +303,7 @@ async fn build_request(matches: &ArgMatches) -> Result<Request<Full<Bytes>>, Url
             let sep_pos = match header.find('=') {
                 Some(p) => p,
                 None => {
-                    error!(header = header, "header format error");
+                    tracing::error!(header = header, "header format error");
                     return Err(UrlTestError::ArgumentError(format!(
                         "header format error, header = {}",
                         header
@@ -346,7 +347,7 @@ async fn write_output(output_path: Option<&String>, result: Result<Response<Inco
             let mut fs = match File::create(output_path).await {
                 Ok(fs) => fs,
                 Err(err) => {
-                    error!(error = ?err, path = output_path, "open output file error");
+                    tracing::error!(error = ?err, path = output_path, "open output file error");
                     return ExitCode::FAILURE;
                 }
             };
@@ -356,11 +357,11 @@ async fn write_output(output_path: Option<&String>, result: Result<Response<Inco
             match write_result(&mut fs, result).await {
                 Ok(()) => match fs.sync_all().await {
                     Ok(()) => {
-                        trace!(output = output_path, "response write success");
+                        tracing::trace!(output = output_path, "response write success");
                         break;
                     }
                     Err(err) => {
-                        error!(error = ?err, output = output_path, "response write flush error");
+                        tracing::error!(error = ?err, output = output_path, "response write flush error");
                         return ExitCode::FAILURE;
                     }
                 },
@@ -374,7 +375,7 @@ async fn write_output(output_path: Option<&String>, result: Result<Response<Inco
                         writing_result = Some(Err(UrlTestError::ContentLengthMismatch(expect, readed)))
                     }
                     WriteResultError::LocalIoError(e) => {
-                        error!(error = ?e, output = output_path, "response write local io error");
+                        tracing::error!(error = ?e, output = output_path, "response write local io error");
                         return ExitCode::FAILURE;
                     }
                 },
@@ -384,7 +385,7 @@ async fn write_output(output_path: Option<&String>, result: Result<Response<Inco
         match write_result(&mut tokio::io::stdout(), result).await {
             Ok(()) => {}
             Err(err) => {
-                error!(error = ?err, "response write error");
+                tracing::error!(error = ?err, "response write error");
             }
         }
     }

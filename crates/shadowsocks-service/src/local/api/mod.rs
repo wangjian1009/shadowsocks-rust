@@ -3,7 +3,7 @@ use http_body_util::Full;
 use hyper::{body::Incoming, client::conn::http1, Request, Response};
 use hyper_util::rt::TokioIo;
 use std::sync::Arc;
-use tracing::{error, trace};
+use tracing::{error, trace, Instrument};
 
 use shadowsocks::relay::socks5::Address;
 
@@ -53,11 +53,14 @@ pub async fn request(
         .await
         .map_err(|e| ApiError::Other(Some(format!("{:?}", e))))?;
 
-    tokio::spawn(async move {
-        if let Err(err) = conn.await {
-            println!("Connection failed: {:?}", err);
+    tokio::spawn(
+        async move {
+            if let Err(err) = conn.await {
+                tracing::error!("Connection failed: {:?}", err);
+            }
         }
-    });
+        .in_current_span(),
+    );
 
     sender
         .send_request(request)
