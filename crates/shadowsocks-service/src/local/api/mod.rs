@@ -45,7 +45,16 @@ pub async fn request(
         .await
         .map_err(|e| ApiError::Other(Some(format!("{:?}", e))))?;
 
-    let stream = ProxyHttpStream::connect_http(stream);
+    let stream = match request.uri().scheme().map(|s| s.as_str()) {
+        None | Some("http") => ProxyHttpStream::connect_http(stream),
+        Some("https") => ProxyHttpStream::connect_https(stream, request.uri().host().unwrap_or(""))
+            .await
+            .map_err(|e| ApiError::Other(Some(format!("{:?}", e))))?,
+        Some(..) => {
+            error!(uri = ?request.uri(), "target url no scheme");
+            return Err(ApiError::Other(Some("target url no scheme".to_string())));
+        }
+    };
 
     let io = TokioIo::new(stream);
 

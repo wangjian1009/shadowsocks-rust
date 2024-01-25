@@ -16,7 +16,7 @@ use hyper::{
         header,
         uri::{PathAndQuery, Scheme, Uri},
     },
-    Method, Request, Response, Version,
+    Method, Request, Response,
 };
 
 #[derive(Debug)]
@@ -274,7 +274,9 @@ async fn build_request(matches: &ArgMatches) -> Result<Request<Full<Bytes>>, Url
     tracing::trace!(target_url = ?target_url);
 
     // 构造http请求
-    let mut req_builder = Request::builder().uri(target_url).version(Version::HTTP_10);
+    let mut req_builder = Request::builder();
+    req_builder = req_builder.header("Host", target_url.host().unwrap_or(""));
+    req_builder = req_builder.uri(target_url);
 
     // - method
     if let Some(request) = matches.get_one::<String>("REQUEST") {

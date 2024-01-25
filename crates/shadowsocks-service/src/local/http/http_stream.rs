@@ -9,6 +9,8 @@ use std::{
 use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use cfg_if::cfg_if;
+
 use crate::local::net::AutoProxyClientStream;
 
 #[allow(clippy::large_enum_variant)]
@@ -62,36 +64,43 @@ impl ProxyHttpStream {
     pub async fn connect_https(stream: AutoProxyClientStream, domain: &str) -> io::Result<ProxyHttpStream> {
         use once_cell::sync::Lazy;
         use std::sync::Arc;
-        use tokio_rustls::{
-            rustls::{pki_types::ServerName, ClientConfig, RootCertStore},
-            TlsConnector,
-        };
-        use tracing::warn;
+        use tokio_rustls::{rustls::ClientConfig, TlsConnector};
 
         static TLS_CONFIG: Lazy<Arc<ClientConfig>> = Lazy::new(|| {
-            let mut config = ClientConfig::builder()
-                .with_root_certificates(match rustls_native_certs::load_native_certs() {
-                    Ok(certs) => {
-                        let mut store = RootCertStore::empty();
+            cfg_if! {
+                if #[cfg(any(target_os = "android", target_os = "ios"))] {
+                    let mut config = ClientConfig::builder()
+                        .dangerous()
+                        .with_custom_certificate_verifier(Arc::new(NoServerVerify {}) as Arc<dyn ServerCertVerifier>)
+                        .with_no_client_auth();
+                } else {
+                    use tokio_rustls::rustls::{pki_types::ServerName, RootCertStore};
 
-                        for cert in certs {
-                            if let Err(err) = store.add(cert) {
-                                warn!("failed to add cert (native), error: {}", err);
+                    let mut config = ClientConfig::builder()
+                        .with_root_certificates(match rustls_native_certs::load_native_certs() {
+                            Ok(certs) => {
+                                let mut store = RootCertStore::empty();
+
+                                for cert in certs {
+                                    if let Err(err) = store.add(cert) {
+                                        tracing::warn!("failed to add cert (native), error: {}", err);
+                                    }
+                                }
+
+                                store
                             }
-                        }
+                            Err(err) => {
+                                tracing::warn!("failed to load native certs, {}, going to load from webpki-roots", err);
 
-                        store
-                    }
-                    Err(err) => {
-                        warn!("failed to load native certs, {}, going to load from webpki-roots", err);
+                                let mut store = RootCertStore::empty();
+                                store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-                        let mut store = RootCertStore::empty();
-                        store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-                        store
-                    }
-                })
-                .with_no_client_auth();
+                                store
+                            }
+                        })
+                        .with_no_client_auth();
+                }
+            }
 
             // Try to negotiate HTTP/2
             config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
@@ -163,5 +172,67 @@ impl AsyncWrite for ProxyHttpStream {
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
         forward_call!(self, poll_shutdown, cx)
+    }
+}
+
+cfg_if! {
+    if #[cfg(all(feature = "local-http-rustls", any(target_os = "android", target_os = "ios")))] {
+        use tokio_rustls::rustls::{
+            self,
+            SignatureScheme,
+            client::danger::{ServerCertVerifier, ServerCertVerified, HandshakeSignatureValid},
+            pki_types::{CertificateDer, ServerName, UnixTime}
+        };
+
+        #[derive(Debug)]
+        struct NoServerVerify {}
+
+        impl ServerCertVerifier for NoServerVerify {
+            fn verify_server_cert(
+                &self,
+                _end_entity: &CertificateDer<'_>,
+                _intermediates: &[CertificateDer<'_>],
+                _server_name: &ServerName<'_>,
+                _ocsp_response: &[u8],
+                _now: UnixTime,
+            ) -> Result<ServerCertVerified, rustls::Error> {
+                Ok(ServerCertVerified::assertion())
+            }
+
+            fn verify_tls12_signature(
+                &self,
+                _message: &[u8],
+                _cert: &CertificateDer<'_>,
+                _dss: &rustls::DigitallySignedStruct,
+            ) -> Result<HandshakeSignatureValid, rustls::Error> {
+                Ok(HandshakeSignatureValid::assertion())
+            }
+
+            fn verify_tls13_signature(
+                &self,
+                _message: &[u8],
+                _cert: &CertificateDer<'_>,
+                _dss: &rustls::DigitallySignedStruct,
+            ) -> Result<HandshakeSignatureValid, rustls::Error> {
+                Ok(HandshakeSignatureValid::assertion())
+            }
+
+            fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+                vec![SignatureScheme::RSA_PKCS1_SHA1,
+                     SignatureScheme::ECDSA_SHA1_Legacy,
+                     SignatureScheme::RSA_PKCS1_SHA256,
+                     SignatureScheme::ECDSA_NISTP256_SHA256,
+                     SignatureScheme::RSA_PKCS1_SHA384,
+                     SignatureScheme::ECDSA_NISTP384_SHA384,
+                     SignatureScheme::RSA_PKCS1_SHA512,
+                     SignatureScheme::ECDSA_NISTP521_SHA512,
+                     SignatureScheme::RSA_PSS_SHA256,
+                     SignatureScheme::RSA_PSS_SHA384,
+                     SignatureScheme::RSA_PSS_SHA512,
+                     SignatureScheme::ED25519,
+                     SignatureScheme::ED448
+                     ]
+            }
+        }
     }
 }
