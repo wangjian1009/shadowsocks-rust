@@ -66,6 +66,9 @@ impl ProxyHttpStream {
         use std::sync::Arc;
         use tokio_rustls::{rustls::ClientConfig, TlsConnector};
 
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        use tokio_rustls::rustls::pki_types::ServerName;
+
         static TLS_CONFIG: Lazy<Arc<ClientConfig>> = Lazy::new(|| {
             cfg_if! {
                 if #[cfg(any(target_os = "android", target_os = "ios"))] {
@@ -74,7 +77,7 @@ impl ProxyHttpStream {
                         .with_custom_certificate_verifier(Arc::new(NoServerVerify {}) as Arc<dyn ServerCertVerifier>)
                         .with_no_client_auth();
                 } else {
-                    use tokio_rustls::rustls::{pki_types::ServerName, RootCertStore};
+                    use tokio_rustls::rustls::{RootCertStore};
 
                     let mut config = ClientConfig::builder()
                         .with_root_certificates(match rustls_native_certs::load_native_certs() {
