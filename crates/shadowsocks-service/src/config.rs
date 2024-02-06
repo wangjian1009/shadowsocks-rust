@@ -309,6 +309,9 @@ struct SSLocalExtConfig {
     #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_device_fd: Option<i32>,
+    #[cfg(any(feature = "local-tun", feature = "wireguard"))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tun_effect_interface_address: Option<String>,
     #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_device_fd_from_path: Option<String>,
@@ -907,6 +910,9 @@ pub struct LocalConfig {
     /// Tun interface's file descriptor read from this Unix Domain Socket
     #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
     pub tun_device_fd_from_path: Option<PathBuf>,
+    #[cfg(any(feature = "local-tun", feature = "wireguard"))]
+    /// Tun interface's effect address and netmask
+    pub tun_effect_interface_address: Option<IpNet>,
 
     /// macOS launchd socket for TCP listener
     ///
@@ -997,6 +1003,8 @@ impl LocalConfig {
             tun_device_fd: None,
             #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
             tun_device_fd_from_path: None,
+            #[cfg(any(feature = "local-tun", feature = "wireguard"))]
+            tun_effect_interface_address: None,
 
             #[cfg(target_os = "macos")]
             launchd_tcp_socket_name: None,
@@ -1686,6 +1694,21 @@ impl Config {
                                 Ok(addr) => local_config.tun_interface_address = Some(addr),
                                 Err(..) => {
                                     let err = Error::new(ErrorKind::Malformed, "`tun_interface_address` invalid", None);
+                                    return Err(err);
+                                }
+                            }
+                        }
+
+                        #[cfg(any(feature = "local-tun", feature = "wireguard"))]
+                        if let Some(tun_effect_interface_address) = local.tun_effect_interface_address {
+                            match tun_effect_interface_address.parse::<IpNet>() {
+                                Ok(addr) => local_config.tun_effect_interface_address = Some(addr),
+                                Err(..) => {
+                                    let err = Error::new(
+                                        ErrorKind::Malformed,
+                                        "`tun_effect_interface_address` invalid",
+                                        None,
+                                    );
                                     return Err(err);
                                 }
                             }
@@ -2726,6 +2749,11 @@ impl fmt::Display for Config {
                             .tun_device_fd_from_path
                             .as_ref()
                             .map(|p| p.to_str().expect("tun_device_fd_from_path is not utf-8").to_owned()),
+                        #[cfg(any(feature = "local-tun", feature = "wireguard"))]
+                        tun_effect_interface_address: local
+                            .tun_effect_interface_address
+                            .as_ref()
+                            .map(ToString::to_string),
 
                         #[cfg(feature = "local")]
                         socks5_auth_config_path: None,

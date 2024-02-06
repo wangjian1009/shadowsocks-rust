@@ -535,6 +535,9 @@ impl Server {
                         if let Some(fd) = fd {
                             builder.file_descriptor(fd);
                         }
+                        if let Some(address_net) = local_config.tun_effect_interface_address {
+                            builder.effect_address_net(address_net);
+                        }
 
                         let server = builder.build().await?;
                         local_server.tun_servers.push(server);

@@ -40,6 +40,7 @@ pub struct TunBuilder {
     context: Arc<ServiceContext>,
     balancer: PingBalancer,
     tun_config: TunConfiguration,
+    tun_effect_address_net: Option<IpNet>,
     udp_expiry_duration: Option<Duration>,
     udp_capacity: Option<usize>,
     mode: Mode,
@@ -52,6 +53,7 @@ impl TunBuilder {
             context,
             balancer,
             tun_config: TunConfiguration::default(),
+            tun_effect_address_net: None,
             udp_expiry_duration: None,
             udp_capacity: None,
             mode: Mode::TcpOnly,
@@ -68,6 +70,10 @@ impl TunBuilder {
 
     pub fn name(&mut self, name: &str) {
         self.tun_config.name(name);
+    }
+
+    pub fn effect_address_net(&mut self, address_net: IpNet) {
+        self.tun_effect_address_net = Some(address_net);
     }
 
     #[cfg(unix)]
@@ -119,6 +125,7 @@ impl TunBuilder {
         Ok(Tun {
             context: self.context,
             device,
+            device_address_net: self.tun_effect_address_net,
             tcp,
             udp,
             udp_close_rx,
@@ -131,6 +138,7 @@ impl TunBuilder {
 pub struct Tun {
     context: Arc<ServiceContext>,
     device: AsyncDevice,
+    device_address_net: Option<IpNet>,
     tcp: TcpTun,
     udp: UdpTun,
     udp_close_rx: UdpAssociationCloseReceiver,
@@ -155,36 +163,54 @@ impl Tun {
         );
         start_stat.notify().await?;
 
-        let address = match self.device.get_ref().address() {
-            Ok(a) => a,
-            Err(err) => {
-                error!("[TUN] failed to get device address, error: {}", err);
-                return Err(io::Error::new(io::ErrorKind::Other, err));
+        let address_net = if let Some(address_net) = self.device_address_net {
+            match address_net {
+                IpNet::V4(s) => {
+                    trace!("[TUN] tun device network: {}", s);
+                    s
+                }
+                IpNet::V6(s) => {
+                    error!("[TUN] not support device address, {}", s);
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("not support device address {}", s),
+                    ));
+                }
             }
-        };
+        } else {
+            let address = match self.device.get_ref().address() {
+                Ok(a) => a,
+                Err(err) => {
+                    error!("[TUN] failed to get device address, error: {}", err);
+                    return Err(io::Error::new(io::ErrorKind::Other, err));
+                }
+            };
 
-        let netmask = match self.device.get_ref().netmask() {
-            Ok(n) => n,
-            Err(err) => {
-                error!("[TUN] failed to get device netmask, error: {}", err);
-                return Err(io::Error::new(io::ErrorKind::Other, err));
-            }
-        };
+            let netmask = match self.device.get_ref().netmask() {
+                Ok(n) => n,
+                Err(err) => {
+                    error!("[TUN] failed to get device netmask, error: {}", err);
+                    return Err(io::Error::new(io::ErrorKind::Other, err));
+                }
+            };
 
-        let address_net = match Ipv4Net::with_netmask(address, netmask) {
-            Ok(n) => n,
-            Err(err) => {
-                error!("[TUN] invalid address {}, netmask {}, error: {}", address, netmask, err);
-                return Err(io::Error::new(io::ErrorKind::Other, err));
-            }
-        };
+            let address_net = match Ipv4Net::with_netmask(address, netmask) {
+                Ok(n) => n,
+                Err(err) => {
+                    error!("[TUN] invalid address {}, netmask {}, error: {}", address, netmask, err);
+                    return Err(io::Error::new(io::ErrorKind::Other, err));
+                }
+            };
 
-        trace!(
-            "[TUN] tun device network: {} (address: {}, netmask: {})",
-            address_net,
-            address,
-            netmask
-        );
+            trace!(
+                "[TUN] tun device network: {} (address: {}, netmask: {})",
+                address_net,
+                address,
+                netmask
+            );
+
+            address_net
+        };
 
         let address_broadcast = address_net.broadcast();
 
