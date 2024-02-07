@@ -27,6 +27,8 @@ impl Svc {
             (&Method::GET, "/android/validate") => Self::android_validate(context, req).await,
             #[cfg(feature = "rate-limit")]
             (&Method::POST, "/speed-limit") => Self::update_speed_limit(context, req).await,
+            #[cfg(feature = "rate-limit")]
+            (&Method::GET, "/speed-limit") => Self::query_speed_limit(context, req).await,
             _ => {
                 tracing::error!(
                     "maintain-service: unknown request: {} {}",
@@ -60,6 +62,26 @@ impl Svc {
         Response::builder()
             .status(StatusCode::OK)
             .body(Full::new(Bytes::from(response.into_bytes())))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    }
+
+    #[cfg(feature = "rate-limit")]
+    async fn query_speed_limit(
+        context: Arc<ServiceContext>,
+        _req: Request<Incoming>,
+    ) -> io::Result<Response<Full<Bytes>>> {
+        let rate_limiter = context.rate_limiter();
+
+        let bound_width = rate_limiter.rate_limit();
+
+        let response = json5::to_string(&json!(
+            {"rate-limit":  bound_width.map(|s| format!("{:?}", s)).unwrap_or_else(|| "0".to_string())
+        }))
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .body(Full::new(Bytes::from(response)))
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
 
