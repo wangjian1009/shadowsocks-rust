@@ -127,16 +127,24 @@ impl ServerConfig {
             #[cfg(feature = "transport-ws")]
             TransportConnectorConfig::Ws(ws_config) => {
                 params.push(("type", "ws".to_owned()));
-                params.push(("path", ws_config.path.to_owned()));
-                params.push(("host", ws_config.host.to_owned()));
+                if let Some(path) = ws_config.uri.path_and_query() {
+                    params.push(("path", path.to_string()));
+                }
+                if let Some(host) = ws_config.uri.authority() {
+                    params.push(("host", host.to_string()));
+                }
             }
             #[cfg(feature = "transport-tls")]
             TransportConnectorConfig::Tls(_tls_config) => {}
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
             TransportConnectorConfig::Wss(ws_config, tls_config) => {
                 params.push(("type", "ws".to_owned()));
-                params.push(("path", ws_config.path.to_owned()));
-                params.push(("host", ws_config.host.to_owned()));
+                if let Some(path) = ws_config.uri.path_and_query() {
+                    params.push(("path", path.to_string()));
+                }
+                if let Some(host) = ws_config.uri.authority() {
+                    params.push(("host", host.to_string()));
+                }
                 params.push(("security", "tls".to_owned()));
                 params.push(("sni", tls_config.sni.to_owned()));
             }
@@ -164,15 +172,24 @@ impl ServerConfig {
 
     #[cfg(feature = "transport-ws")]
     fn from_url_ws(params: &[(String, String)]) -> Result<WebSocketConnectorConfig, UrlParseError> {
+        let uri = format!(
+            "ws://{}{}",
+            match Self::from_url_get_arg(params, "host") {
+                None => transport::DEFAULT_SNI,
+                Some(path) => path,
+            },
+            match Self::from_url_get_arg(params, "path") {
+                None => "/",
+                Some(path) => path,
+            }
+        );
+
         Ok(WebSocketConnectorConfig {
-            path: match Self::from_url_get_arg(params, "path") {
-                None => "/".to_owned(),
-                Some(path) => path.clone(),
-            },
-            host: match Self::from_url_get_arg(params, "host") {
-                None => transport::DEFAULT_SNI.to_owned(),
-                Some(path) => path.clone(),
-            },
+            uri: uri.parse().map_err(|err| {
+                error!(err=?err, uri=?uri, "url to config: ws: parse uri error");
+                UrlParseError::InvalidQueryString
+            })?,
+            headers: None,
         })
     }
 
@@ -354,23 +371,22 @@ impl TransportConnectorConfig {
     #[cfg(feature = "transport-ws")]
     #[inline]
     fn build_ws_config(host: &Option<&str>, path: &str) -> WebSocketConnectorConfig {
+        let uri = format!("ws://{}{}", host.unwrap_or(transport::DEFAULT_SNI), path);
+
         WebSocketConnectorConfig {
-            path: if path.starts_with('/') {
-                path.to_owned()
-            } else {
-                format!("/{path}")
-            },
-            host: host.unwrap_or(DEFAULT_SNI).to_owned(),
+            uri: uri.parse().unwrap(),
+            headers: None,
         }
     }
 
     #[cfg(feature = "transport-ws")]
     #[inline]
     fn fmt_ws_path(config: &WebSocketConnectorConfig, f: &mut fmt::Formatter) -> fmt::Result {
-        if config.path.starts_with('/') {
-            write!(f, "{}", &config.path[1..])
+        let path = config.uri.path();
+        if path.starts_with('/') {
+            write!(f, "{}", &path[1..])
         } else {
-            write!(f, "{}", config.path)
+            write!(f, "{}", path)
         }
     }
 

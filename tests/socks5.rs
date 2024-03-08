@@ -298,8 +298,8 @@ async fn socks5_udp_relay_ss_ws() {
         })),
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_128_GCM)),
         Some(TransportConnectorConfig::Ws(websocket::WebSocketConnectorConfig {
-            path: "/a".to_owned(),
-            host: "www.google.com".to_owned(),
+            uri: "ws://www.google.com/a".parse().unwrap(),
+            headers: None,
         })),
     )
     .await
@@ -318,8 +318,8 @@ async fn socks5_tcp_relay_ss_ws() {
         })),
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportConnectorConfig::Ws(websocket::WebSocketConnectorConfig {
-            path: "/a".to_owned(),
-            host: "www.google.com".to_owned(),
+            uri: "ws://www.google.com/a".parse().unwrap(),
+            headers: None,
         })),
     )
     .await
@@ -363,8 +363,8 @@ async fn socks5_tcp_relay_ss_wss() {
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportConnectorConfig::Wss(
             websocket::WebSocketConnectorConfig {
-                path: "/a".to_owned(),
-                host: "www.google.com".to_owned(),
+                uri: "ws://www.google.com/a".parse().unwrap(),
+                headers: None,
             },
             tls::TlsConnectorConfig {
                 sni: "coolvpn.cc".to_owned(),
