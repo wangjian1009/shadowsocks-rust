@@ -835,8 +835,10 @@ impl ServerConfig {
             let query = match serde_urlencoded::from_bytes::<Vec<(String, String)>>(q.as_bytes()) {
                 Ok(q) => q,
                 Err(err) => {
-                    error!("failed to parse QueryString, err: {}", err);
-                    return Err(UrlParseError::InvalidQueryString);
+                    return Err(UrlParseError::InvalidQueryString(format!(
+                        "parse query error {:?}",
+                        err
+                    )));
                 }
             };
 
@@ -890,7 +892,10 @@ impl ServerConfig {
         match Self::from_url_get_arg(params, k) {
             Some(v) => match v.parse::<T>() {
                 Ok(v) => Ok(Some(v)),
-                Err(_e) => Err(UrlParseError::InvalidQueryString),
+                Err(_err) => Err(UrlParseError::InvalidQueryString(format!(
+                    "parse argument {}={} error",
+                    k, v
+                ))),
             },
             None => Ok(None),
         }
@@ -991,7 +996,7 @@ pub enum UrlParseError {
     MissingHost,
     InvalidAuthInfo,
     InvalidServerAddr,
-    InvalidQueryString,
+    InvalidQueryString(String),
     InvalidSuite,
 }
 
@@ -1010,7 +1015,7 @@ impl fmt::Display for UrlParseError {
             UrlParseError::MissingHost => write!(f, "missing host"),
             UrlParseError::InvalidAuthInfo => write!(f, "invalid authentication info"),
             UrlParseError::InvalidServerAddr => write!(f, "invalid server address"),
-            UrlParseError::InvalidQueryString => write!(f, "invalid query string"),
+            UrlParseError::InvalidQueryString(ref msg) => write!(f, "invalid query string ({})", msg),
             UrlParseError::InvalidSuite => write!(f, "invalid suite"),
         }
     }
@@ -1025,7 +1030,7 @@ impl error::Error for UrlParseError {
             UrlParseError::MissingHost => None,
             UrlParseError::InvalidAuthInfo => None,
             UrlParseError::InvalidServerAddr => None,
-            UrlParseError::InvalidQueryString => None,
+            UrlParseError::InvalidQueryString(..) => None,
             UrlParseError::InvalidSuite => None,
         }
     }

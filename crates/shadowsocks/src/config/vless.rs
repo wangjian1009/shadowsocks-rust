@@ -21,7 +21,7 @@ impl ServerConfig {
                 Ok(q) => q,
                 Err(err) => {
                     error!("url to config: vless: Failed to parse QueryString, err: {}", err);
-                    return Err(UrlParseError::InvalidQueryString);
+                    return Err(UrlParseError::InvalidQueryString(format!("vless parse query error: {:?}", err)));
                 }
             };
 

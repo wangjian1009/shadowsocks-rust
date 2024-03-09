@@ -16,7 +16,7 @@ impl ServerConfig {
                 Ok(q) => Some(q),
                 Err(err) => {
                     error!("url to config: tuic: Failed to parse QueryString, err: {}", err);
-                    return Err(UrlParseError::InvalidQueryString);
+                    return Err(UrlParseError::InvalidQueryString(format!("tuic parse query error: {:?}", err)));
                 }
             };
         }
@@ -98,7 +98,7 @@ impl ServerConfig {
             #[cfg(feature = "transport")]
             if Self::from_url_transport_connector(query)?.is_some() {
                 error!("url to config: tuic: not support transport");
-                return Err(UrlParseError::InvalidQueryString);
+                return Err(UrlParseError::InvalidQueryString("tuic not support transport".to_owned()));
             }
         }
 

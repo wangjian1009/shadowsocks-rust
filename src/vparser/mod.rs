@@ -63,7 +63,7 @@ pub fn parse_server_url(v: &str) -> Result<ServerConfig, String> {
 
     match ServerConfig::from_url(v) {
         Ok(t) => Ok(t),
-        Err(..) => Err("should be SIP002 (https://shadowsocks.org/guide/sip002.html) format".to_owned()),
+        Err(_err) => Err(format!("{:?}", _err)),
     }
 }
 

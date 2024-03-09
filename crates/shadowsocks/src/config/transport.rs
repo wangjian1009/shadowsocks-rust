@@ -92,33 +92,22 @@ impl ServerConfig {
 
         match transport_type.as_str() {
             #[cfg(feature = "transport-ws")]
-            "ws" => {
-                if let Some(security) = Self::from_url_get_arg(query, "security") {
-                    match security.as_str() {
-                        #[cfg(feature = "transport-tls")]
-                        "tls" => Ok(Some(TransportConnectorConfig::Wss(
-                            Self::from_url_ws(query)?,
-                            Self::from_url_tls(query)?,
-                        ))),
-                        _ => {
-                            error!("url to config: vless: not support security {}", security);
-                            Err(UrlParseError::InvalidQueryString)
-                        }
-                    }
-                } else {
-                    Ok(Some(TransportConnectorConfig::Ws(Self::from_url_ws(query)?)))
-                }
-            }
+            "ws" => Ok(Some(TransportConnectorConfig::Ws(Self::from_url_ws(query)?))),
+            #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
+            "wss" => Ok(Some(TransportConnectorConfig::Wss(
+                Self::from_url_ws(query)?,
+                Self::from_url_tls(query)?,
+            ))),
             #[cfg(feature = "transport-mkcp")]
             "kcp" | "mkcp" => Ok(Some(TransportConnectorConfig::Mkcp(Self::from_url_mkcp(query)?))),
             #[cfg(feature = "transport-skcp")]
             "skcp" => Ok(Some(TransportConnectorConfig::Skcp(Self::from_url_skcp(query)?))),
             #[cfg(feature = "transport-tls")]
             "tls" => Ok(Some(TransportConnectorConfig::Tls(Self::from_url_tls(query)?))),
-            _ => {
-                error!("url to config: vless: not support transport type {}", transport_type);
-                Err(UrlParseError::InvalidQueryString)
-            }
+            _ => Err(UrlParseError::InvalidQueryString(format!(
+                "vless: not support transport type {}",
+                transport_type
+            ))),
         }
     }
 
@@ -185,10 +174,9 @@ impl ServerConfig {
         );
 
         Ok(WebSocketConnectorConfig {
-            uri: uri.parse().map_err(|err| {
-                error!(err=?err, uri=?uri, "url to config: ws: parse uri error");
-                UrlParseError::InvalidQueryString
-            })?,
+            uri: uri
+                .parse()
+                .map_err(|err| UrlParseError::InvalidQueryString(format!("ws: parse uri error {:?}", err)))?,
             headers: None,
         })
     }
@@ -198,9 +186,11 @@ impl ServerConfig {
         let mut mkcp_config = MkcpConfig::default();
 
         if let Some(header_type) = Self::from_url_get_arg(params, "headerType") {
-            mkcp_config.header_config = Some(header_type.parse::<HeaderConfig>().map_err(|_e| {
-                error!("url to config: mkcp: not support header type {}", header_type);
-                UrlParseError::InvalidQueryString
+            mkcp_config.header_config = Some(header_type.parse::<HeaderConfig>().map_err(|err| {
+                UrlParseError::InvalidQueryString(format!(
+                    "mkcp: not support header type {}, error {:?}",
+                    header_type, err
+                ))
             })?);
         }
 
@@ -216,10 +206,7 @@ impl ServerConfig {
         let params = params.iter().map(|e| (e.0.as_str(), e.1.as_str())).collect();
         match transport::build_skcp_config(&Some(params)) {
             Ok(c) => Ok(c),
-            Err(e) => {
-                error!("url to config: skcp: {}", e);
-                Err(UrlParseError::InvalidQueryString)
-            }
+            Err(e) => Err(UrlParseError::InvalidQueryString(format!("skcp: {:?}", e))),
         }
     }
 
@@ -245,8 +232,7 @@ impl ServerConfig {
         let tls_config = TlsConnectorConfig {
             sni: match Self::from_url_get_arg(params, "sni") {
                 None => {
-                    error!("url to config: tls: sni not configured");
-                    return Err(UrlParseError::InvalidQueryString);
+                    return Err(UrlParseError::InvalidQueryString("tls: sni not configured".to_owned()));
                 }
                 Some(sni) => sni.clone(),
             },
