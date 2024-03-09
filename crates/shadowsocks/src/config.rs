@@ -877,10 +877,10 @@ impl ServerConfig {
     }
 
     #[allow(dead_code)]
-    fn from_url_get_arg<'a>(params: &'a [(String, String)], k: &str) -> Option<&'a String> {
+    fn from_url_get_arg<'a>(params: &'a [(String, String)], k: &str) -> Option<&'a str> {
         for item in params.iter() {
             if item.0 == k {
-                return Some(&item.1);
+                return Some(item.1.as_str());
             }
         }
 
@@ -1322,7 +1322,7 @@ macro_rules! create_connector_then {
                 #[cfg(feature = "transport-ws")]
                 &shadowsocks::config::TransportConnectorConfig::Ws(ref ws_config) => {
                     let $connector = shadowsocks::transport::direct::TcpConnector::new($context);
-                    match shadowsocks::transport::websocket::WebSocketConnector::new(ws_config, $connector) {
+                    match shadowsocks::transport::websocket::WebSocketConnector::new(ws_config.clone(), $connector) {
                         Ok($connector) => $body,
                         Err(err) => Err(err),
                     }
@@ -1340,7 +1340,7 @@ macro_rules! create_connector_then {
                     let $connector = shadowsocks::transport::direct::TcpConnector::new($context);
                     match shadowsocks::transport::tls::TlsConnector::new(tls_config, $connector) {
                         Ok($connector) => {
-                            match shadowsocks::transport::websocket::WebSocketConnector::new(ws_config, $connector) {
+                            match shadowsocks::transport::websocket::WebSocketConnector::new(ws_config.clone(), $connector) {
                                 Ok($connector) => $body,
                                 Err(err) => Err(err),
                             }

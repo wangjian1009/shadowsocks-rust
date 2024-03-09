@@ -58,7 +58,7 @@ aead-cipher-2022-extra = ["aead-cipher-2022", "shadowsocks-crypto/v2-extra"]
 security-replay-attack-detect = ["bloomfilter"]
 
 transport = []
-transport-ws = ["transport", "tokio-tungstenite"]
+transport-ws = ["transport", "sha1"]
 transport-tls = ["transport", "tokio-rustls", "webpki", "rustls", "rustls-native-certs", "rustls-pemfile"]
 transport-mkcp = ["transport", "arc-swap", "rand"]
 transport-skcp = ["transport"]
@@ -111,6 +111,7 @@ futures = "0.3"
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false }
 async-trait = "0.1"
+memchr = "*"
 
 socket2 = { version = "0.5", features = ["all"] }
 tokio = { version = "1.9.0", features = [
@@ -124,7 +125,6 @@ tokio = { version = "1.9.0", features = [
     "time",
 ] }
 tokio-tfo = "0.2.0"
-tokio-tungstenite = { version = "0.14", optional = true }
 tokio-rustls = { version = "0.23.4", optional = true }
 tokio-util = { version = "*", features = ["codec"], optional = true}
 webpki = { version = "0.22", optional = true }

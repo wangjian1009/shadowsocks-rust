@@ -5,7 +5,7 @@ use regex::Regex;
 use std::{fmt, str::FromStr};
 
 #[cfg(feature = "transport-ws")]
-use crate::transport::websocket::{WebSocketAcceptorConfig, WebSocketConnectorConfig};
+use crate::transport::websocket::{WebSocketAcceptorConfig, WebSocketConnectorConfig, WebsocketPingType};
 
 #[cfg(feature = "transport-ws")]
 pub const DEFAULT_SNI: &str = "www.google.com";
@@ -90,20 +90,21 @@ impl ServerConfig {
             None => return Ok(None),
         };
 
-        match transport_type.as_str() {
+        match transport_type {
             #[cfg(feature = "transport-ws")]
             "ws" => Ok(Some(TransportConnectorConfig::Ws(Self::from_url_ws(query)?))),
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
-            "wss" => Ok(Some(TransportConnectorConfig::Wss(
-                Self::from_url_ws(query)?,
-                Self::from_url_tls(query)?,
-            ))),
+            "wss" => {
+                let ws_config = Self::from_url_ws(query)?;
+                let tls_config = Self::from_url_tls(query, ws_config.uri.host_str())?;
+                Ok(Some(TransportConnectorConfig::Wss(ws_config, tls_config)))
+            }
             #[cfg(feature = "transport-mkcp")]
             "kcp" | "mkcp" => Ok(Some(TransportConnectorConfig::Mkcp(Self::from_url_mkcp(query)?))),
             #[cfg(feature = "transport-skcp")]
             "skcp" => Ok(Some(TransportConnectorConfig::Skcp(Self::from_url_skcp(query)?))),
             #[cfg(feature = "transport-tls")]
-            "tls" => Ok(Some(TransportConnectorConfig::Tls(Self::from_url_tls(query)?))),
+            "tls" => Ok(Some(TransportConnectorConfig::Tls(Self::from_url_tls(query, None)?))),
             _ => Err(UrlParseError::InvalidQueryString(format!(
                 "vless: not support transport type {}",
                 transport_type
@@ -116,24 +117,16 @@ impl ServerConfig {
             #[cfg(feature = "transport-ws")]
             TransportConnectorConfig::Ws(ws_config) => {
                 params.push(("type", "ws".to_owned()));
-                if let Some(path) = ws_config.uri.path_and_query() {
-                    params.push(("path", path.to_string()));
-                }
-                if let Some(host) = ws_config.uri.authority() {
-                    params.push(("host", host.to_string()));
-                }
+                params.push(("path", ws_config.uri.path().to_owned()));
+                params.push(("host", ws_config.uri.authority().to_owned()));
             }
             #[cfg(feature = "transport-tls")]
             TransportConnectorConfig::Tls(_tls_config) => {}
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
             TransportConnectorConfig::Wss(ws_config, tls_config) => {
                 params.push(("type", "ws".to_owned()));
-                if let Some(path) = ws_config.uri.path_and_query() {
-                    params.push(("path", path.to_string()));
-                }
-                if let Some(host) = ws_config.uri.authority() {
-                    params.push(("host", host.to_string()));
-                }
+                params.push(("path", ws_config.uri.path().to_owned()));
+                params.push(("host", ws_config.uri.authority().to_owned()));
                 params.push(("security", "tls".to_owned()));
                 params.push(("sni", tls_config.sni.to_owned()));
             }
@@ -173,12 +166,27 @@ impl ServerConfig {
             }
         );
 
-        Ok(WebSocketConnectorConfig {
+        let mut ws_config = WebSocketConnectorConfig {
             uri: uri
                 .parse()
                 .map_err(|err| UrlParseError::InvalidQueryString(format!("ws: parse uri error {:?}", err)))?,
-            headers: None,
-        })
+            ..Default::default()
+        };
+
+        if let Some(ping) = Self::from_url_get_arg(params, "ping") {
+            match ping {
+                "ping" => ws_config.ping_type = WebsocketPingType::PingFrame,
+                "empty" => ws_config.ping_type = WebsocketPingType::EmptyFrame,
+                _ => {
+                    return Err(UrlParseError::InvalidQueryString(format!(
+                        "ws: not support ping type {}",
+                        ping
+                    )))
+                }
+            }
+        }
+
+        Ok(ws_config)
     }
 
     #[cfg(feature = "transport-mkcp")]
@@ -195,7 +203,7 @@ impl ServerConfig {
         }
 
         if let Some(seed) = Self::from_url_get_arg(params, "seed") {
-            mkcp_config.seed = Some(seed.clone());
+            mkcp_config.seed = Some(seed.to_string());
         }
 
         Ok(mkcp_config)
@@ -211,7 +219,7 @@ impl ServerConfig {
     }
 
     #[cfg(feature = "transport-tls")]
-    fn from_url_tls(params: &[(String, String)]) -> Result<TlsConnectorConfig, UrlParseError> {
+    fn from_url_tls(params: &[(String, String)], dft_sni: Option<&str>) -> Result<TlsConnectorConfig, UrlParseError> {
         let mut cipher_names = None;
         for item in params.iter() {
             if item.0 != "cipher" {
@@ -231,10 +239,11 @@ impl ServerConfig {
 
         let tls_config = TlsConnectorConfig {
             sni: match Self::from_url_get_arg(params, "sni") {
-                None => {
-                    return Err(UrlParseError::InvalidQueryString("tls: sni not configured".to_owned()));
-                }
-                Some(sni) => sni.clone(),
+                None => match dft_sni {
+                    Some(sni) => sni.to_string(),
+                    None => return Err(UrlParseError::InvalidQueryString("tls: sni not configured".to_owned())),
+                },
+                Some(sni) => sni.to_string(),
             },
             cipher: ciphers,
             cert: None,
@@ -361,7 +370,7 @@ impl TransportConnectorConfig {
 
         WebSocketConnectorConfig {
             uri: uri.parse().unwrap(),
-            headers: None,
+            ..Default::default()
         }
     }
 
@@ -629,20 +638,26 @@ impl TransportAcceptorConfig {
     #[inline]
     fn build_ws_config(path: &str) -> WebSocketAcceptorConfig {
         WebSocketAcceptorConfig {
-            path: if path.starts_with('/') {
+            matching_path: Some(if path.starts_with('/') {
                 path.to_owned()
             } else {
                 format!("/{path}")
-            },
+            }),
+            matching_headers: None,
+            ping_type: WebsocketPingType::Disabled,
         }
     }
 
     #[cfg(feature = "transport-ws")]
     fn fmt_ws_path(config: &WebSocketAcceptorConfig, f: &mut fmt::Formatter) -> fmt::Result {
-        if config.path.starts_with('/') {
-            write!(f, "{}", &config.path[1..])
+        if let Some(matching_path) = config.matching_path.as_ref() {
+            if matching_path.starts_with('/') {
+                write!(f, "{}", &matching_path[1..])
+            } else {
+                write!(f, "{}", matching_path)
+            }
         } else {
-            write!(f, "{}", config.path)
+            write!(f, "")
         }
     }
 

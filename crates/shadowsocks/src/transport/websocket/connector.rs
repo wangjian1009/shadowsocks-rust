@@ -2,19 +2,31 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use std::collections::HashMap;
 use std::io;
-use tokio_tungstenite::{
-    client_async,
-    tungstenite::http::{Method, Request, StatusCode, Uri},
-};
+use tokio::io::AsyncWriteExt;
+use url::Url;
 
 use crate::{net::ConnectOpts, ServerAddr};
 
-use super::{super::Connector, cvt_error, BinaryWsStream};
+use super::{
+    super::Connector, config::WebsocketPingType, create_websocket_key_response, parsed_http_data::ParsedHttpData,
+    stream::WebsocketStream,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WebSocketConnectorConfig {
-    pub uri: Uri,
+    pub uri: Url,
     pub headers: Option<HashMap<String, String>>,
+    pub ping_type: WebsocketPingType,
+}
+
+impl Default for WebSocketConnectorConfig {
+    fn default() -> Self {
+        Self {
+            uri: Url::parse("ws://dumy/").unwrap(),
+            headers: None,
+            ping_type: WebsocketPingType::Disabled,
+        }
+    }
 }
 
 pub struct WebSocketConnector<T: Connector> {
@@ -22,71 +34,93 @@ pub struct WebSocketConnector<T: Connector> {
     inner: T,
 }
 
-#[async_trait]
-impl<T: Connector> Connector for WebSocketConnector<T> {
-    type TS = BinaryWsStream<T::TS>;
-
-    async fn connect(&self, destination: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
-        let stream = self.inner.connect(destination, connect_opts).await?;
-        let req = self.req()?;
-        tracing::error!("xxxxx: connect: req={:?}", req);
-        let (stream, resp) = match client_async(req, stream).await.map_err(cvt_error) {
-            Ok(r) => r,
-            Err(err) => {
-                tracing::error!(err = ?err, "websocket handshake error");
-                return Err(err);
-            }
-        };
-        tracing::error!("xxxxx: connect: rsp={:?}", resp);
-        if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
-            return Err(cvt_error(format!("bad status: {}", resp.status())));
-        }
-        let stream = BinaryWsStream::new(stream);
-        Ok(stream)
+impl<'a, T: Connector> WebSocketConnector<T> {
+    pub fn new(config: WebSocketConnectorConfig, inner: T) -> io::Result<Self> {
+        Ok(Self { config, inner })
     }
 }
 
-impl<'a, T: Connector> WebSocketConnector<T> {
-    pub fn new(config: &'a WebSocketConnectorConfig, inner: T) -> io::Result<Self> {
-        Ok(Self {
-            inner,
-            config: config.clone(),
-        })
-    }
+#[async_trait]
+impl<T: Connector> Connector for WebSocketConnector<T> {
+    type TS = WebsocketStream<T::TS>;
 
-    fn req(&self) -> io::Result<Request<()>> {
-        let authority = self.config.uri.authority().unwrap().as_str();
+    async fn connect(&self, destination: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
+        let mut client_stream = self.inner.connect(destination, connect_opts).await?;
+
+        let authority = self.config.uri.authority();
         let host = authority
             .find('@')
             .map(|idx| authority.split_at(idx + 1).1)
             .unwrap_or_else(|| authority);
-        let mut request = Request::builder()
-            .method(Method::GET)
-            .header("Host", host)
-            .header("Connection", "Upgrade")
-            .header("Upgrade", "websocket")
-            .header("Sec-WebSocket-Version", "13")
-            .header("Sec-WebSocket-Key", generate_key())
-            .uri(self.config.uri.clone());
-        if let Some(headers) = self.config.headers.as_ref() {
-            for (k, v) in headers.iter() {
-                if k != "Host" {
-                    request = request.header(k.as_str(), v.as_str());
+
+        let websocket_key = create_websocket_key();
+        let mut http_request = String::with_capacity(1024);
+        http_request.push_str("GET ");
+        http_request.push_str(self.config.uri.path());
+        http_request.push_str(" HTTP/1.1\r\n");
+        http_request.push_str(concat!("Connection: Upgrade\r\n", "Upgrade: websocket\r\n",));
+        http_request.push_str(format!("Host: {}\r\n", host).as_str());
+
+        if let Some(ref headers) = self.config.headers {
+            for (header_key, header_val) in headers {
+                if header_key != "Host" {
+                    http_request.push_str(header_key);
+                    http_request.push_str(": ");
+                    http_request.push_str(header_val);
+                    http_request.push_str("\r\n");
                 }
             }
         }
-        // if self.max_early_data > 0 {
-        //     // we will replace this field later
-        //     request = request.header(self.early_data_header_name.as_str(), "s");
-        // }
-        request.body(()).map_err(cvt_error)
+
+        http_request.push_str(concat!("Sec-WebSocket-Version: 13\r\n", "Sec-WebSocket-Key: "));
+        http_request.push_str(&websocket_key);
+        http_request.push_str("\r\n\r\n");
+
+        // tracing::debug!("websocket send handshake request {}", http_request);
+        client_stream.write_all(&http_request.into_bytes()).await?;
+        client_stream.flush().await?;
+
+        let ParsedHttpData {
+            first_line,
+            headers: response_headers,
+            line_reader,
+        } = ParsedHttpData::parse(&mut client_stream).await?;
+        // tracing::error!("xxxxxx: ws response: read success: {:?}", first_line);
+        // tracing::error!("xxxxxx: ws response:      headers: {:?}", response_headers);
+        // tracing::error!("xxxxxx: ws response:      unparsed: {:?}", String::from_utf8_lossy(line_reader.unparsed_data()));
+
+        if !first_line.starts_with("HTTP/1.1 101") && !first_line.starts_with("HTTP/1.0 101") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Bad websocket response: {}", first_line),
+            ));
+        }
+
+        let websocket_key_response = response_headers
+            .get("sec-websocket-accept")
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "missing websocket key response header"))?;
+
+        let expected_key_response = create_websocket_key_response(websocket_key);
+        if websocket_key_response != &expected_key_response {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!(
+                    "incorrect websocket key response, expected {}, got {}",
+                    expected_key_response, websocket_key_response
+                ),
+            ));
+        }
+
+        Ok(WebsocketStream::new(
+            client_stream,
+            true,
+            self.config.ping_type.clone(),
+            line_reader.unparsed_data(),
+        ))
     }
 }
 
-/// Generate a random key for the `Sec-WebSocket-Key` header.
-pub fn generate_key() -> String {
-    // a base64-encoded (see Section 4 of [RFC4648]) value that,
-    // when decoded, is 16 bytes in length (RFC 6455)
-    let r: [u8; 16] = rand::random();
-    base64::engine::general_purpose::STANDARD.encode(r)
+fn create_websocket_key() -> String {
+    let key: [u8; 16] = rand::random();
+    base64::engine::general_purpose::STANDARD.encode(key)
 }

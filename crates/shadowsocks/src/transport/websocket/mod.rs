@@ -1,127 +1,21 @@
 pub mod acceptor;
 pub mod connector;
+mod stream;
+mod config;
+mod parsed_http_data;
+use base64::Engine as _;
+use sha1::{Digest, Sha1};
 
-use bytes::{Buf, Bytes};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
-
-use futures_core::{ready, Stream};
-use futures_util::sink::Sink;
-use std::{
-    io,
-    pin::Pin,
-    task::{Context, Poll},
-};
-
-use super::{DeviceOrGuard, StreamConnection};
+pub use config::WebsocketPingType;
 pub use acceptor::{WebSocketAcceptor, WebSocketAcceptorConfig};
 pub use connector::{WebSocketConnector, WebSocketConnectorConfig};
 
-pub fn cvt_error<T: ToString>(message: T) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, format!("websocket: {}", message.to_string()))
-}
+fn create_websocket_key_response(mut key: String) -> String {
+    // after some testing - the sha1 crate seems faster than sha-1.
+    key.push_str("258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
 
-pub struct BinaryWsStream<T: StreamConnection> {
-    inner: WebSocketStream<T>,
-    read_buffer: Option<Bytes>,
-}
-
-impl<T: StreamConnection> StreamConnection for BinaryWsStream<T> {
-    fn check_connected(&self) -> bool {
-        self.inner.get_ref().check_connected()
-    }
-
-    #[cfg(feature = "rate-limit")]
-    fn set_rate_limit(&mut self, rate_limit: Option<std::sync::Arc<crate::transport::RateLimiter>>) {
-        self.inner.get_mut().set_rate_limit(rate_limit);
-    }
-
-    fn physical_device(&self) -> DeviceOrGuard<'_> {
-        self.inner.get_ref().physical_device()
-    }
-}
-
-impl<T: StreamConnection> AsyncRead for BinaryWsStream<T> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        loop {
-            if let Some(read_buffer) = &mut self.read_buffer {
-                if read_buffer.len() <= buf.remaining() {
-                    buf.put_slice(read_buffer);
-                    self.read_buffer = None;
-                } else {
-                    let len = buf.remaining();
-                    buf.put_slice(&read_buffer[..len]);
-                    read_buffer.advance(len);
-                }
-                return Poll::Ready(Ok(()));
-            }
-            let message = ready!(Pin::new(&mut self.inner).poll_next(cx));
-            if message.is_none() {
-                return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "websocket stream drained")));
-            }
-            let message = message.unwrap().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-            // binary only
-            match message {
-                Message::Binary(binary) => {
-                    if binary.len() < buf.remaining() {
-                        buf.put_slice(&binary);
-                        return Poll::Ready(Ok(()));
-                    } else {
-                        self.read_buffer = Some(Bytes::from(binary));
-                        continue;
-                    }
-                }
-                Message::Close(_) => {
-                    return Poll::Ready(Err(io::ErrorKind::ConnectionAborted.into()));
-                }
-                _ => {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("invalid message type {message:?}"),
-                    )))
-                }
-            }
-        }
-    }
-}
-
-impl<T: StreamConnection> AsyncWrite for BinaryWsStream<T> {
-    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
-        ready!(Pin::new(&mut self.inner).poll_ready(cx))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e:?}")))?;
-        let message = Message::Binary(buf.into());
-        Pin::new(&mut self.inner)
-            .start_send(message)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e:?}")))?;
-        Poll::Ready(Ok(buf.len()))
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        let inner = Pin::new(&mut self.inner);
-        inner
-            .poll_flush(cx)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{e:?}")))
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        ready!(Pin::new(&mut self.inner).poll_ready(cx)).map_err(cvt_error)?;
-        let message = Message::Close(None);
-        let _ = Pin::new(&mut self.inner).start_send(message);
-
-        let inner = Pin::new(&mut self.inner);
-        inner.poll_close(cx).map_err(cvt_error)
-    }
-}
-
-impl<T: StreamConnection> BinaryWsStream<T> {
-    pub fn new(inner: WebSocketStream<T>) -> Self {
-        Self {
-            inner,
-            read_buffer: None,
-        }
-    }
+    let mut hasher = Sha1::new();
+    hasher.update(key.into_bytes());
+    let hash = hasher.finalize();
+    base64::engine::general_purpose::STANDARD.encode(hash)
 }

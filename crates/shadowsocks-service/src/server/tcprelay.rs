@@ -128,7 +128,7 @@ impl TcpServer {
                         accept_opts.clone(),
                     )
                     .await?;
-                    TcpServerData::Ws(WebSocketAcceptor::new(ws_config, listener))
+                    TcpServerData::Ws(WebSocketAcceptor::new(ws_config.clone(), listener))
                 }
                 #[cfg(feature = "transport-tls")]
                 &TransportAcceptorConfig::Tls(tls_config) => {
@@ -159,7 +159,7 @@ impl TcpServer {
                     )
                     .await?;
                     let listener = TlsAcceptor::new(tls_config, listener).await?;
-                    TcpServerData::Wss(WebSocketAcceptor::new(ws_config, listener))
+                    TcpServerData::Wss(WebSocketAcceptor::new(ws_config.clone(), listener))
                 }
                 #[cfg(feature = "transport-mkcp")]
                 &TransportAcceptorConfig::Mkcp(mkcp_config) => {

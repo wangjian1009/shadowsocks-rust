@@ -294,12 +294,13 @@ async fn socks5_udp_relay_ss_ws() {
     socks5_udp_relay_test(
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_128_GCM)),
         Some(TransportAcceptorConfig::Ws(websocket::WebSocketAcceptorConfig {
-            path: "/a".to_owned(),
+            matching_path: Some("/a".to_owned()),
+            ..Default::default()
         })),
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_128_GCM)),
         Some(TransportConnectorConfig::Ws(websocket::WebSocketConnectorConfig {
             uri: "ws://www.google.com/a".parse().unwrap(),
-            headers: None,
+            ..Default::default()
         })),
     )
     .await
@@ -314,12 +315,13 @@ async fn socks5_tcp_relay_ss_ws() {
     socks5_tcp_relay_test(
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportAcceptorConfig::Ws(websocket::WebSocketAcceptorConfig {
-            path: "/a".to_owned(),
+            matching_path: Some("/a".to_owned()),
+            ..Default::default()
         })),
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportConnectorConfig::Ws(websocket::WebSocketConnectorConfig {
             uri: "ws://www.google.com/a".parse().unwrap(),
-            headers: None,
+            ..Default::default()
         })),
     )
     .await
@@ -353,7 +355,10 @@ async fn socks5_tcp_relay_ss_wss() {
     socks5_tcp_relay_test(
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportAcceptorConfig::Wss(
-            websocket::WebSocketAcceptorConfig { path: "/a".to_owned() },
+            websocket::WebSocketAcceptorConfig {
+                matching_path: Some("/a".to_owned()),
+                ..Default::default()
+            },
             tls::TlsAcceptorConfig {
                 cert: "tests/cert/server.crt".to_owned(),
                 key: "tests/cert/server.key".to_owned(),
@@ -364,7 +369,7 @@ async fn socks5_tcp_relay_ss_wss() {
         Some(TransportConnectorConfig::Wss(
             websocket::WebSocketConnectorConfig {
                 uri: "ws://www.google.com/a".parse().unwrap(),
-                headers: None,
+                ..Default::default()
             },
             tls::TlsConnectorConfig {
                 sni: "coolvpn.cc".to_owned(),

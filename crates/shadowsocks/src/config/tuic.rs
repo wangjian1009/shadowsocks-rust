@@ -43,7 +43,7 @@ impl ServerConfig {
         let mut tuic_config = client::RawConfig::new(token.to_owned(), cipher);
         if let Some(query) = query.as_ref() {
             if let Some(sni) = Self::from_url_get_arg(query, "sni") {
-                tuic_config.sni = Some(sni.clone());
+                tuic_config.sni = Some(sni.to_string());
             }
 
             // certificates
