@@ -109,7 +109,7 @@ default = [
     # "transport-restls",
     "trojan",
     "vless",
-    "tuic",
+    # "tuic",
     "wireguard",
     "aead-cipher-2022",
 ]
@@ -340,7 +340,3 @@ env_logger = "0.10"
 byte_string = "1.0"
 tokio = { version = "1.9", features = ["net", "time", "macros", "io-util"] }
 tokio-test = "*"
-
-[patch.crates-io]
-quinn = { path = "depends/quinn/quinn" }
-tracing-oslog = { path = "depends/tracing-oslog" }

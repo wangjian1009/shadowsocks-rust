@@ -63,6 +63,16 @@ use crate::statistics;
 
 /// Defines command line options
 pub fn define_command_line_options(mut app: Command) -> Command {
+    let all_protocol = vec![
+        "PROTOCOL_SS",
+        #[cfg(feature = "trojan")]
+        "PROTOCOL_TROJAN",
+        #[cfg(feature = "vless")]
+        "PROTOCOL_VLESS",
+        #[cfg(feature = "tuic")]
+        "PROTOCOL_TUIC",
+    ];
+
     app = app
         .arg(
             Arg::new("CONFIG")
@@ -104,7 +114,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                 .long("ss")
                 .requires("SERVER_ADDR")
                 .action(ArgAction::SetTrue)
-                .conflicts_with_all(&["PROTOCOL_TROJAN", "PROTOCOL_VLESS", "PROTOCOL_TUIC"])
+                .conflicts_with_all(all_protocol.iter().filter(|&&e| e != "PROTOCOL_SS"))
                 .help("Use shadowsocks protocol"),
         )
         .arg(
@@ -215,7 +225,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                     .long("vless")
                     .requires("SERVER_ADDR")
                     .action(ArgAction::SetTrue)
-                    .conflicts_with_all(&["PROTOCOL_TROJAN", "PROTOCOL_SS", "PROTOCOL_TUIC"])
+                    .conflicts_with_all(all_protocol.iter().filter(|&&e| e != "PROTOCOL_VLESS"))
                     .help("Use vless protocol"),
             )
             .arg(
@@ -236,7 +246,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                     .long("trojan")
                     .requires("SERVER_ADDR")
                     .action(ArgAction::SetTrue)
-                    .conflicts_with_all(&["PROTOCOL_VLESS", "PROTOCOL_SS", "PROTOCOL_TUIC"])
+                    .conflicts_with_all(all_protocol.iter().filter(|&&e| e != "PROTOCOL_TROJAN"))
                     .help("Use trojan protocol"),
             )
             .arg(

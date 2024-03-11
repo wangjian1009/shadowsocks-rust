@@ -46,7 +46,7 @@ default = [
     # "transport-restls",
     "trojan",
     "vless",
-    "tuic",
+    # "tuic",
     "wireguard",
 ]
 
@@ -77,7 +77,7 @@ full = [
     "transport-restls",
     "trojan",
     "vless",
-    "tuic",
+    # "tuic",
     "wireguard",
 ]
 
