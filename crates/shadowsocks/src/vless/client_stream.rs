@@ -2,13 +2,12 @@ use std::{
     io,
     io::Cursor,
     pin::Pin,
-    sync::Arc,
     task::{self, Poll},
 };
 
 use bytes::{Buf, BytesMut};
 use futures::{ready, Future};
-use spin::Mutex as SpinMutex;
+use pin_project::pin_project;
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     time,
@@ -29,22 +28,23 @@ enum ClientStreamWriteState {
         request: protocol::RequestHeader,
         addons: Option<protocol::Addons>,
     },
-    Connecting(SpinMutex<BytesMut>),
+    Connecting(BytesMut),
     Connected,
 }
 
 enum ClientStreamReadState {
     Init,
-    Connecting(SpinMutex<Vec<u8>>),
-    ReadingFromCache(SpinMutex<Vec<u8>>),
+    Connecting(Vec<u8>),
+    ReadingFromCache(Vec<u8>),
     Connected,
 }
 
 /// A stream for sending / receiving data stream from remote server via vless' proxy server
+#[pin_project(project = ClientStreamProj)]
 pub struct ClientStream<S> {
     stream: S,
-    write_state: Arc<ClientStreamWriteState>,
-    read_state: Arc<ClientStreamReadState>,
+    write_state: ClientStreamWriteState,
+    read_state: ClientStreamReadState,
 }
 
 impl<S: StreamConnection> StreamConnection for ClientStream<S> {
@@ -112,8 +112,8 @@ impl<S: StreamConnection> ClientStream<S> {
     fn new(stream: S, request: protocol::RequestHeader) -> ClientStream<S> {
         ClientStream {
             stream,
-            write_state: Arc::new(ClientStreamWriteState::Connect { request, addons: None }),
-            read_state: Arc::new(ClientStreamReadState::Init),
+            write_state: ClientStreamWriteState::Connect { request, addons: None },
+            read_state: ClientStreamReadState::Init,
         }
     }
 
@@ -135,7 +135,7 @@ impl<S: StreamConnection> ClientStream<S> {
 }
 
 impl<S> ClientStream<S> {
-    fn process_response(&mut self, addon: Option<protocol::Addons>) -> io::Result<()> {
+    fn process_response(addon: Option<protocol::Addons>) -> io::Result<()> {
         if addon.is_some() {
             return Err(new_error("decode rquest: not support addon"));
         }
@@ -148,12 +148,19 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     #[inline]
-    fn poll_read(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        let ClientStreamProj {
+            mut stream, mut read_state, ..
+        } = self.project();
+
         loop {
-            match self.read_state.clone().as_ref() {
+            let mut next_state = None;
+            let mut is_done = false;
+
+            match &mut read_state {
                 ClientStreamReadState::Init => {
                     if let Err(err) = {
-                        let stream = Pin::new(&mut self.stream);
+                        let stream = Pin::new(&mut stream);
                         ready!(stream.poll_read(cx, buf))
                     } {
                         return Poll::Ready(Err(err));
@@ -178,14 +185,14 @@ where
                             // 数据不够，保持数据等待后续数据到来
                             let buffer = buf.filled().to_owned();
                             buf.set_filled(0);
-                            self.read_state = Arc::new(ClientStreamReadState::Connecting(SpinMutex::new(buffer)));
+                            next_state = Some(ClientStreamReadState::Connecting(buffer));
                         }
                         Poll::Ready(r) => match r {
                             Err(err) => return Poll::Ready(Err(err)),
-                            Ok(addon) => match self.process_response(addon) {
+                            Ok(addon) => match Self::process_response(addon) {
                                 Err(err) => return Poll::Ready(Err(err)),
                                 Ok(()) => {
-                                    self.read_state = Arc::new(ClientStreamReadState::Connected);
+                                    next_state = Some(ClientStreamReadState::Connected);
 
                                     let used = cursor.position() as usize;
                                     assert!(used <= total);
@@ -197,16 +204,16 @@ where
                                         // 只处理掉了部分数据，则清理掉已经读取的部分，然后进入Connected状态，并返回调用者处理
                                         buf.filled_mut().copy_within(used.., 0);
                                         buf.set_filled(left);
-                                        return Poll::Ready(Ok(()));
+                                        is_done = true;
                                     }
                                 }
                             },
                         },
                     }
                 }
-                ClientStreamReadState::Connecting(buffer) => {
+                ClientStreamReadState::Connecting(ref mut buffer) => {
                     match {
-                        let stream = Pin::new(&mut self.stream);
+                        let stream = Pin::new(&mut stream);
                         ready!(stream.poll_read(cx, buf))
                     } {
                         Ok(()) => {}
@@ -219,7 +226,6 @@ where
                     }
 
                     // 拼接数据
-                    let mut buffer = buffer.lock();
                     buffer.extend_from_slice(buf.filled());
                     buf.clear();
 
@@ -234,26 +240,23 @@ where
 
                     match poll_result {
                         Err(err) => return Poll::Ready(Err(err)),
-                        Ok(addon) => match self.process_response(addon) {
+                        Ok(addon) => match Self::process_response(addon) {
                             Err(err) => return Poll::Ready(Err(err)),
                             Ok(()) => {
                                 let used = cursor.position() as usize;
                                 if total == used {
                                     // 所有数据都已经处理掉了，则直接进入Connected状态
-                                    self.read_state = Arc::new(ClientStreamReadState::Connected);
+                                    next_state = Some(ClientStreamReadState::Connected);
                                 } else {
                                     // 只处理掉了部分数据，则清理掉已经读取的部分，然后进入Read状态，并返回调用者处理
-                                    self.read_state = Arc::new(ClientStreamReadState::ReadingFromCache(
-                                        SpinMutex::new(buffer[used..total].to_owned()),
-                                    ));
+                                    next_state =
+                                        Some(ClientStreamReadState::ReadingFromCache(buffer[used..total].to_owned()));
                                 }
                             }
                         },
                     }
                 }
-                ClientStreamReadState::ReadingFromCache(buffer) => {
-                    let mut buffer = buffer.lock();
-
+                ClientStreamReadState::ReadingFromCache(ref mut buffer) => {
                     assert!(buffer.len() > 0);
                     let read_size = std::cmp::min(buffer.len(), buf.remaining());
                     if buffer.len() <= buf.capacity() {
@@ -268,14 +271,23 @@ where
                         unsafe { buffer.set_len(left_size) };
                     } else {
                         // 读取后所有数据都已经获取
-                        self.read_state = Arc::new(ClientStreamReadState::Connected);
+                        next_state = Some(ClientStreamReadState::Connected);
                     }
-                    return Poll::Ready(Ok(()));
+
+                    is_done = true;
                 }
                 ClientStreamReadState::Connected => {
-                    let stream = Pin::new(&mut self.stream);
+                    let stream = Pin::new(&mut stream);
                     return stream.poll_read(cx, buf);
                 }
+            }
+
+            if next_state.is_some() {
+                *read_state = next_state.take().unwrap();
+            }
+
+            if is_done {
+                return Poll::Ready(Ok(()));
             }
         }
     }
@@ -285,44 +297,57 @@ impl<S> AsyncWrite for ClientStream<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    fn poll_write(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &[u8]) -> Poll<Result<usize, io::Error>> {
+        let ClientStreamProj {
+            mut stream,
+            mut write_state,
+            ..
+        } = self.project();
+
         loop {
-            match self.write_state.clone().as_ref() {
+            let mut next_state = None;
+
+            match &mut write_state {
                 ClientStreamWriteState::Connect { request, addons } => {
                     let request_length = encoding::request_header_serialized_len(request, addons);
 
                     let mut buffer = BytesMut::with_capacity(request_length);
                     encoding::encode_request_header(&mut buffer, request, addons)?;
 
-                    self.write_state = Arc::new(ClientStreamWriteState::Connecting(SpinMutex::new(buffer)));
+                    next_state = Some(ClientStreamWriteState::Connecting(buffer));
                 }
                 ClientStreamWriteState::Connecting(buffer) => {
-                    let stream = Pin::new(&mut self.stream);
-                    let mut buffer = buffer.lock();
+                    let stream = Pin::new(&mut stream);
                     let n = ready!(stream.poll_write(cx, buffer.as_mut()))?;
                     if n == buffer.len() {
-                        self.write_state = Arc::new(ClientStreamWriteState::Connected);
+                        next_state = Some(ClientStreamWriteState::Connected);
                     } else {
                         buffer.advance(n);
                     }
                 }
                 ClientStreamWriteState::Connected => {
-                    let stream = Pin::new(&mut self.stream);
+                    let stream = Pin::new(&mut stream);
                     return stream.poll_write(cx, buf);
                 }
+            }
+
+            if next_state.is_some() {
+                *write_state = next_state.take().unwrap();
             }
         }
     }
 
     #[inline]
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Result<(), io::Error>> {
-        let stream = Pin::new(&mut self.stream);
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Result<(), io::Error>> {
+        let ClientStreamProj { mut stream, .. } = self.project();
+        let stream = Pin::new(&mut stream);
         stream.poll_flush(cx)
     }
 
     #[inline]
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Result<(), io::Error>> {
-        let stream = Pin::new(&mut self.stream);
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Result<(), io::Error>> {
+        let ClientStreamProj { mut stream, .. } = self.project();
+        let stream = Pin::new(&mut stream);
         stream.poll_shutdown(cx)
     }
 }
