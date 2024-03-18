@@ -507,8 +507,6 @@ impl ClientSessionContext {
 
 enum MultiProtocolSocket {
     SS(Arc<MonProxySocket>),
-    #[cfg(feature = "vless")]
-    Vless(vless::VlessUdpWriter),
 }
 
 struct UdpAssociationContext {
@@ -854,8 +852,6 @@ impl UdpAssociationContext {
                 // Naive route, send data directly back to client without session
                 if let Err(err) = match &mut self.inbound {
                     MultiProtocolSocket::SS(socket) => socket.send_to(self.peer_addr, &addr, data).await,
-                    #[cfg(feature = "vless")]
-                    MultiProtocolSocket::Vless(writer) => writer.write_to_mut(data).await,
                 } {
                     warn!(
                         "udp failed to send back {} bytes to client {}, from target {}, error: {}",
@@ -907,10 +903,6 @@ impl UdpAssociationContext {
                     MultiProtocolSocket::SS(socket) => {
                         socket.send_to_with_ctrl(self.peer_addr, &addr, &control, data).await
                     }
-                    #[cfg(feature = "vless")]
-                    MultiProtocolSocket::Vless(..) => {
-                        unreachable!()
-                    }
                 } {
                     warn!(
                         "udp failed to send back {} bytes to client {}, from target {}, control: {:?}, error: {}",
@@ -941,6 +933,3 @@ impl UdpAssociationContext {
         }
     }
 }
-
-#[cfg(feature = "vless")]
-pub mod vless;

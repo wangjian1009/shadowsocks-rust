@@ -40,7 +40,7 @@ cfg_if! {
 cfg_if! {
     if #[cfg(feature = "vless")] {
         mod vless;
-        pub use crate::vless::{Config as VlessConfig};
+        pub use crate::vless::{ClientConfig as VlessConfig};
     }
 }
 

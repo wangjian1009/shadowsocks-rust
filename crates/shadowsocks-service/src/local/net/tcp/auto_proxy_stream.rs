@@ -271,7 +271,7 @@ impl AutoProxyClientStream {
                         svr_cfg,
                         effect_vless_cfg,
                         vless::protocol::RequestCommand::TCP,
-                        Some(ServerAddr::from(addr.clone())),
+                        addr.clone(),
                         connect_opts,
                         |stream| {
                             #[cfg(feature = "rate-limit")]

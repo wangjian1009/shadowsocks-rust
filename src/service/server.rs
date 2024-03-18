@@ -42,9 +42,6 @@ use shadowsocks_service::shadowsocks::relay::socks5::Address;
 #[cfg(feature = "trojan")]
 use shadowsocks_service::shadowsocks::config::TrojanConfig;
 
-#[cfg(feature = "vless")]
-use shadowsocks_service::shadowsocks::{config::VlessConfig, vless::UUID};
-
 #[cfg(feature = "tuic")]
 use shadowsocks_service::shadowsocks::{
     config::TuicConfig,
@@ -67,8 +64,6 @@ pub fn define_command_line_options(mut app: Command) -> Command {
         "PROTOCOL_SS",
         #[cfg(feature = "trojan")]
         "PROTOCOL_TROJAN",
-        #[cfg(feature = "vless")]
-        "PROTOCOL_VLESS",
         #[cfg(feature = "tuic")]
         "PROTOCOL_TUIC",
     ];
@@ -217,27 +212,6 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                 .help("Resolve hostname to IPv6 address first"),
         );
 
-    #[cfg(feature = "vless")]
-    {
-        app = app
-            .arg(
-                Arg::new("PROTOCOL_VLESS")
-                    .long("vless")
-                    .requires("SERVER_ADDR")
-                    .action(ArgAction::SetTrue)
-                    .conflicts_with_all(all_protocol.iter().filter(|&&e| e != "PROTOCOL_VLESS"))
-                    .help("Use vless protocol"),
-            )
-            .arg(
-                Arg::new("VLESS_USER")
-                    .long("vless-user")
-                    .requires("PROTOCOL_VLESS")
-                    .action(ArgAction::Set)
-                    .value_parser(clap::value_parser!(UUID))
-                    .help("Vless's users"),
-            );
-    }
-
     #[cfg(feature = "trojan")]
     {
         app = app
@@ -266,7 +240,7 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                     .long("tuic")
                     .requires("SERVER_ADDR")
                     .action(ArgAction::SetTrue)
-                    .conflicts_with_all(&["PROTOCOL_VLESS", "PROTOCOL_SS", "PROTOCOL_TROJAN"])
+                    .conflicts_with_all(&["PROTOCOL_SS", "PROTOCOL_TROJAN"])
                     .help("Use tuic protocol"),
             )
             .arg(
@@ -581,23 +555,6 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
         if let Some(svr_addr) = matches.get_one::<String>("SERVER_ADDR") {
             let mut protocol = None;
-
-            #[cfg(feature = "vless")]
-            if protocol.is_none() && matches.get_flag("PROTOCOL_VLESS") {
-                let mut vless_cfg = VlessConfig::new();
-
-                match matches.get_one::<UUID>("VLESS_USER") {
-                    Some(uuid) => {
-                        vless_cfg.add_user(0, uuid.to_string().as_str(), None).unwrap();
-                    }
-                    None => {
-                        eprintln!("missing `vless-user`");
-                        return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
-                    }
-                };
-
-                protocol = Some(ServerProtocol::Vless(vless_cfg));
-            }
 
             #[cfg(feature = "trojan")]
             if protocol.is_none() && matches.get_flag("PROTOCOL_TROJAN") {

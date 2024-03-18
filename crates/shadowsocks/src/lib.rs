@@ -63,9 +63,6 @@ pub mod tuic;
 #[cfg(feature = "wireguard")]
 pub mod wg;
 
-#[cfg(test)]
-mod test;
-
 #[cfg(feature = "statistics")]
 #[macro_use]
 extern crate metrics;

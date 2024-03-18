@@ -92,7 +92,24 @@ impl ServerConfig {
 
         match transport_type {
             #[cfg(feature = "transport-ws")]
-            "ws" => Ok(Some(TransportConnectorConfig::Ws(Self::from_url_ws(query)?))),
+            "ws" => {
+                if let Some(security) = Self::from_url_get_arg(query, "security") {
+                    match security {
+                        #[cfg(feature = "transport-tls")]
+                        "tls" => {
+                            let ws_config = Self::from_url_ws(query)?;
+                            let tls_config = Self::from_url_tls(query, ws_config.uri.host_str())?;
+                            Ok(Some(TransportConnectorConfig::Wss(ws_config, tls_config)))
+                        }
+                        _ => Err(UrlParseError::InvalidQueryString(format!(
+                            "url to config: vless: not support security {}",
+                            security
+                        ))),
+                    }
+                } else {
+                    Ok(Some(TransportConnectorConfig::Ws(Self::from_url_ws(query)?)))
+                }
+            }
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
             "wss" => {
                 let ws_config = Self::from_url_ws(query)?;

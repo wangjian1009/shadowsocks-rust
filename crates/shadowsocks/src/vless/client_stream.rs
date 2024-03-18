@@ -17,11 +17,14 @@ use crate::{
     config::ServerConfig,
     net::ConnectOpts,
     transport::{Connector, DeviceOrGuard, StreamConnection},
-    vless::{new_error, Config},
-    ServerAddr,
 };
 
-use super::{encoding, protocol};
+use super::{encoding, new_error, protocol, UUID, Address};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClientConfig {
+    pub user_id: UUID,
+}
 
 enum ClientStreamWriteState {
     Connect {
@@ -67,9 +70,9 @@ impl<S: StreamConnection> ClientStream<S> {
     pub async fn connect<C, F>(
         connector: &C,
         svr_cfg: &ServerConfig,
-        svr_vless_cfg: &Config,
+        svr_vless_cfg: &ClientConfig,
         command: protocol::RequestCommand,
-        target_address: Option<ServerAddr>,
+        target_address: Address,
         opts: &ConnectOpts,
         map_fn: F,
     ) -> io::Result<ClientStream<S>>
@@ -98,34 +101,27 @@ impl<S: StreamConnection> ClientStream<S> {
             opts
         );
 
-        let request = protocol::RequestHeader {
-            version: 0,
-            user: Self::pick_user(svr_vless_cfg)?.account.id.clone(),
+        Ok(Self::new(
+            map_fn(stream),
+            svr_vless_cfg.user_id.clone(),
             command,
-            address: target_address.map(protocol::Address::from),
-        };
-
-        Ok(ClientStream::new(map_fn(stream), request))
+            target_address,
+        ))
     }
 
     #[inline]
-    fn new(stream: S, request: protocol::RequestHeader) -> ClientStream<S> {
+    pub fn new(stream: S, user: UUID, command: protocol::RequestCommand, address: Address) -> Self {
+        let request = protocol::RequestHeader {
+            version: 0,
+            user,
+            command,
+            address,
+        };
+
         ClientStream {
             stream,
             write_state: ClientStreamWriteState::Connect { request, addons: None },
             read_state: ClientStreamReadState::Init,
-        }
-    }
-
-    #[inline]
-    fn pick_user(cfg: &Config) -> io::Result<&protocol::User> {
-        match cfg.clients.len() {
-            0 => Err(io::Error::new(io::ErrorKind::Other, "no user configured")),
-            1 => Ok(&cfg.clients[0]),
-            _ => {
-                let idx: u16 = rand::random();
-                Ok(&cfg.clients[(idx % cfg.clients.len() as u16) as usize])
-            }
         }
     }
 
@@ -150,7 +146,9 @@ where
     #[inline]
     fn poll_read(self: Pin<&mut Self>, cx: &mut task::Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         let ClientStreamProj {
-            mut stream, mut read_state, ..
+            mut stream,
+            mut read_state,
+            ..
         } = self.project();
 
         loop {

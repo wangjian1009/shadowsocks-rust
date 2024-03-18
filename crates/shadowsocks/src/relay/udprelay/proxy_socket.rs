@@ -20,8 +20,7 @@ use crate::{
     context::SharedContext,
     crypto::CipherKind,
     net::{AcceptOpts, ConnectOpts, UdpSocket as ShadowUdpSocket},
-    relay::udprelay::options::UdpSocketControlData,
-    vless::protocol::Address,
+    relay::{udprelay::options::UdpSocketControlData, Address},
 };
 
 use super::crypto_io::{

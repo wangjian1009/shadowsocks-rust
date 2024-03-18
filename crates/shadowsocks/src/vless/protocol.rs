@@ -1,6 +1,12 @@
 use std::fmt;
 
-use super::{super::common::UUID, Address};
+use super::{UUID, Address};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Addons {
+    pub flow: Option<String>,
+    pub seed: Vec<u8>,
+}
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum RequestCommand {
@@ -23,6 +29,6 @@ impl fmt::Display for RequestCommand {
 pub struct RequestHeader {
     pub version: u8,
     pub command: RequestCommand,
-    pub address: Option<Address>,
+    pub address: Address,
     pub user: UUID,
 }

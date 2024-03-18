@@ -1,6 +1,4 @@
-use crate::vless::common::UUID;
-
-use super::{new_error, protocol, protocol::Address};
+use super::{new_error, protocol, UUID, Address};
 use std::{
     io,
     slice,
@@ -22,14 +20,12 @@ pub fn request_header_serialized_len(
 ) -> usize {
     let mut sz = 1 + 16 + 1 + 1;
 
-    if let Some(address) = request.address.as_ref() {
-        match address {
-            Address::SocketAddress(addr) => match addr {
-                SocketAddr::V4(..) => sz += 2 + 4,
-                SocketAddr::V6(..) => sz += 2 + 16,
-            },
-            Address::DomainNameAddress(host, _port) => sz += 2 + host.len(),
-        }
+    match &request.address {
+        Address::SocketAddress(addr) => match addr {
+            SocketAddr::V4(..) => sz += 2 + 4,
+            SocketAddr::V6(..) => sz += 2 + 16,
+        },
+        Address::DomainNameAddress(host, _port) => sz += 2 + host.len(),
     }
 
     sz
@@ -56,13 +52,7 @@ where
     w.put_u8(request.command as u8);
     writed += 1;
 
-    if request.command != protocol::RequestCommand::Mux {
-        if let Some(address) = request.address.as_ref() {
-            writed += encode_address(w, address)?;
-        } else {
-            return Err(new_error(format!("{:?} request no address", request.command)));
-        }
-    }
+    writed += encode_address(w, &request.address)?;
 
     Ok(writed)
 }
@@ -93,10 +83,7 @@ where
                 }
             };
 
-            let mut address = None;
-            if command != protocol::RequestCommand::Mux {
-                address = Some(decode_address(stream).await?);
-            }
+            let address = decode_address(stream).await?;
 
             let request = protocol::RequestHeader {
                 version,
@@ -111,24 +98,6 @@ where
             "decode request header: invalid request version {version}"
         ))),
     }
-}
-
-pub fn encode_response_header<W>(
-    w: &mut W,
-    request_version: u8,
-    request_addons: &Option<protocol::Addons>,
-) -> io::Result<usize>
-where
-    W: BufMut + Unpin,
-{
-    let mut writed: usize = 0;
-
-    w.put_u8(request_version);
-    writed += 1;
-
-    writed += encode_header_addons(w, request_addons)?;
-    
-    Ok(writed)
 }
 
 pub async fn decode_response_header<R>(
@@ -185,21 +154,7 @@ where
 }
 
 #[inline]
-pub fn address_serialized_len(address: &protocol::Address) -> usize
-{
-    match address {
-        Address::SocketAddress(addr) => match addr {
-            SocketAddr::V4(_addr) => 7,
-            SocketAddr::V6(_addr) => 19,
-        },
-        Address::DomainNameAddress(host, _port) => {
-            2 + 1 + 1 + host.as_bytes().len()
-        }
-    }
-}
-
-#[inline]
-pub fn encode_address<W>(w: &mut W, address: &protocol::Address) -> io::Result<usize>
+pub fn encode_address<W>(w: &mut W, address: &Address) -> io::Result<usize>
 where
     W: BufMut + Unpin,
 {
@@ -233,7 +188,7 @@ where
 }
 
 #[inline]
-pub async fn decode_address<R>(stream: &mut R) -> io::Result<protocol::Address>
+pub async fn decode_address<R>(stream: &mut R) -> io::Result<Address>
 where
     R: AsyncRead + Unpin,
 {
@@ -274,7 +229,7 @@ where
             let mut addr_buf = vec![0u8; addr_len as usize];
             stream.read_exact(&mut addr_buf).await?;
             let addr = String::from_utf8(addr_buf).map_err(|e| new_error(format!("decode address: {e}")))?;
-            Ok(protocol::Address::DomainNameAddress(addr, port))
+            Ok(Address::DomainNameAddress(addr, port))
         }
         _ => Err(new_error(format!("decode address: invalid address type {addr_type}"))),
     }
@@ -282,7 +237,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{super::common::UUID, *};
+    use super::{super::UUID, *};
     use std::{io::Cursor, str::FromStr};
 
     #[tokio::test]
@@ -292,7 +247,7 @@ mod test {
             0x1, 0xbb, 0x1, 0x1, 0x2, 0x3, 0x4
         ];
 
-        let address = protocol::Address::from_str("1.2.3.4:443").unwrap();
+        let address = Address::from_str("1.2.3.4:443").unwrap();
         let mut buffer = Vec::new();
         assert_matches!(encode_address(&mut buffer, &address), Ok(7));
 
@@ -313,7 +268,7 @@ mod test {
             0x1, 0xbb, 0x3, 0x20, 0x1, 0x48, 0x60, 0x0, 0x0, 0x20, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x68
         ];
 
-        let address = protocol::Address::from_str("[2001:4860:0:2001::68]:443").unwrap();
+        let address = Address::from_str("[2001:4860:0:2001::68]:443").unwrap();
         let mut buffer = Vec::new();
         assert_matches!(encode_address(&mut buffer, &address), Ok(19));
 
@@ -343,7 +298,7 @@ mod test {
         let request = protocol::RequestHeader {
             version: 0,
             command: protocol::RequestCommand::TCP,
-            address: Some(protocol::Address::DomainNameAddress("www.v2fly.org".to_string(), 443)),
+            address: Address::DomainNameAddress("www.v2fly.org".to_string(), 443),
             user: uuid,
         };
 
@@ -370,7 +325,7 @@ mod test {
         let expected_request = protocol::RequestHeader {
             version: 0,
             command: protocol::RequestCommand::TCP,
-            address: Some(protocol::Address::DomainNameAddress("www.v2fly.org".to_string(), 443)),
+            address: Address::DomainNameAddress("www.v2fly.org".to_string(), 443),
             user: id.clone(),
         };
 

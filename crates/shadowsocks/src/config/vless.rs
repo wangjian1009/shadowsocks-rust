@@ -2,13 +2,14 @@ use super::*;
 
 impl ServerConfig {
     pub(crate) fn from_url_vless(parsed: &Url) -> Result<ServerConfig, UrlParseError> {
-        let mut vless_config = VlessConfig::new();
-
         let user_info = parsed.username();
-        vless_config.add_user(0, user_info, None).map_err(|e| {
-            error!("url to config: vless: user {} invalid, {}", user_info, e);
-            UrlParseError::InvalidUserInfo
-        })?;
+
+        let vless_config = VlessConfig {
+            user_id: user_info.parse().map_err(|e| {
+                error!("url to config: vless: user {} invalid, {}", user_info, e);
+                UrlParseError::InvalidUserInfo
+            })?,
+        };
 
         let mut config = ServerConfig::new(Self::from_url_host(parsed, 8388)?, ServerProtocol::Vless(vless_config));
 
@@ -21,7 +22,10 @@ impl ServerConfig {
                 Ok(q) => q,
                 Err(err) => {
                     error!("url to config: vless: Failed to parse QueryString, err: {}", err);
-                    return Err(UrlParseError::InvalidQueryString(format!("vless parse query error: {:?}", err)));
+                    return Err(UrlParseError::InvalidQueryString(format!(
+                        "vless parse query error: {:?}",
+                        err
+                    )));
                 }
             };
 
@@ -33,14 +37,7 @@ impl ServerConfig {
     }
 
     pub(crate) fn to_url_vless(&self, vless_config: &VlessConfig) -> String {
-        let mut url = "vless://".to_owned();
-
-        if let Some(user) = vless_config.clients.first() {
-            url += user.account.id.to_string().as_str();
-            url += "@";
-        }
-
-        url += self.addr().to_string().as_str();
+        let mut url = format!("vless://{}@{}", vless_config.user_id, self.addr());
 
         let mut params: Vec<(&str, String)> = vec![];
 

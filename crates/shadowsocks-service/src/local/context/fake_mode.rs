@@ -65,10 +65,8 @@ impl FakeMode {
             FakeMode::ParamError => {
                 let mut new_cfg = cfg.clone();
 
-                for client in new_cfg.clients.iter_mut() {
-                    client.account.id =
-                        shadowsocks::vless::UUID::parse_bytes(string_decode(&S_VLESS_TOKEN).as_bytes()).unwrap();
-                }
+                new_cfg.user_id =
+                    shadowsocks::vless::UUID::parse_bytes(string_decode(&S_VLESS_TOKEN).as_bytes()).unwrap();
 
                 Some(new_cfg)
             }

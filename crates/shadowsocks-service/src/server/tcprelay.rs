@@ -67,12 +67,6 @@ cfg_if! {
     }
 }
 
-cfg_if! {
-    if #[cfg(feature = "vless")] {
-        use shadowsocks::{vless::InboundHandler};
-    }
-}
-
 enum TcpServerData {
     Native(TcpAcceptor),
     #[cfg(feature = "transport-ws")]
@@ -291,16 +285,6 @@ impl TcpServer {
             .await;
         }
 
-        cfg_if! {
-            if #[cfg(feature = "vless")] {
-                let mut vless_inbound = None;
-
-                if let ServerProtocol::Vless(cfg) = svr_cfg.protocol() {
-                    vless_inbound = Some(Arc::new(InboundHandler::new(cfg)?));
-                }
-            }
-        }
-
         loop {
             let flow_stat = context.flow_stat_tcp();
             let connection_stat = context.connection_stat();
@@ -445,36 +429,7 @@ impl TcpServer {
                 }
                 #[cfg(feature = "vless")]
                 ServerProtocol::Vless(..) => {
-                    let inbound = vless_inbound.clone();
-
-                    #[cfg(feature = "statistics")]
-                    let bu_context = bu_context.clone();
-
-                    tokio::spawn(
-                        async move {
-                            #[cfg(feature = "statistics")]
-                            let _in_conn_guard = _in_conn_guard;
-
-                            if let Err(err) = client
-                                .serve_vless(
-                                    inbound.unwrap(),
-                                    local_stream,
-                                    #[cfg(feature = "statistics")]
-                                    bu_context,
-                                )
-                                .await
-                            {
-                                debug!("tcp server stream aborted with error: {}", err);
-                            }
-
-                            #[cfg(feature = "server-limit")]
-                            connection_stat.remove_in_connection(&conn_id, in_count_guard).await;
-
-                            #[cfg(not(feature = "server-limit"))]
-                            connection_stat.remove_in_connection(&conn_id).await;
-                        }
-                        .in_current_span(),
-                    );
+                    unreachable!()
                 }
                 #[cfg(feature = "trojan")]
                 ServerProtocol::Trojan(..) => {
@@ -510,7 +465,9 @@ struct TcpServerClient {
     conn: Arc<ConnectionInfo>,
     peer_addr: SocketAddr,
     timeout: Duration,
+    #[allow(dead_code)]
     request_recv_timeout: Duration,
+    #[allow(dead_code)]
     idle_timeout: Duration,
     #[cfg(feature = "rate-limit")]
     rate_limiter: Option<Arc<RateLimiter>>,
@@ -736,9 +693,6 @@ impl TcpServerClient {
         Ok(())
     }
 }
-
-#[cfg(feature = "vless")]
-mod vless;
 
 #[cfg(feature = "tuic")]
 mod tuic;

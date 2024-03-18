@@ -39,9 +39,6 @@ use shadowsocks_service::shadowsocks::transport::tls;
 #[cfg(feature = "trojan")]
 use shadowsocks_service::shadowsocks::config::TrojanConfig;
 
-#[cfg(feature = "vless")]
-use shadowsocks_service::shadowsocks::config::VlessConfig;
-
 #[cfg(feature = "tuic")]
 use shadowsocks_service::shadowsocks::config::TuicConfig;
 #[cfg(feature = "tuic")]
@@ -424,85 +421,6 @@ async fn socks5_udp_relay_trojan() {
     .await
 }
 
-#[cfg(feature = "vless")]
-#[tokio::test]
-#[traced_test]
-async fn socks5_tcp_relay_vless() {
-    let mut config = VlessConfig::new();
-    config
-        .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
-        .unwrap();
-
-    let config2 = config.clone();
-    socks5_tcp_relay_test(
-        ServerProtocol::Vless(config),
-        #[cfg(feature = "transport")]
-        None,
-        ServerProtocol::Vless(config2),
-        #[cfg(feature = "transport")]
-        None,
-    )
-    .await
-}
-
-#[cfg(feature = "vless")]
-#[tokio::test]
-#[traced_test]
-async fn socks5_udp_relay_vless() {
-    let mut config = VlessConfig::new();
-    config
-        .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
-        .unwrap();
-
-    let config2 = config.clone();
-    socks5_udp_relay_test(
-        ServerProtocol::Vless(config),
-        #[cfg(feature = "transport")]
-        None,
-        ServerProtocol::Vless(config2),
-        #[cfg(feature = "transport")]
-        None,
-    )
-    .await
-}
-
-// #[cfg(all(feature = "vless", feature = "transport-skcp"))]
-// #[tokio::test]
-// #[traced_test]
-// async fn socks5_tcp_relay_vless_skcp() {
-//     let mut config = VlessConfig::new();
-//     config
-//         .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
-//         .unwrap();
-
-//     let config2 = config.clone();
-//     socks5_tcp_relay_test(
-//         ServerProtocol::Vless(config),
-//         Some(TransportAcceptorConfig::Skcp(skcp::SkcpConfig::default())),
-//         ServerProtocol::Vless(config2),
-//         Some(TransportConnectorConfig::Skcp(skcp::SkcpConfig::default())),
-//     )
-//     .await
-// }
-
-// #[cfg(all(feature = "vless", feature = "transport-skcp"))]
-// #[tokio::test]
-// #[traced_test]
-// async fn socks5_udp_relay_vless_skcp() {
-//     let mut config = VlessConfig::new();
-//     config
-//         .add_user(0, "66ad4540-b58c-4ad2-9926-ea63445a9b57", None)
-//         .unwrap();
-
-//     let config2 = config.clone();
-//     socks5_udp_relay_test(
-//         ServerProtocol::Vless(config),
-//         Some(TransportAcceptorConfig::Skcp(skcp::SkcpConfig::default())),
-//         ServerProtocol::Vless(config2),
-//         Some(TransportConnectorConfig::Skcp(skcp::SkcpConfig::default())),
-//     )
-//     .await
-// }
 
 #[cfg(feature = "tuic")]
 #[tokio::test]

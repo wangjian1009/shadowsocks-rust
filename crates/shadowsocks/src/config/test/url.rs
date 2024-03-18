@@ -33,12 +33,11 @@ fn rebuild_ss() {
 #[test]
 #[traced_test]
 fn parse_vless_wss() {
-    let parsed_config = "vless://9af5ce16-8020-4530-85ba-290ef2290d1c@194.233.85.194:443/?type=ws&encryption=none&path=%2Feaps2021sg&security=tls&sni=proxy0101.com#194-test".parse::<ServerConfig>().unwrap();
+    let parsed_config = "vless://9af5ce16-8020-4530-85ba-290ef2290d1c@194.233.85.194:443/eaps2021sg?type=ws&security=tls&sni=proxy0101.com#194-test".parse::<ServerConfig>().unwrap();
 
-    let mut vless_config = VlessConfig::new();
-    vless_config
-        .add_user(0, "9af5ce16-8020-4530-85ba-290ef2290d1c", None)
-        .unwrap();
+    let vless_config = VlessConfig {
+        user_id: "9af5ce16-8020-4530-85ba-290ef2290d1c".parse().unwrap(),
+    };
 
     let mut expect_config = ServerConfig::new(
         "194.233.85.194:443".parse::<ServerAddr>().unwrap(),
@@ -49,8 +48,8 @@ fn parse_vless_wss() {
 
     expect_config.set_connector_transport(Some(TransportConnectorConfig::Wss(
         WebSocketConnectorConfig {
-            path: "/eaps2021sg".to_owned(),
-            host: crate::config::transport::DEFAULT_SNI.to_owned(),
+            uri: format!("ws:///eaps2021sg").parse().unwrap(),
+            ..Default::default()
         },
         TlsConnectorConfig {
             sni: "proxy0101.com".to_owned(),
@@ -68,10 +67,9 @@ fn parse_vless_wss() {
 fn parse_vless_mkcp() {
     let parsed_config = "vless://c93b0258-6847-42c8-92ac-7b8ac8e390ad@104.237.56.68:7777/?type=kcp&encryption=none&headerType=wechat-video&seed=itest123#68-us".parse::<ServerConfig>().unwrap();
 
-    let mut vless_config = VlessConfig::new();
-    vless_config
-        .add_user(0, "c93b0258-6847-42c8-92ac-7b8ac8e390ad", None)
-        .unwrap();
+    let vless_config = VlessConfig {
+        user_id: "c93b0258-6847-42c8-92ac-7b8ac8e390ad".parse().unwrap(),
+    };
 
     let mut expect_config = ServerConfig::new(
         "104.237.56.68:7777".parse::<ServerAddr>().unwrap(),
@@ -97,10 +95,9 @@ fn parse_vless_skcp() {
             .parse::<ServerConfig>()
             .unwrap();
 
-    let mut vless_config = VlessConfig::new();
-    vless_config
-        .add_user(0, "c93b0258-6847-42c8-92ac-7b8ac8e390ad", None)
-        .unwrap();
+    let vless_config = VlessConfig {
+        user_id: "c93b0258-6847-42c8-92ac-7b8ac8e390ad".parse().unwrap()
+    };
 
     let mut expect_config = ServerConfig::new(
         "104.237.56.68:7777".parse::<ServerAddr>().unwrap(),
@@ -118,11 +115,11 @@ fn parse_vless_skcp() {
 
 #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
 #[test]
+#[traced_test]
 fn rebuild_vless_wss() {
-    let mut vless_config = VlessConfig::new();
-    vless_config
-        .add_user(0, "9af5ce16-8020-4530-85ba-290ef2290d1c", None)
-        .unwrap();
+    let vless_config = VlessConfig {
+        user_id:  "9af5ce16-8020-4530-85ba-290ef2290d1c".parse().unwrap()
+    };
 
     let mut config = ServerConfig::new(
         "1.2.3.4:5".parse::<ServerAddr>().unwrap(),
@@ -131,8 +128,8 @@ fn rebuild_vless_wss() {
 
     config.set_connector_transport(Some(TransportConnectorConfig::Wss(
         WebSocketConnectorConfig {
-            path: "/eaps2021sg".to_owned(),
-            host: crate::config::transport::DEFAULT_SNI.to_owned(),
+            uri: format!("ws:///eaps2021sg").parse().unwrap(),
+            ..Default::default()
         },
         TlsConnectorConfig {
             sni: "proxy0101.com".to_owned(),
@@ -143,6 +140,7 @@ fn rebuild_vless_wss() {
 
     let url = config.to_url();
 
+    tracing::error!("xxxx: url={}", url);
     let config_rebuild = url.parse::<ServerConfig>().unwrap();
 
     assert_eq!(config, config_rebuild);

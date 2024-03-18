@@ -5,7 +5,7 @@ use std::{
     str::FromStr,
 };
 
-use super::super::new_error;
+use super::new_error;
 
 const BYTE_GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
 

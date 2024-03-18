@@ -1,30 +1,24 @@
 use std::io;
 
-mod common;
-pub use common::UUID;
+pub use crate::relay::Address;
 
-mod inbound;
-pub use inbound::InboundHandler;
+mod uuid;
+pub use uuid::UUID;
 
 pub mod protocol;
-pub use protocol::Config;
 
 mod encoding;
 pub use encoding::decode_request_header;
 
 mod client_stream;
-pub use client_stream::ClientStream;
-
-mod validator;
+pub use client_stream::{ClientStream, ClientConfig};
 
 mod packet;
 pub use packet::{new_vless_packet_connection, VlessUdpReader, VlessUdpWriter};
-
-pub mod mux;
 
 fn new_error<T: ToString>(message: T) -> io::Error {
     io::Error::new(io::ErrorKind::Other, format!("vless: {}", message.to_string()))
 }
 
 #[cfg(test)]
-mod test;
+mod test_env;

@@ -676,12 +676,8 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
             #[cfg(feature = "vless")]
             if protocol.is_none() && matches.get_flag("PROTOCOL_VLESS") {
-                let mut vless_cfg = VlessConfig::new();
-
-                match matches.get_one::<String>("VLESS_USER") {
-                    Some(uuid) => {
-                        vless_cfg.add_user(0, uuid, None).unwrap();
-                    }
+                let vless_cfg = match matches.get_one::<UUID>("VLESS_USER") {
+                    Some(uuid) => VlessConfig { user_id: uuid.clone() },
                     None => {
                         eprintln!("missing `vless-user`");
                         return Err(crate::EXIT_CODE_LOAD_CONFIG_FAILURE.into());
