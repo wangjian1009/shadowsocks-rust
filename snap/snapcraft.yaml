@@ -3,10 +3,18 @@ adopt-info: shadowsocks-rust
 summary: Rust port of Shadowsocks
 description: |
   Shadowsocks Client & Server, written in Rust.
-base: core18
+base: core22
 grade: stable
 confinement: strict
-architectures: [amd64, arm64, armhf, i386, ppc64el]
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+  - build-on: armhf
+  - build-on: ppc64el
+  - build-on: s390x
+  - build-on: riscv64
+license: MIT
+source-code: https://github.com/shadowsocks/shadowsocks-rust
 
 apps:
   sslocal:

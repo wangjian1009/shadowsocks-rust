@@ -1,3 +1,54 @@
+shadowsocks-rust (1.18.2) unstable; urgency=medium
+
+  ## Features
+
+  - `local-tun`: Support `tun_interface_destination` configuration key
+
+  ## Bug Fixes
+
+  - `local`: macOS launch activate sockets set non-blocking
+
+shadowsocks-rust (1.18.1) unstable; urgency=medium
+
+  ## Features
+
+  - Default logging framework changed to [`tracing-subscriber`](https://crates.io/crates/tracing-subscriber), which:
+    - Support libraries that log with both [`tracing`](https://crates.io/crates/tracing), and [`log`](https://crates.io/crates/log).
+    - NOTE: `--log-config` parameter will apply only to [`log4rs`](https://crates.io/crates/log4rs), which doesn't support the `tracing` framework.
+
+  ## Bug Fixes
+
+  - #1425 Enable `EDNS(0)` by default for hickory-dns resolver.
+
+  ## NOTE
+
+  - [`clap`](https://crates.io/crates/clap) upgraded MSRV (Minimal Supported Rust Version) to v1.74 since v4.5.0. This project will have to stay in v4.4 until the next major release.
+
+ -- ty <zonyitoo@gmail.com> Sun, 18 Feb 2024 22:05:00 +0800
+
+shadowsocks-rust (1.18.0) unstable; urgency=medium
+
+  Mostly identical to v1.17.2, except that:
+
+  - Minimal Supported Rust Version (MSRV) upgraded from v1.64 to v1.71
+  - #1259 Fixed Snapcraft build. `base` changed to `core22`, auto-build architecture changed to [`arm64`, `amd64`, `armhf`]
+  - #1426 MIPS targets removed from release build, because MIPS targets are now downgraded to TIER 3
+
+ -- ty <zonyitoo@gmail.com> Thu, 08 Feb 2024 00:00:00 +0800
+
+shadowsocks-rust (1.17.2) unstable; urgency=medium
+
+  ## Features
+
+  - `local`: `socks` local server will support SOCKS5, SOCKS4a, HTTP proxy protocols when `local-http`, `local-socks4` features are enabled
+  - `local`: Support setting `udp_mtu` in configuration file to actively reject `packet.size > MTU`
+
+  ## Bug Fixes
+
+  - #1378 dns-over-tls/https with rustls add dependencies to certs
+  - #1381 Set the incoming socket buffer sizes properly on the listen socket
+  - #1414 TUN synchronize SYN packet and Socket creation
+
 shadowsocks-rust (1.17.1) unstable; urgency=medium
 
   ## Features

@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks-rust"
-version = "1.17.2"
+version = "1.18.2"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -9,7 +9,7 @@ documentation = "https://docs.rs/shadowsocks-rust"
 keywords = ["shadowsocks", "proxy", "socks", "socks5", "firewall"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.64"
+rust-version = "1.71"
 
 [badges]
 maintenance = { status = "passively-maintained" }
@@ -57,7 +57,6 @@ required-features = ["winservice"]
 members = [
     "crates/shadowsocks",
     "crates/shadowsocks-service",
-    "depends/tracing-oslog",
 ]
 
 [profile.release]
@@ -70,12 +69,7 @@ strip = true
 [features]
 default = [
     "logging",
-    "tokio-console",
-    "logging-console",
-    "logging-oslog",
     "logging-file",
-    "logging-apm",
-    "logging-jaeger",
     "statistics-prometheus",
     "trust-dns",
     "stream-cipher",
@@ -167,18 +161,12 @@ dns-over-https = ["shadowsocks-service/dns-over-https"]
 dns-over-h3 = ["shadowsocks-service/dns-over-h3"]
 
 # Enable logging output
-logging = ["tracing-futures", "tracing-subscriber"]
-logging-console = ["logging"]
-logging-oslog = ["logging", "tracing-oslog"]
+logging = ["tracing-subscriber", "time"]
 logging-file = ["logging", "tracing-appender"]
-logging-apm = ["logging", "url", "tracing-elastic-apm", "sysinfo"]
-logging-jaeger = ["logging", "url", "tracing-opentelemetry", "opentelemetry", "opentelemetry-jaeger"]
-
-tokio-console = ["tokio/tracing", "console-subscriber"]
 
 # Enable metrics
 statistics=["metrics", "shadowsocks-service/statistics"]
-statistics-prometheus = ["statistics", "metrics-util", "metrics-exporter-prometheus"]
+statistics-prometheus = ["statistics", "metrics-util", "metrics-exporter-prometheus", "url"]
 
 # Enable DNS-relay
 local-dns = ["local", "shadowsocks-service/local-dns"]
@@ -250,30 +238,25 @@ replay-attack-detect = [
 ] # Backward compatibility. DO NOT USE.
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-json5 = "0.4"
-thiserror = "1.0"
-base64 = "0.21"
-
-tracing = { version = "0.1.35" }
-tracing-futures = { version = "0.2", features = ["std-future"], optional = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time", "local-time", "ansi", "json"], default-features = false, optional = true }
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", optional = true, features = [
+    "std",
+    "fmt",
+    "env-filter",
+    "time",
+    "local-time",
+] }
+time = { version = "0.3", optional = true }
 
 # logging-file
 tracing-appender = { version = "0.2", optional = true }
 
-# logging-os
-tracing-oslog = { version = "0.1.2", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+json5 = "0.4"
+thiserror = "1.0"
+base64 = "0.22"
 
-# logging-jaeger
-tracing-opentelemetry = { version = "*", optional = true }
-opentelemetry = { version = "*", features = ["rt-tokio"], optional = true }
-opentelemetry-jaeger = { version = "*", features = ["rt-tokio", "hyper_collector_client"], optional = true }
-
-# logging-apm
-tracing-elastic-apm = { version = "3.2.3", optional = true, features = ["rustls-tls"], default-features = false }
 url = { version = "*", optional = true }
-sysinfo = { version = "*", optional = true }
 
 #metrics
 metrics = { version = "0.20", optional = true }
@@ -336,7 +319,7 @@ reqwest = { version = "0.11", features = [
 [dev-dependencies]
 tracing-test = { version = "*", features = ["no-env-filter"] }
 byteorder = "1.5"
-env_logger = "0.10"
+env_logger = "0.11"
 byte_string = "1.0"
 tokio = { version = "1.9", features = ["net", "time", "macros", "io-util"] }
 tokio-test = "*"

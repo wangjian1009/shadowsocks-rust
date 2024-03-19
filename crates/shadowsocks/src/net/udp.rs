@@ -227,7 +227,7 @@ impl UdpSocket {
         // Check MTU
         if let Some(mtu) = self.mtu {
             if buf.len() > mtu {
-                return Err(make_mtu_error(buf.len(), mtu)).into();
+                return Err(make_mtu_error(buf.len(), mtu));
             }
         }
 
@@ -252,7 +252,7 @@ impl UdpSocket {
         // Check MTU
         if let Some(mtu) = self.mtu {
             if buf.len() > mtu {
-                return Err(make_mtu_error(buf.len(), mtu)).into();
+                return Err(make_mtu_error(buf.len(), mtu));
             }
         }
 

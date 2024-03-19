@@ -1108,7 +1108,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
     let main_fut = async move {
         #[cfg(feature = "logging")]
-        let log_guard = logging::init_with_config("sslocal", &service_config.log);
+        let _log_guard = logging::init_with_config("sslocal", &service_config.log);
 
         tracing::info!("shadowsocks local {} build {}", crate::VERSION, crate::BUILD_TIME);
         tracing::info!("{:?}", service_config);
@@ -1146,9 +1146,6 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             // The abort signal future resolved. Means we should just exit.
             Either::Right(_) => ExitCode::SUCCESS,
         };
-
-        #[cfg(feature = "logging")]
-        log_guard.close().await;
 
         exit_code
     };

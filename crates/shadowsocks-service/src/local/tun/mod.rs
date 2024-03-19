@@ -97,7 +97,7 @@ impl TunBuilder {
     pub async fn build(mut self) -> io::Result<Tun> {
         self.tun_config.layer(Layer::L3).up();
 
-        #[cfg(any(target_os = "linux"))]
+        #[cfg(target_os = "linux")]
         self.tun_config.platform(|tun_config| {
             // IFF_NO_PI preventing excessive buffer reallocating
             tun_config.packet_information(false);
@@ -211,6 +211,11 @@ impl Tun {
 
             address_net
         };
+
+        // Set default route
+        if let Err(err) = sys::set_route_configuration(self.device.get_mut()).await {
+            warn!("[TUN] tun device set route failed, error: {}", err);
+        }
 
         let address_broadcast = address_net.broadcast();
 

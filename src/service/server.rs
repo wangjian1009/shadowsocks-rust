@@ -315,28 +315,6 @@ pub fn define_command_line_options(mut app: Command) -> Command {
         );
     }
 
-    #[cfg(feature = "logging-apm")]
-    {
-        app = app.arg(
-            Arg::new("LOG_APM_URL")
-                .long("log-apm-url")
-                .action(ArgAction::Set)
-                .value_parser(clap::value_parser!(url::Url))
-                .help("log apm server url"),
-        );
-    }
-
-    #[cfg(feature = "logging-jaeger")]
-    {
-        app = app.arg(
-            Arg::new("LOG_JAEGER_URL")
-                .long("log-jaeger-url")
-                .action(ArgAction::Set)
-                .value_parser(clap::value_parser!(url::Url))
-                .help("log jaeger server url"),
-        );
-    }
-
     #[cfg(feature = "statistics")]
     {
         app = app.arg(
@@ -883,7 +861,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
     let main_fut = async move {
         #[cfg(feature = "logging")]
-        let log_guard = logging::init_with_config("ssserver", &service_config.log);
+        let _log_guard = logging::init_with_config("ssserver", &service_config.log);
 
         #[cfg(feature = "statistics-prometheus")]
         if let Some(push_gateway) = matches.get_one::<url::Url>("PROMETHEUS_PUSH_URL") {
@@ -937,9 +915,6 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             // The abort signal future resolved. Means we should just exit.
             Either::Right(_) => ExitCode::SUCCESS,
         };
-
-        #[cfg(feature = "logging")]
-        log_guard.close().await;
 
         exit_code
     };
