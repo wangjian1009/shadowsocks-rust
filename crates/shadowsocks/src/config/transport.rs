@@ -17,7 +17,7 @@ use crate::transport::tls::{TlsAcceptorConfig, TlsConnectorConfig};
 use crate::transport::restls::RestlsConfig;
 
 #[cfg(any(feature = "transport-mkcp", feature = "transport-skcp"))]
-use crate::transport::{HeaderConfig, SecurityConfig};
+use crate::transport::HeaderConfig;
 
 #[cfg(feature = "transport-mkcp")]
 use crate::transport::mkcp::MkcpConfig;
@@ -527,10 +527,10 @@ pub fn build_skcp_config(args: &Option<Vec<(&str, &str)>>) -> Result<SkcpConfig,
 
     if let Some(security) = find_arg(args, "security") {
         config.security_config = Some(match security {
-            "simple" => SecurityConfig::Simple,
+            "simple" => crate::transport::SecurityConfig::Simple,
             "aes-gcm" => {
                 if let Some(seed) = find_arg(args, "seed") {
-                    SecurityConfig::AESGCM { seed: seed.to_owned() }
+                    crate::transport::SecurityConfig::AESGCM { seed: seed.to_owned() }
                 } else {
                     return Err(format!("skcp: not security {security}, no seed configured"));
                 }
