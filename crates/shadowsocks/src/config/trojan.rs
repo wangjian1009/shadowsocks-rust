@@ -23,12 +23,18 @@ impl ServerConfig {
                 Ok(q) => q,
                 Err(err) => {
                     error!("url to config: vless: Failed to parse QueryString, err: {}", err);
-                    return Err(UrlParseError::InvalidQueryString(format!("trojan parse query error: {:?}", err)));
+                    return Err(UrlParseError::InvalidQueryString(format!(
+                        "trojan parse query error: {:?}",
+                        err
+                    )));
                 }
             };
 
             #[cfg(feature = "transport")]
-            config.set_connector_transport(Self::from_url_transport_connector(&query)?)
+            config.set_connector_transport(Self::from_url_transport_connector(
+                parsed.host_str().ok_or(UrlParseError::MissingHost)?,
+                &query,
+            )?)
         }
 
         Ok(config)

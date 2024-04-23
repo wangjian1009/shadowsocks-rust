@@ -12,13 +12,13 @@ use super::super::{Connector, DeviceOrGuard, StreamConnection};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TlsConnectorConfig {
-    pub sni: String,
+    pub sni: Option<String>,
     pub cipher: Vec<ssl::SupportedCipherSuite>,
     pub cert: Option<String>,
 }
 
 pub struct TlsConnector<C: Connector> {
-    sni: String,
+    sni: Option<String>,
     tls_config: Arc<ClientConfig>,
     inner: C,
 }
@@ -68,8 +68,14 @@ where
 
     async fn connect(&self, destination: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
         let stream = self.inner.connect(destination, connect_opts).await?;
-        let dns_name = ServerName::try_from(self.sni.as_str())
-            .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
+        let dns_name = if let Some(sni) = self.sni.as_ref() {
+            ServerName::try_from(sni.as_str()).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?
+        } else {
+            match destination {
+                ServerAddr::SocketAddr(sa) => ServerName::IpAddress(sa.ip()),
+                ServerAddr::DomainName(ref dname, _) => ServerName::try_from(dname.as_str()).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?,
+            }
+        };
         let stream = TokioTlsConnector::from(self.tls_config.clone())
             .connect(dns_name, stream)
             .await?;

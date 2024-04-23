@@ -30,7 +30,10 @@ impl ServerConfig {
             };
 
             #[cfg(feature = "transport")]
-            config.set_connector_transport(Self::from_url_transport_connector(&query)?)
+            config.set_connector_transport(Self::from_url_transport_connector(
+                parsed.host_str().ok_or(UrlParseError::MissingHost)?,
+                &query,
+            )?)
         }
 
         Ok(config)

@@ -7,9 +7,6 @@ use std::{fmt, str::FromStr};
 #[cfg(feature = "transport-ws")]
 use crate::transport::websocket::{WebSocketAcceptorConfig, WebSocketConnectorConfig, WebsocketPingType};
 
-#[cfg(feature = "transport-ws")]
-pub const DEFAULT_SNI: &str = "www.google.com";
-
 #[cfg(feature = "transport-tls")]
 use crate::transport::tls::{TlsAcceptorConfig, TlsConnectorConfig};
 
@@ -83,6 +80,7 @@ impl ServerConfig {
     }
 
     pub(crate) fn from_url_transport_connector(
+        host: &str,
         query: &[(String, String)],
     ) -> Result<Option<TransportConnectorConfig>, UrlParseError> {
         let transport_type = match Self::from_url_get_arg(query, "type") {
@@ -97,7 +95,8 @@ impl ServerConfig {
                     match security {
                         #[cfg(feature = "transport-tls")]
                         "tls" => {
-                            let ws_config = Self::from_url_ws(query)?;
+                            let ws_config = Self::from_url_ws(host, query)?;
+
                             let tls_config = Self::from_url_tls(query, ws_config.uri.host_str())?;
                             Ok(Some(TransportConnectorConfig::Wss(ws_config, tls_config)))
                         }
@@ -107,12 +106,12 @@ impl ServerConfig {
                         ))),
                     }
                 } else {
-                    Ok(Some(TransportConnectorConfig::Ws(Self::from_url_ws(query)?)))
+                    Ok(Some(TransportConnectorConfig::Ws(Self::from_url_ws(host, query)?)))
                 }
             }
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
             "wss" => {
-                let ws_config = Self::from_url_ws(query)?;
+                let ws_config = Self::from_url_ws(host, query)?;
                 let tls_config = Self::from_url_tls(query, ws_config.uri.host_str())?;
                 Ok(Some(TransportConnectorConfig::Wss(ws_config, tls_config)))
             }
@@ -145,7 +144,7 @@ impl ServerConfig {
                 params.push(("path", ws_config.uri.path().to_owned()));
                 params.push(("host", ws_config.uri.authority().to_owned()));
                 params.push(("security", "tls".to_owned()));
-                params.push(("sni", tls_config.sni.to_owned()));
+                tls_config.sni.as_ref().map(|sni| params.push(("sni", sni.to_string())));
             }
             #[cfg(feature = "transport-mkcp")]
             TransportConnectorConfig::Mkcp(_mkcp_config) => {
@@ -170,12 +169,12 @@ impl ServerConfig {
     }
 
     #[cfg(feature = "transport-ws")]
-    fn from_url_ws(params: &[(String, String)]) -> Result<WebSocketConnectorConfig, UrlParseError> {
+    fn from_url_ws(host: &str, params: &[(String, String)]) -> Result<WebSocketConnectorConfig, UrlParseError> {
         let uri = format!(
             "ws://{}{}",
             match Self::from_url_get_arg(params, "host") {
-                None => transport::DEFAULT_SNI,
-                Some(path) => path,
+                None => host,
+                Some(v) => v,
             },
             match Self::from_url_get_arg(params, "path") {
                 None => "/",
@@ -256,11 +255,8 @@ impl ServerConfig {
 
         let tls_config = TlsConnectorConfig {
             sni: match Self::from_url_get_arg(params, "sni") {
-                None => match dft_sni {
-                    Some(sni) => sni.to_string(),
-                    None => return Err(UrlParseError::InvalidQueryString("tls: sni not configured".to_owned())),
-                },
-                Some(sni) => sni.to_string(),
+                None =>  dft_sni.map(|s| s.to_owned()),
+                Some(sni) => Some(sni.to_string()),
             },
             cipher: ciphers,
             cert: None,
@@ -345,14 +341,20 @@ impl TransportConnectorConfig {
     ) -> Result<Self, String> {
         match protocol {
             #[cfg(feature = "transport-ws")]
-            "ws" => Ok(TransportConnectorConfig::Ws(Self::build_ws_config(_host, _path))),
+            "ws" => Ok(TransportConnectorConfig::Ws(Self::build_ws_config(_host.ok_or("no host")?, _path))),
             #[cfg(feature = "transport-tls")]
-            "tls" => Ok(TransportConnectorConfig::Tls(Self::build_tls_config(_host, &_args)?)),
+            "tls" => Ok(TransportConnectorConfig::Tls(Self::build_tls_config(None, &_args)?)),
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
-            "wss" => Ok(TransportConnectorConfig::Wss(
-                Self::build_ws_config(_host, _path),
-                Self::build_tls_config(_host, &_args)?,
-            )),
+            "wss" => {
+                let ws_config = Self::build_ws_config(_host.ok_or("no host")?, _path);
+                let default_sni = if &ws_config.uri.host_str() == _host {
+                    None
+                } else {
+                    _host.clone()
+                };
+                let tls_config = Self::build_tls_config(default_sni, &_args)?;
+                Ok(TransportConnectorConfig::Wss(ws_config, tls_config))
+            },
             #[cfg(feature = "transport-mkcp")]
             "mkcp" => Ok(TransportConnectorConfig::Mkcp(build_mkcp_config(&_args)?)),
             #[cfg(feature = "transport-skcp")]
@@ -382,8 +384,8 @@ impl TransportConnectorConfig {
 
     #[cfg(feature = "transport-ws")]
     #[inline]
-    fn build_ws_config(host: &Option<&str>, path: &str) -> WebSocketConnectorConfig {
-        let uri = format!("ws://{}{}", host.unwrap_or(transport::DEFAULT_SNI), path);
+    fn build_ws_config(host: &str, path: &str) -> WebSocketConnectorConfig {
+        let uri = format!("ws://{}{}", host, path);
 
         WebSocketConnectorConfig {
             uri: uri.parse().unwrap(),
@@ -404,7 +406,7 @@ impl TransportConnectorConfig {
 
     #[cfg(feature = "transport-tls")]
     #[inline]
-    fn build_tls_config(host: &Option<&str>, args: &Option<Vec<(&str, &str)>>) -> Result<TlsConnectorConfig, String> {
+    fn build_tls_config(default_sni: Option<&str>, args: &Option<Vec<(&str, &str)>>) -> Result<TlsConnectorConfig, String> {
         let mut cipher_names = None;
         if let Some(ciphers) = find_all_arg(args, "cipher") {
             cipher_names = Some(Vec::new());
@@ -414,12 +416,17 @@ impl TransportConnectorConfig {
             }
         }
 
+        let mut sni = find_arg(args, "sni");
+        if sni.is_none() {
+            sni = default_sni;
+        }
+        
         let ciphers =
             crate::ssl::get_cipher_suite(cipher_names.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))
                 .map_err(|e| format!("{e:?}"))?;
 
         let mut config = TlsConnectorConfig {
-            sni: host.unwrap_or(DEFAULT_SNI).to_owned(),
+            sni: sni.map(|s| s.to_owned()),
             cipher: ciphers,
             cert: None,
         };
@@ -784,8 +791,8 @@ impl fmt::Display for TransportAcceptorConfig {
                 }
                 if let Some(security) = skcp_config.security_config.as_ref() {
                     match security {
-                        SecurityConfig::AESGCM { seed } => write!(f, "&security=aes-gcm&seed={seed}")?,
-                        SecurityConfig::Simple => write!(f, "&security=simple")?,
+                        crate::transport::SecurityConfig::AESGCM { seed } => write!(f, "&security=aes-gcm&seed={seed}")?,
+                        crate::transport::SecurityConfig::Simple => write!(f, "&security=simple")?,
                     }
                 }
                 Ok(())

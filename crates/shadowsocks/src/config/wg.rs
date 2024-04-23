@@ -33,7 +33,10 @@ impl ServerConfig {
             match itf_mtu.parse::<usize>() {
                 Ok(v) => Some(v),
                 Err(err) => {
-                    return Err(UrlParseError::InvalidQueryString(format!("wg: itf-mut {} parse error {:?}", itf_mtu, err)));
+                    return Err(UrlParseError::InvalidQueryString(format!(
+                        "wg: itf-mut {} parse error {:?}",
+                        itf_mtu, err
+                    )));
                 }
             }
         } else {
@@ -46,7 +49,10 @@ impl ServerConfig {
                 match query_item.1.parse::<IpAddr>() {
                     Ok(v) => dns.push(v),
                     Err(err) => {
-                        return Err(UrlParseError::InvalidQueryString(format!("wg: itf-dns {} parse error {:?}", query_item.1, err)));
+                        return Err(UrlParseError::InvalidQueryString(format!(
+                            "wg: itf-dns {} parse error {:?}",
+                            query_item.1, err
+                        )));
                     }
                 }
             }
@@ -56,11 +62,16 @@ impl ServerConfig {
             Some(v) => match v.parse::<IPAddressRange>() {
                 Ok(v) => v,
                 Err(err) => {
-                    return Err(UrlParseError::InvalidQueryString(format!("wg: itf-addr decode error {:?}", err)));
+                    return Err(UrlParseError::InvalidQueryString(format!(
+                        "wg: itf-addr decode error {:?}",
+                        err
+                    )));
                 }
             },
             None => {
-                return Err(UrlParseError::InvalidQueryString("wg: itf-addr not configured".to_owned()));
+                return Err(UrlParseError::InvalidQueryString(
+                    "wg: itf-addr not configured".to_owned(),
+                ));
             }
         };
 
@@ -68,11 +79,16 @@ impl ServerConfig {
             Some(v) => match v.parse::<KeyBytes>() {
                 Ok(key) => key,
                 Err(err) => {
-                    return Err(UrlParseError::InvalidQueryString(format!("wg: itf-key format error {:?}", err)));
+                    return Err(UrlParseError::InvalidQueryString(format!(
+                        "wg: itf-key format error {:?}",
+                        err
+                    )));
                 }
             },
             None => {
-                return Err(UrlParseError::InvalidQueryString("wg: itf-key not configured".to_owned()));
+                return Err(UrlParseError::InvalidQueryString(
+                    "wg: itf-key not configured".to_owned(),
+                ));
             }
         };
 
@@ -80,11 +96,16 @@ impl ServerConfig {
             Some(v) => match v.parse::<KeyBytes>() {
                 Ok(key) => key,
                 Err(err) => {
-                    return Err(UrlParseError::InvalidQueryString(format!("wg: peer-key decode error {:?}", err)));
+                    return Err(UrlParseError::InvalidQueryString(format!(
+                        "wg: peer-key decode error {:?}",
+                        err
+                    )));
                 }
             },
             None => {
-                return Err(UrlParseError::InvalidQueryString("wg: peer-key not configured".to_owned()));
+                return Err(UrlParseError::InvalidQueryString(
+                    "wg: peer-key not configured".to_owned(),
+                ));
             }
         };
 
@@ -105,7 +126,10 @@ impl ServerConfig {
                 url::Host::Domain(d) => match d.parse::<IpAddr>() {
                     Ok(addr) => SocketAddr::new(addr, port),
                     Err(err) => {
-                        return Err(UrlParseError::InvalidQueryString(format!("wg: host not support domain {:?}", err)));
+                        return Err(UrlParseError::InvalidQueryString(format!(
+                            "wg: host not support domain {:?}",
+                            err
+                        )));
                     }
                 },
                 url::Host::Ipv4(addr) => SocketAddr::new(IpAddr::V4(addr), port),
@@ -120,7 +144,10 @@ impl ServerConfig {
             match v.parse::<usize>() {
                 Ok(v) => Some(v),
                 Err(err) => {
-                    return Err(UrlParseError::InvalidQueryString(format!("wg: peer-persistent-keepalive parse error {:?}", err)));
+                    return Err(UrlParseError::InvalidQueryString(format!(
+                        "wg: peer-persistent-keepalive parse error {:?}",
+                        err
+                    )));
                 }
             }
         } else {
@@ -148,8 +175,10 @@ impl ServerConfig {
         let mut config = ServerConfig::new(Self::from_url_host(parsed, 51820)?, ServerProtocol::WG(wg_config));
 
         #[cfg(feature = "transport")]
-        if Self::from_url_transport_connector(&query)?.is_some() {
-            return Err(UrlParseError::InvalidQueryString("wg: not support transport".to_owned()));
+        if Self::from_url_transport_connector(parsed.host_str().ok_or(UrlParseError::MissingHost)?, &query)?.is_some() {
+            return Err(UrlParseError::InvalidQueryString(
+                "wg: not support transport".to_owned(),
+            ));
         }
 
         if let Some(fragment) = parsed.fragment() {
