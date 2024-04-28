@@ -1,6 +1,6 @@
 use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
-use shadowsocks::net::TcpListener;
+use shadowsocks::{canceler::Canceler, net::TcpListener};
 use std::{io, net::SocketAddr, sync::Arc};
 
 use crate::local::{start_stat::StartStat, ServiceContext};
@@ -11,16 +11,17 @@ use server::Svc;
 
 pub struct MaintainServer {
     service_context: ServiceContext,
+    canceler: Arc<Canceler>,
     addr: SocketAddr,
 }
 
 impl MaintainServer {
-    pub fn new(service_context: ServiceContext, addr: SocketAddr) -> MaintainServer {
-        MaintainServer { service_context, addr }
+    pub fn new(service_context: ServiceContext, addr: SocketAddr, canceler: Arc<Canceler>) -> MaintainServer {
+        MaintainServer { service_context, canceler, addr }
     }
 
     pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
-        let MaintainServer { service_context, addr } = self;
+        let MaintainServer { service_context, canceler, addr } = self;
 
         let listener = TcpListener::bind_with_opts(&addr, service_context.accept_opts()).await?;
 
@@ -29,7 +30,7 @@ impl MaintainServer {
 
         let cancel_waiter = service_context.cancel_waiter();
 
-        let svc = Svc::new(Arc::new(service_context));
+        let svc = Svc::new(Arc::new(service_context), canceler);
 
         tokio::select! {
             r = Self::serve(svc, listener) => {

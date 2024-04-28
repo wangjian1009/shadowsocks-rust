@@ -1,6 +1,6 @@
 #![cfg(all(feature = "local-dns", feature = "server"))]
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use byteorder::{BigEndian, ByteOrder};
 use tokio::{
@@ -12,7 +12,7 @@ use tokio::{
 use shadowsocks_service::{
     config::{Config, ConfigType},
     run_local, run_server,
-    shadowsocks::canceler::CancelWaiter,
+    shadowsocks::canceler::{CancelWaiter, Canceler},
 };
 
 #[tokio::test]
@@ -50,7 +50,7 @@ async fn dns_relay() {
     )
     .unwrap();
 
-    tokio::spawn(run_local(local_config, CancelWaiter::none()));
+    tokio::spawn(run_local(local_config, Arc::new(Canceler::new())));
     tokio::spawn(run_server(CancelWaiter::none(), server_config));
 
     time::sleep(Duration::from_secs(1)).await;

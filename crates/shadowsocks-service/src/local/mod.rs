@@ -11,7 +11,7 @@ use std::{
 
 use futures::{future, ready};
 use shadowsocks::{
-    canceler::CancelWaiter,
+    canceler::{CancelWaiter, Canceler},
     config::{Mode, ServerProtocol, ServerType},
     context::Context,
     net::{AcceptOpts, ConnectOpts},
@@ -144,7 +144,7 @@ pub struct Server {
 
 impl Server {
     /// Create a shadowsocks local server
-    pub async fn new(context: Arc<Context>, cancel_waiter: CancelWaiter, config: Config) -> io::Result<Server> {
+    pub async fn new(context: Arc<Context>, config: Config, canceler: Arc<Canceler>) -> io::Result<Server> {
         assert!(config.config_type == ConfigType::Local && !config.local.is_empty());
 
         trace!("{:?}", config);
@@ -172,7 +172,7 @@ impl Server {
 
         // Global ServiceContext template
         // Each Local instance will hold a copy of its fields
-        let mut context = ServiceContext::new(context, cancel_waiter.clone());
+        let mut context = ServiceContext::new(context, canceler.waiter());
 
         let mut connect_opts = ConnectOpts {
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -546,12 +546,6 @@ impl Server {
             }
         }
 
-        // 启动一个维护服务，接受运行时控制
-        #[cfg(feature = "local-maintain")]
-        if let Some(maintain_addr) = config.maintain_addr {
-            local_server.maintain_server = Some(maintain::MaintainServer::new(context.clone(), maintain_addr))
-        }
-
         // 延迟检测 FakeMode
         #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
         {
@@ -563,9 +557,15 @@ impl Server {
         if let Some(local_stat_addr) = config.local_stat_addr {
             local_server.reporter_server = Some(reporter::ReporterServer::create(
                 Arc::new(context.clone()),
-                cancel_waiter.clone(),
+                canceler.waiter(),
                 local_stat_addr,
             ));
+        }
+
+        // 启动一个维护服务，接受运行时控制
+        #[cfg(feature = "local-maintain")]
+        if let Some(maintain_addr) = config.maintain_addr {
+            local_server.maintain_server = Some(maintain::MaintainServer::new(context.clone(), maintain_addr, canceler))
         }
 
         Ok(local_server)
@@ -802,16 +802,17 @@ where
         }
     }
 
+    tracing::info!("all local servers are done, result: {:?}", first_res);
     first_res.unwrap_or_else(|| Ok(()))
 }
 
-pub async fn create(config: Config, cancel_waiter: CancelWaiter) -> io::Result<Server> {
+pub async fn create(config: Config, canceler: Arc<Canceler>) -> io::Result<Server> {
     let context = Context::new(ServerType::Server);
-    let server = Server::new(Arc::new(context), cancel_waiter, config).await?;
+    let server = Server::new(Arc::new(context), config, canceler).await?;
     Ok(server)
 }
 
 /// Create then run a Local Server
-pub async fn run(config: Config, cancel_waiter: CancelWaiter) -> io::Result<()> {
-    create(config, cancel_waiter).await?.run().await
+pub async fn run(config: Config, canceler: Arc<Canceler>) -> io::Result<()> {
+    create(config, canceler).await?.run().await
 }

@@ -1,6 +1,6 @@
 #![cfg(all(feature = "local", feature = "server"))]
 
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::{net::{SocketAddr, ToSocketAddrs}, sync::Arc};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -16,7 +16,7 @@ use shadowsocks_service::{
     local::socks::client::socks5::{Socks5TcpClient, Socks5UdpClient},
     run_local, run_server,
     shadowsocks::{
-        canceler::CancelWaiter,
+        canceler::{CancelWaiter, Canceler},
         config::{Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::CipherKind,
         net::util::generate_port,
@@ -108,7 +108,7 @@ impl Socks5TestServer {
         tokio::spawn(run_server(CancelWaiter::none(), svr_cfg));
 
         let client_cfg = self.cli_config.clone();
-        tokio::spawn(run_local(client_cfg, CancelWaiter::none()).instrument(info_span!("local")));
+        tokio::spawn(run_local(client_cfg, Arc::new(Canceler::new())).instrument(info_span!("local")));
 
         let mut last_err = None;
 

@@ -2,6 +2,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{body::Incoming, service::Service, Method, Request, Response, StatusCode};
 use serde_json::json;
+use shadowsocks::canceler::{Canceler};
 use std::{future::Future, pin::Pin, sync::Arc};
 use tokio::io;
 
@@ -10,19 +11,22 @@ use crate::local::ServiceContext;
 #[derive(Clone)]
 pub struct Svc {
     context: Arc<ServiceContext>,
+    canceler: Arc<Canceler>,
 }
 
 impl Svc {
-    pub fn new(context: Arc<ServiceContext>) -> Self {
-        Self { context }
+    pub fn new(context: Arc<ServiceContext>, canceler: Arc<Canceler>) -> Self {
+        Self { context, canceler }
     }
 
     pub async fn handle_request(
         context: Arc<ServiceContext>,
+        canceler: Arc<Canceler>,
         req: Request<Incoming>,
     ) -> io::Result<Response<Full<Bytes>>> {
         let result = match (req.method(), req.uri().path()) {
             (&Method::GET, "/traffic") => Self::query_traffic(context, req).await,
+            (&Method::POST, "/stop") => Self::stop(canceler, req).await,
             #[cfg(feature = "local-signed-info")]
             (&Method::GET, "/android/validate") => Self::android_validate(context, req).await,
             #[cfg(feature = "rate-limit")]
@@ -53,6 +57,15 @@ impl Svc {
         }
     }
 
+    async fn stop(canceler: Arc<Canceler>, _req: Request<Incoming>) -> io::Result<Response<Full<Bytes>>> {
+        canceler.cancel();
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .body(Full::new(Bytes::new()))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    }
+    
     async fn query_traffic(context: Arc<ServiceContext>, _req: Request<Incoming>) -> io::Result<Response<Full<Bytes>>> {
         let flow_state = context.flow_stat();
 
@@ -192,6 +205,7 @@ impl Service<Request<Incoming>> for Svc {
 
     fn call(&self, req: Request<Incoming>) -> Self::Future {
         let context = self.context.clone();
-        Box::pin(async move { Self::handle_request(context, req).await })
+        let canceler = self.canceler.clone();
+        Box::pin(async move { Self::handle_request(context, canceler, req).await })
     }
 }

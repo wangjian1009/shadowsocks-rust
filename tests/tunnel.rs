@@ -1,5 +1,7 @@
 #![cfg(all(feature = "local-tunnel", feature = "server"))]
 
+use std::sync::Arc;
+
 use byte_string::ByteStr;
 use tokio::{
     self,
@@ -12,7 +14,7 @@ use tracing::debug;
 use shadowsocks_service::{
     config::{Config, ConfigType},
     run_local, run_server,
-    shadowsocks::canceler::CancelWaiter,
+    shadowsocks::canceler::{CancelWaiter, Canceler},
 };
 use tracing_test::traced_test;
 
@@ -63,7 +65,7 @@ async fn tcp_tunnel() {
     )
     .unwrap();
 
-    tokio::spawn(run_local(local_config, CancelWaiter::none()));
+    tokio::spawn(run_local(local_config, Arc::new(Canceler::new())));
     tokio::spawn(run_server(CancelWaiter::none(), server_config));
 
     time::sleep(Duration::from_secs(1)).await;
@@ -142,7 +144,7 @@ async fn udp_tunnel() {
     )
     .unwrap();
 
-    tokio::spawn(run_local(local_config, CancelWaiter::none()));
+    tokio::spawn(run_local(local_config, Arc::new(Canceler::new())));
     tokio::spawn(run_server(CancelWaiter::none(), server_config));
 
     time::sleep(Duration::from_secs(1)).await;

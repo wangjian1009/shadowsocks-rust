@@ -2,7 +2,7 @@
 
 use std::{
     net::{SocketAddr, ToSocketAddrs},
-    str,
+    str, sync::Arc,
 };
 
 use tokio::{
@@ -16,7 +16,7 @@ use shadowsocks_service::{
     run_local,
     run_server,
     shadowsocks::{
-        canceler::CancelWaiter,
+        canceler::{CancelWaiter, Canceler},
         config::{ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::CipherKind,
     },
@@ -68,7 +68,7 @@ impl Socks4TestServer {
         tokio::spawn(run_server(CancelWaiter::none(), svr_cfg));
 
         let client_cfg = self.cli_config.clone();
-        tokio::spawn(run_local(client_cfg, CancelWaiter::none()));
+        tokio::spawn(run_local(client_cfg, Arc::new(Canceler::new())));
 
         time::sleep(Duration::from_secs(1)).await;
     }

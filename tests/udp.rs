@@ -1,7 +1,7 @@
 #![cfg_attr(clippy, allow(blacklisted_name))]
 #![cfg(all(feature = "local", feature = "server"))]
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use tokio::time::{self, Duration};
 use tracing::debug;
@@ -11,7 +11,7 @@ use shadowsocks_service::{
     local::socks::client::socks5::Socks5UdpClient,
     run_local, run_server,
     shadowsocks::{
-        canceler::CancelWaiter,
+        canceler::{CancelWaiter, Canceler},
         config::{Mode, ServerProtocol, ShadowsocksConfig},
         crypto::CipherKind,
         relay::socks5::Address,
@@ -61,7 +61,7 @@ fn start_server() {
 }
 
 fn start_local() {
-    tokio::spawn(run_local(get_cli_config(), CancelWaiter::none()));
+    tokio::spawn(run_local(get_cli_config(), Arc::new(Canceler::new())));
 }
 
 fn start_udp_echo_server() {
