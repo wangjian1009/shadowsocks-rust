@@ -9,7 +9,6 @@ use std::{net::IpAddr, time::Duration};
 #[cfg(feature = "local-dns")]
 use lru_time_cache::LruCache;
 use shadowsocks::{
-    canceler::CancelWaiter,
     config::ServerType,
     context::{Context, SharedContext},
     dns_resolver::DnsResolver,
@@ -64,9 +63,6 @@ pub struct ServiceContext {
     // Flow statistic report
     flow_stat: Arc<FlowStat>,
 
-    // cancel
-    cancel_waiter: CancelWaiter,
-
     // For DNS relay's ACL domain name reverse lookup -- whether the IP shall be forwarded
     #[cfg(feature = "local-dns")]
     reverse_lookup_cache: Arc<Mutex<LruCache<IpAddr, bool>>>,
@@ -86,13 +82,13 @@ pub struct ServiceContext {
 
 impl Default for ServiceContext {
     fn default() -> Self {
-        ServiceContext::new(Context::new_shared(ServerType::Local), CancelWaiter::none())
+        ServiceContext::new(Context::new_shared(ServerType::Local))
     }
 }
 
 impl ServiceContext {
     /// Create a new `ServiceContext`
-    pub fn new(context: Arc<Context>, cancel_waiter: CancelWaiter) -> ServiceContext {
+    pub fn new(context: Arc<Context>) -> ServiceContext {
         ServiceContext {
             context,
             connect_opts: ConnectOpts::default(),
@@ -100,7 +96,6 @@ impl ServiceContext {
             connection_close_notify: Arc::new(Notify::new()),
             acl: None,
             flow_stat: Arc::new(FlowStat::new()),
-            cancel_waiter,
             #[cfg(feature = "local-dns")]
             reverse_lookup_cache: Arc::new(Mutex::new(LruCache::with_expiry_duration_and_capacity(
                 Duration::from_secs(3 * 24 * 60 * 60),
@@ -165,11 +160,6 @@ impl ServiceContext {
     /// Get flow statistic reference
     pub fn flow_stat_ref(&self) -> &FlowStat {
         self.flow_stat.as_ref()
-    }
-
-    /// Get cancel waiter
-    pub fn cancel_waiter(&self) -> CancelWaiter {
-        self.cancel_waiter.clone()
     }
 
     /// Set customized DNS resolver

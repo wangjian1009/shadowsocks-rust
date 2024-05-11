@@ -2,7 +2,7 @@
 
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
-use shadowsocks::{net::TcpListener as ShadowTcpListener, relay::socks5::Address, ServerAddr};
+use shadowsocks::{canceler::Canceler, net::TcpListener as ShadowTcpListener, relay::socks5::Address, ServerAddr};
 use tokio::{net::TcpStream, time};
 use tracing::{error, info, trace};
 
@@ -88,12 +88,12 @@ impl TunnelTcpServer {
     }
 
     /// Start serving
-    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         info!("shadowsocks TCP tunnel listening on {}", self.listener.local_addr()?);
         start_stat.notify().await?;
 
         let forward_addr = Arc::new(self.forward_addr);
-        let cancel_waiter = self.context.cancel_waiter();
+        let mut cancel_waiter = canceler.waiter();
         loop {
             let r = tokio::select! {
                 r = self.listener.accept() => { r }

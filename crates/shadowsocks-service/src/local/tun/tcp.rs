@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-use shadowsocks::{net::TcpSocketOpts, relay::socks5::Address};
+use shadowsocks::{canceler::Canceler, net::TcpSocketOpts, relay::socks5::Address};
 use smoltcp::{
     iface::{Config as InterfaceConfig, Interface, SocketHandle, SocketSet},
     phy::{DeviceCapabilities, Medium},
@@ -495,6 +495,7 @@ impl TcpTun {
 
     pub async fn handle_packet(
         &mut self,
+        canceler: &Canceler,
         src_addr: SocketAddr,
         dst_addr: SocketAddr,
         tcp_packet: &TcpPacket<&[u8]>,
@@ -533,10 +534,18 @@ impl TcpTun {
             // establish a tunnel
             let context = self.context.clone();
             let balancer = self.balancer.clone();
+            let mut cancel_waiter = canceler.waiter();
             tokio::spawn(
                 async move {
-                    if let Err(err) = handle_redir_client(context, balancer, connection, src_addr, dst_addr).await {
-                        error!("TCP tunnel failure, {} <-> {}, error: {}", src_addr, dst_addr, err);
+                    tokio::select! {
+                        r = handle_redir_client(context, balancer, connection, src_addr, dst_addr) => {
+                            if let Err(err) = r {
+                                error!("TCP tunnel failure, {} <-> {}, error: {}", src_addr, dst_addr, err);
+                            }
+                        }
+                        _ = cancel_waiter.wait() => {
+                            debug!("TCP tunnel canceled, {} <-> {}", src_addr, dst_addr);
+                        }
                     }
                 }
                 .in_current_span(),

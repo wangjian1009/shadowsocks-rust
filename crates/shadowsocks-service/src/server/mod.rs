@@ -12,7 +12,7 @@ use std::{
 use cfg_if::cfg_if;
 use futures::{future, ready};
 use shadowsocks::{
-    canceler::CancelWaiter,
+    canceler::Canceler,
     net::{AcceptOpts, ConnectOpts},
 };
 use tokio::task::JoinHandle;
@@ -53,7 +53,7 @@ cfg_if! {
 pub(crate) const SERVER_DEFAULT_KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Starts a shadowsocks server
-pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> {
+pub async fn run(canceler: Arc<Canceler>, config: Config) -> io::Result<()> {
     assert_eq!(config.config_type, ConfigType::Server);
     assert!(!config.server.is_empty());
 
@@ -131,7 +131,7 @@ pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> 
 
     for inst in config.server {
         let svr_cfg = inst.config;
-        let mut server_builder = ServerBuilder::new(svr_cfg, cancel_waiter.clone());
+        let mut server_builder = ServerBuilder::new(svr_cfg);
 
         if let Some(ref r) = resolver {
             server_builder.set_dns_resolver(r.clone());
@@ -205,7 +205,7 @@ pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> 
 
     for server in servers {
         let span = info_span!("svr", port = server.server_config().addr().port());
-        vfut.push(ServerHandle(tokio::spawn(server.run().instrument(span.or_current()))));
+        vfut.push(ServerHandle(tokio::spawn(server.run(canceler.clone()).instrument(span.or_current()))));
     }
 
     #[cfg(feature = "server-maintain")]
@@ -213,7 +213,7 @@ pub async fn run(cancel_waiter: CancelWaiter, config: Config) -> io::Result<()> 
         let span = info_span!("maintain");
         vfut.push(ServerHandle(tokio::spawn(
             maintain_svr
-                .run(cancel_waiter.clone(), config.maintain_addr.unwrap())
+                .run(canceler.waiter(), config.maintain_addr.unwrap())
                 .instrument(span.or_current()),
         )));
     }

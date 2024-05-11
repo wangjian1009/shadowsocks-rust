@@ -3,7 +3,7 @@
 use std::{io, sync::Arc, time::Duration};
 
 use futures::FutureExt;
-use shadowsocks::{canceler::CancelWaiter, config::Mode, context::Context, ServerAddr};
+use shadowsocks::{canceler::Canceler, config::Mode, context::Context, ServerAddr};
 use tracing::{info_span, Instrument};
 
 use crate::{
@@ -30,11 +30,10 @@ impl RedirBuilder {
     /// Create a new transparent proxy server with default configuration
     pub fn new(
         context: Arc<Context>,
-        cancel_waiter: CancelWaiter,
         client_addr: ServerAddr,
         balancer: PingBalancer,
     ) -> RedirBuilder {
-        let context = ServiceContext::new(context, cancel_waiter);
+        let context = ServiceContext::new(context);
         RedirBuilder::with_context(Arc::new(context), client_addr, balancer)
     }
 
@@ -134,13 +133,13 @@ impl Redir {
     }
 
     /// Start serving
-    pub async fn run(self, mut start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(self, mut start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         let mut vfut = Vec::new();
 
         if let Some(tcp_server) = self.tcp_server {
             vfut.push(
                 tcp_server
-                    .run(start_stat.new_child("tcp"))
+                    .run(start_stat.new_child("tcp"), canceler.clone())
                     .instrument(info_span!("tcp"))
                     .boxed(),
             );
@@ -149,7 +148,7 @@ impl Redir {
         if let Some(udp_server) = self.udp_server {
             vfut.push(
                 udp_server
-                    .run(start_stat.new_child("udp"))
+                    .run(start_stat.new_child("udp"), canceler.clone())
                     .instrument(info_span!("udp"))
                     .boxed(),
             );

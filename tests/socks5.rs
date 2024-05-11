@@ -1,6 +1,9 @@
 #![cfg(all(feature = "local", feature = "server"))]
 
-use std::{net::{SocketAddr, ToSocketAddrs}, sync::Arc};
+use std::{
+    net::{SocketAddr, ToSocketAddrs},
+    sync::Arc,
+};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -16,7 +19,7 @@ use shadowsocks_service::{
     local::socks::client::socks5::{Socks5TcpClient, Socks5UdpClient},
     run_local, run_server,
     shadowsocks::{
-        canceler::{CancelWaiter, Canceler},
+        canceler::Canceler,
         config::{Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::CipherKind,
         net::util::generate_port,
@@ -104,11 +107,12 @@ impl Socks5TestServer {
     }
 
     pub async fn start(&self) -> std::io::Result<()> {
+        let canceler = Arc::new(Canceler::new());
         let svr_cfg = self.svr_config.clone();
-        tokio::spawn(run_server(CancelWaiter::none(), svr_cfg));
+        tokio::spawn(run_server(canceler.clone(), svr_cfg));
 
         let client_cfg = self.cli_config.clone();
-        tokio::spawn(run_local(client_cfg, Arc::new(Canceler::new())).instrument(info_span!("local")));
+        tokio::spawn(run_local(client_cfg, canceler.clone()).instrument(info_span!("local")));
 
         let mut last_err = None;
 
@@ -420,7 +424,6 @@ async fn socks5_udp_relay_trojan() {
     )
     .await
 }
-
 
 #[cfg(feature = "tuic")]
 #[tokio::test]

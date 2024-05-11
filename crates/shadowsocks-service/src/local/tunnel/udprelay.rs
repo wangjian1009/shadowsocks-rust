@@ -4,8 +4,7 @@ use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use shadowsocks::{
-    relay::{socks5::Address, udprelay::MAXIMUM_UDP_PAYLOAD_SIZE},
-    ServerAddr,
+    canceler::Canceler, relay::{socks5::Address, udprelay::MAXIMUM_UDP_PAYLOAD_SIZE}, ServerAddr
 };
 use tokio::{net::UdpSocket, time};
 use tracing::{debug, error, info};
@@ -111,7 +110,7 @@ impl TunnelUdpServer {
     }
 
     /// Start serving
-    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         info!("shadowsocks UDP tunnel listening on {}", self.listener.local_addr()?);
         start_stat.notify().await?;
 
@@ -126,7 +125,7 @@ impl TunnelUdpServer {
         );
 
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
-        let cancel_waiter = self.context.cancel_waiter();
+        let mut cancel_waiter = canceler.waiter();
 
         loop {
             tokio::select! {

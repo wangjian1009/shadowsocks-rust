@@ -11,6 +11,7 @@ use tokio::{
 };
 use tun::{AsyncDevice, Configuration as TunConfiguration, Error as TunError, Layer};
 
+use shadowsocks::canceler::Canceler;
 use shadowsocks::net::{AddrFamily, ConnectOpts, UdpSocket};
 use shadowsocks::wg;
 
@@ -129,7 +130,7 @@ impl Server {
         })
     }
 
-    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         let Server {
             context,
             connect_opts,
@@ -145,7 +146,7 @@ impl Server {
         #[cfg(feature = "local-fake-mode")]
         let mut fake_updated = false;
 
-        let cancel_waiter = context.cancel_waiter();
+        let mut cancel_waiter = canceler.waiter();
 
         #[cfg(feature = "rate-limit")]
         let rate_limit = context.rate_limiter();

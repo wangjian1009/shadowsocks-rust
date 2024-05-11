@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
 
 use shadowsocks::{
-    canceler::CancelWaiter,
+    canceler::Canceler,
     config::{Mode, ServerConfig, ServerProtocol, ServerType, ServerUser, ServerUserManager, ShadowsocksConfig},
     context::{Context, SharedContext},
     crypto::CipherKind,
@@ -207,7 +207,7 @@ impl Manager {
     }
 
     /// Start serving
-    pub async fn run(mut self) -> io::Result<()> {
+    pub async fn run(mut self, canceler: Arc<Canceler>) -> io::Result<()> {
         let local_addr = self.listener.local_addr()?;
         info!("shadowsocks manager server listening on {}", local_addr);
 
@@ -223,7 +223,7 @@ impl Manager {
             trace!("received {:?} from {:?}", req, peer_addr);
 
             match req {
-                ManagerRequest::Add(ref req) => match self.handle_add(req).await {
+                ManagerRequest::Add(ref req) => match self.handle_add(canceler.clone(), req).await {
                     Ok(rsp) => {
                         let _ = self.listener.send_to(&rsp, &peer_addr).await;
                     }
@@ -251,20 +251,20 @@ impl Manager {
     }
 
     /// Add a server programatically
-    pub async fn add_server(&self, svr_cfg: ServerConfig) {
+    pub async fn add_server(&self, canceler: Arc<Canceler>, svr_cfg: ServerConfig) {
         match self.svr_cfg.server_mode {
-            ManagerServerMode::Builtin => self.add_server_builtin(CancelWaiter::none(), svr_cfg).await,
+            ManagerServerMode::Builtin => self.add_server_builtin(canceler, svr_cfg).await,
             #[cfg(unix)]
             ManagerServerMode::Standalone => self.add_server_standalone(svr_cfg).await,
         }
     }
 
-    async fn add_server_builtin(&self, cancel_waiter: CancelWaiter, svr_cfg: ServerConfig) {
+    async fn add_server_builtin(&self, canceler: Arc<Canceler>, svr_cfg: ServerConfig) {
         // Each server should use a separate Context, but shares
         //
         // * AccessControlList
         // * DNS Resolver
-        let mut server_builder = ServerBuilder::new(svr_cfg.clone(), cancel_waiter);
+        let mut server_builder = ServerBuilder::new(svr_cfg.clone());
 
         server_builder.set_connect_opts(self.connect_opts.clone());
         server_builder.set_accept_opts(self.accept_opts.clone());
@@ -312,7 +312,7 @@ impl Manager {
             }
         };
 
-        let abortable = tokio::spawn(server.run());
+        let abortable = tokio::spawn(server.run(canceler));
 
         servers.insert(
             server_port,
@@ -477,7 +477,7 @@ impl Manager {
         );
     }
 
-    async fn handle_add(&self, req: &AddRequest) -> io::Result<AddResponse> {
+    async fn handle_add(&self, canceler: Arc<Canceler>, req: &AddRequest) -> io::Result<AddResponse> {
         let addr = match self.svr_cfg.server_host {
             ManagerServerHost::Domain(ref dname) => ServerAddr::DomainName(dname.clone(), req.server_port),
             ManagerServerHost::Ip(ip) => ServerAddr::SocketAddr(SocketAddr::new(ip, req.server_port)),
@@ -564,7 +564,7 @@ impl Manager {
             svr_cfg.must_be_ss_mut(|c| c.set_user_manager(user_manager));
         }
 
-        self.add_server(svr_cfg).await;
+        self.add_server(canceler.clone(), svr_cfg).await;
 
         Ok(AddResponse("ok".to_owned()))
     }

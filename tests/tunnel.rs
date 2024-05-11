@@ -14,7 +14,7 @@ use tracing::debug;
 use shadowsocks_service::{
     config::{Config, ConfigType},
     run_local, run_server,
-    shadowsocks::canceler::{CancelWaiter, Canceler},
+    shadowsocks::canceler::Canceler,
 };
 use tracing_test::traced_test;
 
@@ -65,8 +65,9 @@ async fn tcp_tunnel() {
     )
     .unwrap();
 
-    tokio::spawn(run_local(local_config, Arc::new(Canceler::new())));
-    tokio::spawn(run_server(CancelWaiter::none(), server_config));
+    let canceler = Arc::new(Canceler::new());
+    tokio::spawn(run_local(local_config, canceler.clone()));
+    tokio::spawn(run_server(canceler, server_config));
 
     time::sleep(Duration::from_secs(1)).await;
 
@@ -144,8 +145,9 @@ async fn udp_tunnel() {
     )
     .unwrap();
 
-    tokio::spawn(run_local(local_config, Arc::new(Canceler::new())));
-    tokio::spawn(run_server(CancelWaiter::none(), server_config));
+    let canceler = Arc::new(Canceler::new());
+    tokio::spawn(run_local(local_config, canceler.clone()));
+    tokio::spawn(run_server(canceler, server_config));
 
     time::sleep(Duration::from_secs(1)).await;
 

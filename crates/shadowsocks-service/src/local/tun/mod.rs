@@ -11,7 +11,7 @@ use std::{
 
 use byte_string::ByteStr;
 use ipnet::{IpNet, Ipv4Net};
-use shadowsocks::config::Mode;
+use shadowsocks::{config::Mode, canceler::Canceler};
 use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
 use tokio::io::AsyncReadExt;
 use tracing::{debug, error, info, trace, warn};
@@ -123,7 +123,6 @@ impl TunBuilder {
         );
 
         Ok(Tun {
-            context: self.context,
             device,
             device_address_net: self.tun_effect_address_net,
             tcp,
@@ -136,7 +135,6 @@ impl TunBuilder {
 
 /// Tun service
 pub struct Tun {
-    context: Arc<ServiceContext>,
     device: AsyncDevice,
     device_address_net: Option<IpNet>,
     tcp: TcpTun,
@@ -147,7 +145,7 @@ pub struct Tun {
 
 impl Tun {
     /// Start serving
-    pub async fn run(mut self, start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(mut self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         if let Ok(mtu) = self.device.get_ref().mtu() {
             assert!(mtu > 0 && mtu as usize > IFF_PI_PREFIX_LEN);
         }
@@ -220,11 +218,12 @@ impl Tun {
         let address_broadcast = address_net.broadcast();
 
         let mut packet_buffer = vec![0u8; 65536 + IFF_PI_PREFIX_LEN].into_boxed_slice();
-        let cancel_waiter = self.context.cancel_waiter();
+        let mut cancel_waiter = canceler.waiter();
 
         loop {
             tokio::select! {
                 _ = cancel_waiter.wait() => {
+                    info!("[TUN] tun device canceled");
                     return Ok(());
                 }
 
@@ -243,7 +242,7 @@ impl Tun {
                     let packet = &mut packet_buffer[IFF_PI_PREFIX_LEN..n];
                     trace!("[TUN] received IP packet {:?}", ByteStr::new(packet));
 
-                    if let Err(err) = self.handle_tun_frame(&address_broadcast, packet).await {
+                    if let Err(err) = self.handle_tun_frame(canceler.as_ref(), &address_broadcast, packet).await {
                         error!("[TUN] handle IP frame failed, error: {}", err);
                     }
                 }
@@ -282,7 +281,7 @@ impl Tun {
         }
     }
 
-    async fn handle_tun_frame(&mut self, device_broadcast_addr: &Ipv4Addr, frame: &[u8]) -> smoltcp::wire::Result<()> {
+    async fn handle_tun_frame(&mut self, canceler: &Canceler,  device_broadcast_addr: &Ipv4Addr, frame: &[u8]) -> smoltcp::wire::Result<()> {
         let packet = match IpPacket::new_checked(frame)? {
             Some(packet) => packet,
             None => {
@@ -354,7 +353,7 @@ impl Tun {
                 );
 
                 // TCP first handshake packet.
-                if let Err(err) = self.tcp.handle_packet(src_addr, dst_addr, &tcp_packet).await {
+                if let Err(err) = self.tcp.handle_packet(canceler, src_addr, dst_addr, &tcp_packet).await {
                     error!(
                         "handle TCP packet failed, error: {}, {} <-> {}, packet: {:?}",
                         err, src_addr, dst_addr, tcp_packet

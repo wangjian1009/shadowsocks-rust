@@ -16,12 +16,7 @@ use futures::future;
 use lru_time_cache::LruCache;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use shadowsocks::{
-    config::{ServerProtocol, ServerUser},
-    crypto::CipherCategory,
-    lookup_then,
-    net::{AcceptOpts, AddrFamily, UdpSocket as OutboundUdpSocket},
-    relay::udprelay::{options::UdpSocketControlData, ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
-    ServerAddr, ServerConfig,
+    canceler::Canceler, config::{ServerProtocol, ServerUser}, crypto::CipherCategory, lookup_then, net::{AcceptOpts, AddrFamily, UdpSocket as OutboundUdpSocket}, relay::udprelay::{options::UdpSocketControlData, ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE}, ServerAddr, ServerConfig
 };
 use tokio::{sync::mpsc, task::JoinHandle, time};
 use tracing::{debug, error, info, trace, warn, Instrument};
@@ -163,7 +158,7 @@ impl UdpServer {
     }
 
     /// Start server's accept loop
-    pub async fn run(mut self) -> io::Result<()> {
+    pub async fn run(mut self, _canceler: Arc<Canceler>) -> io::Result<()> {
         info!(
             "shadowsocks udp server listening on {}, inbound address {}",
             self.local_addr().expect("listener.local_addr"),

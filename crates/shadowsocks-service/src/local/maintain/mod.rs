@@ -11,26 +11,25 @@ use server::Svc;
 
 pub struct MaintainServer {
     service_context: ServiceContext,
-    canceler: Arc<Canceler>,
     addr: SocketAddr,
 }
 
 impl MaintainServer {
-    pub fn new(service_context: ServiceContext, addr: SocketAddr, canceler: Arc<Canceler>) -> MaintainServer {
-        MaintainServer { service_context, canceler, addr }
+    pub fn new(service_context: ServiceContext, addr: SocketAddr) -> MaintainServer {
+        MaintainServer { service_context, addr }
     }
 
-    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
-        let MaintainServer { service_context, canceler, addr } = self;
+    pub async fn run(self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
+        let MaintainServer { service_context, addr } = self;
 
         let listener = TcpListener::bind_with_opts(&addr, service_context.accept_opts()).await?;
 
         tracing::info!("shadowsocks maintain server listening on {}", self.addr);
         start_stat.notify().await?;
 
-        let cancel_waiter = service_context.cancel_waiter();
+        let mut cancel_waiter = canceler.waiter();
 
-        let svc = Svc::new(Arc::new(service_context), canceler);
+        let svc = Svc::new(Arc::new(service_context));
 
         tokio::select! {
             r = Self::serve(svc, listener) => {
@@ -43,7 +42,7 @@ impl MaintainServer {
                 }
             }
             _ = cancel_waiter.wait() => {
-                tracing::trace!("canceld");
+                tracing::info!("maintain server canceld");
                 Ok(())
             }
         }

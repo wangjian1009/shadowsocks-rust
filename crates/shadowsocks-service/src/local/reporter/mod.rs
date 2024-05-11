@@ -3,7 +3,7 @@ use std::{io, slice};
 
 use tokio::time::{self, Duration};
 
-use shadowsocks::canceler::CancelWaiter;
+use shadowsocks::canceler::Canceler;
 
 use crate::{
     config::LocalFlowStatAddress,
@@ -13,47 +13,36 @@ use crate::{
 pub struct ReporterServer {
     context: Arc<ServiceContext>,
     stat_addr: LocalFlowStatAddress,
-    cancel_waiter: CancelWaiter,
 }
 
 impl ReporterServer {
-    pub fn create(context: Arc<ServiceContext>, cancel_waiter: CancelWaiter, stat_addr: LocalFlowStatAddress) -> Self {
-        Self {
-            context,
-            cancel_waiter,
-            stat_addr,
+    pub fn create(context: Arc<ServiceContext>, stat_addr: LocalFlowStatAddress) -> Self {
+        Self { context, stat_addr }
+    }
+
+    pub async fn run(self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
+        let mut cancel_waiter = canceler.waiter();
+        tokio::select! {
+            r = self.do_run(start_stat) => {
+                r
+            }
+            _ = cancel_waiter.wait() => {
+                tracing::info!("reporter processor canceled");
+                return Ok(());
+            }
         }
     }
 
-    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
-        let cancel_waiter = self.context.cancel_waiter();
-
-        tokio::select! {
-            _ = cancel_waiter.wait() => {
-                return Ok(());
-            }
-            r = start_stat.wait() => {
-                r?;
-                send_local_notify(&self.stat_addr, 3, &[]).await?;
-            }
-        }
+    pub async fn do_run(self, start_stat: StartStat) -> io::Result<()> {
+        let _ = start_stat.wait().await?;
+        send_local_notify(&self.stat_addr, 3, &[]).await?;
 
         // Local flow statistic report RPC
         let flow_stat = self.context.flow_stat();
 
         loop {
             // keep it as libev's default, 0.5 seconds
-            tokio::select! {
-                _ = cancel_waiter.wait() => {
-                    return Ok(());
-                }
-                _ = time::sleep(Duration::from_millis(500)) => {
-                }
-                _ = self.cancel_waiter.wait() => {
-                    tracing::trace!("canceled");
-                    return Ok(());
-                }
-            }
+            time::sleep(Duration::from_millis(500)).await;
 
             let tx = flow_stat.tx();
             let rx = flow_stat.rx();

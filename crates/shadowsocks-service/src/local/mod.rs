@@ -11,7 +11,7 @@ use std::{
 
 use futures::{future, ready};
 use shadowsocks::{
-    canceler::{CancelWaiter, Canceler},
+    canceler::Canceler,
     config::{Mode, ServerProtocol, ServerType},
     context::Context,
     net::{AcceptOpts, ConnectOpts},
@@ -144,7 +144,7 @@ pub struct Server {
 
 impl Server {
     /// Create a shadowsocks local server
-    pub async fn new(context: Arc<Context>, config: Config, canceler: Arc<Canceler>) -> io::Result<Server> {
+    pub async fn new(context: Arc<Context>, config: Config) -> io::Result<Server> {
         assert!(config.config_type == ConfigType::Local && !config.local.is_empty());
 
         trace!("{:?}", config);
@@ -172,7 +172,7 @@ impl Server {
 
         // Global ServiceContext template
         // Each Local instance will hold a copy of its fields
-        let mut context = ServiceContext::new(context, canceler.waiter());
+        let mut context = ServiceContext::new(context);
 
         let mut connect_opts = ConnectOpts {
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -539,7 +539,7 @@ impl Server {
                             builder.effect_address_net(address_net);
                         }
 
-                        let server = builder.build().await?;
+                        let server = builder.build().instrument(info_span!("tun")).await?;
                         local_server.tun_servers.push(server);
                     }
                 }
@@ -557,7 +557,6 @@ impl Server {
         if let Some(local_stat_addr) = config.local_stat_addr {
             local_server.reporter_server = Some(reporter::ReporterServer::create(
                 Arc::new(context.clone()),
-                canceler.waiter(),
                 local_stat_addr,
             ));
         }
@@ -565,84 +564,91 @@ impl Server {
         // 启动一个维护服务，接受运行时控制
         #[cfg(feature = "local-maintain")]
         if let Some(maintain_addr) = config.maintain_addr {
-            local_server.maintain_server = Some(maintain::MaintainServer::new(context.clone(), maintain_addr, canceler))
+            local_server.maintain_server = Some(maintain::MaintainServer::new(context.clone(), maintain_addr))
         }
 
         Ok(local_server)
     }
 
     /// Run local server
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, canceler: Arc<Canceler>) -> io::Result<()> {
         let mut vfut = Vec::new();
 
         let mut start_stat = StartStat::create();
 
         for svr in self.socks_servers {
             vfut.push(ServerHandle(tokio::spawn(
-                svr.run(start_stat.new_child("socks")).instrument(info_span!("socks")),
+                svr.run(start_stat.new_child("socks"), canceler.clone())
+                    .instrument(info_span!("socks")),
             )));
         }
 
         #[cfg(feature = "local-tunnel")]
         for svr in self.tunnel_servers {
             vfut.push(ServerHandle(tokio::spawn(
-                svr.run(start_stat.new_child("tunnel")).instrument(info_span!("tunnel")),
+                svr.run(start_stat.new_child("tunnel"), canceler.clone())
+                    .instrument(info_span!("tunnel")),
             )));
         }
 
         #[cfg(feature = "local-http")]
         for svr in self.http_servers {
             vfut.push(ServerHandle(tokio::spawn(
-                svr.run(start_stat.new_child("http")).instrument(info_span!("http")),
+                svr.run(start_stat.new_child("http"), canceler.clone())
+                    .instrument(info_span!("http")),
             )));
         }
 
         #[cfg(feature = "local-tun")]
         for svr in self.tun_servers {
             vfut.push(ServerHandle(tokio::spawn(
-                svr.run(start_stat.new_child("tun")).instrument(info_span!("tun")),
+                svr.run(start_stat.new_child("tun"), canceler.clone())
+                    .instrument(info_span!("tun")),
             )));
         }
 
         #[cfg(feature = "local-dns")]
         for svr in self.dns_servers {
             vfut.push(ServerHandle(tokio::spawn(
-                svr.run(start_stat.new_child("dns")).instrument(info_span!("dns")),
+                svr.run(start_stat.new_child("dns"), canceler.clone())
+                    .instrument(info_span!("dns")),
             )));
         }
 
         #[cfg(feature = "local-redir")]
         for svr in self.redir_servers {
             vfut.push(ServerHandle(tokio::spawn(
-                svr.run(start_stat.new_child("redir")).instrument(info_span!("redir")),
+                svr.run(start_stat.new_child("redir"), canceler.clone())
+                    .instrument(info_span!("redir")),
             )));
         }
 
         #[cfg(feature = "wireguard")]
         if let Some(svr) = self.wg_server {
             vfut.push(ServerHandle(tokio::spawn(
-                svr.run(start_stat.new_child("wg")).instrument(info_span!("wg")),
+                svr.run(start_stat.new_child("wg"), canceler.clone())
+                    .instrument(info_span!("wg")),
             )));
         }
 
         #[cfg(feature = "local-maintain")]
         if let Some(svr) = self.maintain_server {
             vfut.push(ServerHandle(tokio::spawn(
-                svr.run(start_stat.new_child("maintain"))
+                svr.run(start_stat.new_child("maintain"), canceler.clone())
                     .instrument(info_span!("maintain")),
             )));
         }
 
         #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
         if let Some(svr) = self.fake_check_server {
-            vfut.push(ServerHandle(tokio::spawn(svr.run().instrument(info_span!("fake")))));
+            vfut.push(ServerHandle(tokio::spawn(svr.run(canceler.clone()).instrument(info_span!("fake")))));
         }
 
         #[cfg(feature = "local-flow-stat")]
         if let Some(svr) = self.reporter_server {
             // For Android's flow statistic
             vfut.push(ServerHandle(tokio::spawn(
-                svr.run(start_stat).instrument(info_span!("reporter")),
+                svr.run(start_stat, canceler.clone()).instrument(info_span!("reporter")),
             )));
         } else {
             vfut.push(ServerHandle(tokio::spawn(start_stat.wait())));
@@ -795,6 +801,7 @@ where
 
     while !vfut.is_empty() {
         let (res, _idx, left_vfut) = future::select_all(vfut).await;
+        // tracing::info!("XXXXXXX: server {_idx} done, left={}, res={:?}", left_vfut.len(), res);
         vfut = left_vfut;
 
         if first_res.is_none() && res.is_err() {
@@ -806,13 +813,13 @@ where
     first_res.unwrap_or_else(|| Ok(()))
 }
 
-pub async fn create(config: Config, canceler: Arc<Canceler>) -> io::Result<Server> {
+pub async fn create(config: Config) -> io::Result<Server> {
     let context = Context::new(ServerType::Server);
-    let server = Server::new(Arc::new(context), config, canceler).await?;
+    let server = Server::new(Arc::new(context), config).await?;
     Ok(server)
 }
 
 /// Create then run a Local Server
 pub async fn run(config: Config, canceler: Arc<Canceler>) -> io::Result<()> {
-    create(config, canceler).await?.run().await
+    create(config).await?.run(canceler).await
 }

@@ -10,7 +10,7 @@ use std::{
 use cfg_if::cfg_if;
 use futures::FutureExt;
 use shadowsocks::{
-    canceler::CancelWaiter,
+    canceler::Canceler,
     config::{ManagerAddr, ServerConfig},
     dns_resolver::DnsResolver,
     net::{AcceptOpts, ConnectOpts, FlowStat},
@@ -50,8 +50,8 @@ pub struct ServerBuilder {
 
 impl ServerBuilder {
     /// Create a new server builder from configuration
-    pub fn new(svr_cfg: ServerConfig, cancel_waiter: CancelWaiter) -> ServerBuilder {
-        ServerBuilder::with_context(Arc::new(ServiceContext::new(cancel_waiter)), svr_cfg)
+    pub fn new(svr_cfg: ServerConfig) -> ServerBuilder {
+        ServerBuilder::with_context(Arc::new(ServiceContext::new()), svr_cfg)
     }
 
     /// Create a new server builder with context
@@ -279,7 +279,7 @@ impl Server {
     }
 
     /// Start serving
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, canceler: Arc<Canceler>) -> io::Result<()> {
         let mut vfut = Vec::with_capacity(3);
 
         if let Some(plugin) = self.plugin {
@@ -301,18 +301,33 @@ impl Server {
         }
 
         if let Some(tcp_server) = self.tcp_server {
-            vfut.push(tcp_server.run().instrument(info_span!("ss.tcp")).boxed());
+            vfut.push(
+                tcp_server
+                    .run(canceler.clone())
+                    .instrument(info_span!("ss.tcp"))
+                    .boxed(),
+            );
         }
 
         if let Some(udp_server) = self.udp_server {
-            vfut.push(udp_server.run().instrument(info_span!("ss.udp")).boxed())
+            vfut.push(
+                udp_server
+                    .run(canceler.clone())
+                    .instrument(info_span!("ss.udp"))
+                    .boxed(),
+            )
         }
 
         if let Some(manager_addr) = self.manager_addr {
             vfut.push(
-                Self::run_manager_report(self.context.clone(), manager_addr, self.svr_cfg.addr().clone())
-                    .instrument(info_span!("maintain"))
-                    .boxed(),
+                Self::run_manager_report(
+                    self.context.clone(),
+                    canceler.clone(),
+                    manager_addr,
+                    self.svr_cfg.addr().clone(),
+                )
+                .instrument(info_span!("maintain"))
+                .boxed(),
             );
         }
 
@@ -424,10 +439,11 @@ impl Server {
 
     async fn run_manager_report(
         context: Arc<ServiceContext>,
+        canceler: Arc<Canceler>,
         manager_addr: ManagerAddr,
         svr_addr: ServerAddr,
     ) -> io::Result<()> {
-        let cancel_waiter = context.cancel_waiter();
+        let mut cancel_waiter = canceler.waiter();
 
         loop {
             match ManagerClient::connect(context.context_ref(), &manager_addr, context.connect_opts_ref()).await {
@@ -473,7 +489,7 @@ impl Server {
                 }
             }
 
-            if cancel_waiter.is_canceled() {
+            if canceler.is_canceled() {
                 return Ok(());
             }
 
@@ -485,7 +501,7 @@ impl Server {
         }
     }
 
-    pub async fn tuic_run_shadow_tcp(&self) -> io::Result<()> {
+    pub async fn tuic_run_shadow_tcp(&self, canceler: Arc<Canceler>) -> io::Result<()> {
         use bytes::BytesMut;
         use shadowsocks::transport::{direct::TcpAcceptor, Acceptor};
 
@@ -498,7 +514,7 @@ impl Server {
         )
         .await?;
 
-        let cancel_waiter = self.context.cancel_waiter();
+        let mut cancel_waiter = canceler.waiter();
         loop {
             let (mut s, peer_addr) = tokio::select! {
                 r = listener.accept() => r?,

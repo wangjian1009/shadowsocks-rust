@@ -11,7 +11,7 @@ use shadowsocks_service::{
     local::socks::client::socks5::Socks5UdpClient,
     run_local, run_server,
     shadowsocks::{
-        canceler::{CancelWaiter, Canceler},
+        canceler::Canceler,
         config::{Mode, ServerProtocol, ShadowsocksConfig},
         crypto::CipherKind,
         relay::socks5::Address,
@@ -57,7 +57,8 @@ fn get_client_addr() -> SocketAddr {
 }
 
 fn start_server() {
-    tokio::spawn(run_server(CancelWaiter::none(), get_svr_config()));
+    let canceler = Arc::new(Canceler::new());
+    tokio::spawn(run_server(canceler, get_svr_config()));
 }
 
 fn start_local() {

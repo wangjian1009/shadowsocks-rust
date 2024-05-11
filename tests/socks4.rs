@@ -16,7 +16,7 @@ use shadowsocks_service::{
     run_local,
     run_server,
     shadowsocks::{
-        canceler::{CancelWaiter, Canceler},
+        canceler::Canceler,
         config::{ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
         crypto::CipherKind,
     },
@@ -64,11 +64,13 @@ impl Socks4TestServer {
     }
 
     pub async fn run(&self) {
+        let canceler = Arc::new(Canceler::new());
+
         let svr_cfg = self.svr_config.clone();
-        tokio::spawn(run_server(CancelWaiter::none(), svr_cfg));
+        tokio::spawn(run_server(canceler.clone(), svr_cfg));
 
         let client_cfg = self.cli_config.clone();
-        tokio::spawn(run_local(client_cfg, Arc::new(Canceler::new())));
+        tokio::spawn(run_local(client_cfg, canceler));
 
         time::sleep(Duration::from_secs(1)).await;
     }

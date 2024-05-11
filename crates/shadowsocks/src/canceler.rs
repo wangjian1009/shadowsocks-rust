@@ -1,41 +1,54 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use tokio::sync::Notify;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::oneshot;
 
-struct Inner {
-    is_canceled: AtomicBool,
-    notify: Notify,
+struct CancelerData {
+    waiters: spin::Mutex<Option<(u32, HashMap<u32, oneshot::Receiver<()>>)>>,
 }
 
 pub struct Canceler {
-    inner: Arc<Inner>,
+    data: Arc<CancelerData>,
 }
 
 impl Canceler {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Inner {
-                is_canceled: AtomicBool::new(false),
-                notify: Notify::new(),
+            data: Arc::new(CancelerData {
+                waiters: spin::Mutex::new(Some((0, HashMap::new()))),
             }),
         }
     }
 
     pub fn is_canceled(&self) -> bool {
-        self.inner.is_canceled.load(Ordering::SeqCst)
+        self.data.waiters.lock().is_none()
     }
 
     pub fn cancel(&self) {
-        let is_canceled = self.inner.is_canceled.swap(true, Ordering::SeqCst);
-        if is_canceled {
-        } else {
-            self.inner.notify.notify_waiters();
-        }
+        let _ = self.data.waiters.lock().take();
     }
 
     pub fn waiter(&self) -> CancelWaiter {
+        let (id, tx) = {
+            let mut self_waiters = self.data.waiters.lock();
+            if let Some(self_waiters) = &mut *self_waiters {
+                self_waiters.0 += 1;
+                let new_id = self_waiters.0;
+                let (tx, rx) = oneshot::channel();
+                self_waiters.1.insert(new_id, rx);
+                (new_id, tx)
+            } else {
+                return CancelWaiter {
+                    id: 0,
+                    canceler: self.data.clone(),
+                    tx: None,
+                };
+            }
+        };
+
+        // tracing::error!("xxxxxx: CancelWaiter {} created", id);
         CancelWaiter {
-            inner: Some(self.inner.clone()),
+            id,
+            canceler: self.data.clone(),
+            tx: Some(tx),
         }
     }
 }
@@ -46,27 +59,26 @@ impl Default for Canceler {
     }
 }
 
-#[derive(Clone)]
 pub struct CancelWaiter {
-    inner: Option<Arc<Inner>>,
+    id: u32,
+    canceler: Arc<CancelerData>,
+    tx: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for CancelWaiter {
+    fn drop(&mut self) {
+        self.canceler.waiters.lock().as_mut().map(|s| {
+            if let Some(_r) = s.1.remove(&self.id) {
+                // tracing::error!("xxxxxx: CancelWaiter {} remove", self.id);
+            }
+        });
+    }
 }
 
 impl CancelWaiter {
-    pub fn none() -> Self {
-        Self { inner: None }
-    }
-
-    pub fn is_canceled(&self) -> bool {
-        match self.inner.as_ref() {
-            Some(inner) => inner.is_canceled.load(Ordering::SeqCst),
-            None => false,
-        }
-    }
-
-    pub async fn wait(&self) {
-        match self.inner.as_ref() {
-            Some(inner) => inner.notify.notified().await,
-            None => futures::future::pending().await,
+    pub async fn wait(&mut self) {
+        if let Some(tx) = self.tx.as_mut() {
+            let _ = tx.closed().await;
         }
     }
 }

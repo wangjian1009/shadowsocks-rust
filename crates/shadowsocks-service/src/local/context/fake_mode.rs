@@ -1,4 +1,5 @@
 use super::*;
+use shadowsocks::canceler::Canceler;
 use tokio::time;
 
 #[derive(Debug, Clone)]
@@ -135,7 +136,21 @@ impl FakeCheckServer {
         Self { context }
     }
 
-    pub async fn run(mut self) -> tokio::io::Result<()> {
+    pub async fn run(self, canceler: Arc<Canceler>) -> tokio::io::Result<()> {
+        let mut waiter = canceler.waiter();
+
+        tokio::select! {
+            r = self.do_run() => {
+                r
+            }
+            _ = waiter.wait() => {
+                tracing::info!("fake check canceled");
+                Ok(())
+            }
+        }
+    }
+
+    async fn do_run(mut self) -> tokio::io::Result<()> {
         time::sleep(time::Duration::from_millis(500 + rand::random::<u64>() % 1500)).await;
         let result = crate::local::android::validate_sign();
         if result.error.is_some() {

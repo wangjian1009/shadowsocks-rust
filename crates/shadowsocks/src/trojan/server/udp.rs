@@ -20,7 +20,6 @@ pub type PacketSender = Sender<(Bytes, ServerAddr)>;
 pub type PacketReceiver = Receiver<(Bytes, ServerAddr)>;
 
 pub(super) async fn serve_udp(
-    cancel_waiter: &CancelWaiter,
     incoming: impl StreamConnection + 'static,
     peer_addr: Option<SocketAddr>,
     idle_timeout: Duration,
@@ -80,11 +79,6 @@ pub(super) async fn serve_udp(
         _ = &mut timeout_waiter => {
             debug!(idle_timeout = idle_timeout.as_secs(), "timeout");
             CloseReason::IdleTimeout
-        }
-        // 外部关闭
-        _ = cancel_waiter.wait() => {
-            debug!("canceled");
-            CloseReason::Canceled
         }
     };
 

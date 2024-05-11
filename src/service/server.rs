@@ -896,7 +896,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         let app_cancel = Arc::new(Canceler::new());
 
         let abort_signal = monitor::create_signal_monitor(app_cancel.clone());
-        let server = run_server(app_cancel.waiter(), config);
+        let server = run_server(app_cancel, config);
 
         tokio::pin!(abort_signal);
         tokio::pin!(server);

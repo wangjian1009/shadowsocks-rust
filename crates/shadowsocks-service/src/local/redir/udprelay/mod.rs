@@ -13,6 +13,7 @@ use std::{
 use async_trait::async_trait;
 use lru_time_cache::LruCache;
 use shadowsocks::{
+    canceler::Canceler,
     lookup_then,
     net::ConnectOpts,
     relay::{socks5::Address, udprelay::MAXIMUM_UDP_PAYLOAD_SIZE},
@@ -261,7 +262,7 @@ impl RedirUdpServer {
         })
     }
 
-    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         let local_addr = self.listener.local_addr().expect("determine port bound to");
         info!(
             "shadowsocks UDP redirect ({}) listening on {}",
@@ -280,10 +281,11 @@ impl RedirUdpServer {
 
         let mut pkt_buf = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
 
-        let cancel_waiter = self.context.cancel_waiter();
+        let mut cancel_waiter = canceler.waiter();
         loop {
             tokio::select! {
                 _ = cancel_waiter.wait() => {
+                    info!("shadowsocks UDP redirect canceled");
                     return Ok(());
                 }
                 close_opt = close_rx.recv() => {

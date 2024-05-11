@@ -1,13 +1,14 @@
 use bytes::Bytes;
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
 use http_body_util::{BodyExt, Full};
+use tracing::Instrument;
 use std::{future, io, process::ExitCode, sync::Arc};
 
 use tokio::{fs::File, io::AsyncWriteExt, runtime::Builder, time::Duration};
 
 use shadowsocks_service::{
     local::{api, context::ServiceContext, loadbalancing::ServerIdent},
-    shadowsocks::{canceler::Canceler, config::ServerType, context::Context, ServerConfig},
+    shadowsocks::{config::ServerType, context::Context, ServerConfig},
 };
 
 use hyper::{
@@ -136,14 +137,12 @@ pub async fn main_async(matches: &ArgMatches) -> ExitCode {
         }
     };
     let svr_addr = svr_cfg.addr().clone();
-    tracing::debug!(svr =? svr_addr, request = ?request);
-
-    let canceler = Canceler::new();
+    tracing::debug!(svr =? &svr_addr, request = ?request);
 
     let context = Context::new_shared(ServerType::Local);
 
     #[allow(unused_mut)]
-    let mut service_context = ServiceContext::new(context, canceler.waiter());
+    let mut service_context = ServiceContext::new(context);
 
     #[cfg(target_os = "android")]
     if let Some(vpn_protect_path) = matches.get_one::<String>("VPN_PROTECT_PATH") {
@@ -161,18 +160,22 @@ pub async fn main_async(matches: &ArgMatches) -> ExitCode {
         }
     };
 
-    tokio::select! {
-        _r = wait_timeout(timeout) => {
-            tracing::debug!(svr =? svr_addr, "timeout");
-            write_output(output_path, Err(UrlTestError::Timeout("GlobalTimeout".to_string()))).await
-        }
-        r = api::request(request, service_context, server) => {
-            tracing::debug!(svr =? svr_addr, response = ?r);
-            let response = r.map_err(|e| UrlTestError::Api(e));
+    async move {
+        tokio::select! {
+            _r = wait_timeout(timeout) => {
+                tracing::debug!("timeout");
+                write_output(output_path, Err(UrlTestError::Timeout("GlobalTimeout".to_string()))).await
+            }
+            r = api::request(request, service_context, server) => {
+                tracing::debug!(response = ?r);
+                let response = r.map_err(|e| UrlTestError::Api(e));
 
-            write_output(output_path, response).await
+                write_output(output_path, response).await
+            }
         }
     }
+    .instrument(tracing::info_span!("url", target = svr_addr.to_string()))
+    .await
 }
 
 pub fn main(matches: &ArgMatches, #[cfg(feature = "logging")] init_log: bool) -> ExitCode {

@@ -29,7 +29,7 @@ pub async fn create_signal_monitor(canceler: Arc<Canceler>) -> io::Result<()> {
                     break;
                 } else {
                     info!("received {}, soft exiting", signal_name);
-                    expire_time = Instant::now().checked_add(Duration::from_secs(1));
+                    expire_time = Instant::now().checked_add(Duration::from_secs(30));
                     canceler.cancel();
                 }
             }

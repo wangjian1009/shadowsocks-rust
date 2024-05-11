@@ -22,7 +22,7 @@ impl MaintainServer {
         MaintainServer { servers }
     }
 
-    pub async fn run<'a, 'b>(self, cancel_waiter: CancelWaiter, addr: SocketAddr) -> io::Result<()> {
+    pub async fn run<'a, 'b>(self, mut cancel_waiter: CancelWaiter, addr: SocketAddr) -> io::Result<()> {
         let MaintainServer { servers } = self;
         let listener = TcpListener::bind_with_opts(&addr, AcceptOpts::default()).await?;
 

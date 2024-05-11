@@ -31,7 +31,7 @@ use tokio::{
 use tracing::{error, info, info_span, trace, warn, Instrument};
 
 use shadowsocks::{
-    canceler::CancelWaiter,
+    canceler::Canceler,
     config::Mode,
     context::Context,
     net::TcpListener,
@@ -74,10 +74,9 @@ impl DnsBuilder {
         remote_addr: Address,
         balancer: PingBalancer,
         context: Arc<Context>,
-        cancel_waiter: CancelWaiter,
         client_cache_size: usize,
     ) -> DnsBuilder {
-        let context = ServiceContext::new(context, cancel_waiter);
+        let context = ServiceContext::new(context);
         DnsBuilder::with_context(
             Arc::new(context),
             bind_addr,
@@ -233,7 +232,6 @@ impl DnsTcpServerBuilder {
         }
 
         Ok(DnsTcpServer {
-            context: self.context,
             listener,
             local_addr: self.local_addr,
             remote_addr: self.remote_addr,
@@ -244,7 +242,6 @@ impl DnsTcpServerBuilder {
 
 /// DNS TCP server instance
 pub struct DnsTcpServer {
-    context: Arc<ServiceContext>,
     listener: TcpListener,
     local_addr: Option<Arc<NameServerAddr>>,
     remote_addr: Arc<Address>,
@@ -258,7 +255,7 @@ impl DnsTcpServer {
     }
 
     /// Start serving
-    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         info!(
             local_dns = ?self.local_addr,
             remote_dns = ?self.remote_addr,
@@ -267,7 +264,7 @@ impl DnsTcpServer {
         );
         start_stat.notify().await?;
 
-        let cancel_waiter = self.context.cancel_waiter();
+        let mut cancel_waiter = canceler.waiter();
         loop {
             let (stream, peer_addr) = tokio::select! {
                 r = self.listener.accept() => {
@@ -424,7 +421,6 @@ impl DnsUdpServerBuilder {
         }
 
         Ok(DnsUdpServer {
-            context: self.context,
             listener: Arc::new(socket),
             local_addr: self.local_addr,
             remote_addr: self.remote_addr,
@@ -435,7 +431,6 @@ impl DnsUdpServerBuilder {
 
 /// DNS UDP server instance
 pub struct DnsUdpServer {
-    context: Arc<ServiceContext>,
     listener: Arc<UdpSocket>,
     local_addr: Option<Arc<NameServerAddr>>,
     remote_addr: Arc<Address>,
@@ -449,7 +444,7 @@ impl DnsUdpServer {
     }
 
     /// Start serving
-    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         info!(
             local_dns = ?self.local_addr,
             remote_dns = ?self.remote_addr,
@@ -458,7 +453,7 @@ impl DnsUdpServer {
         );
         start_stat.notify().await?;
 
-        let cancel_waiter = self.context.cancel_waiter();
+        let mut cancel_waiter = canceler.waiter();
         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
         loop {
             let (n, peer_addr) = tokio::select! {
@@ -549,17 +544,17 @@ impl Dns {
     }
 
     /// Run server
-    pub async fn run(self, mut start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(self, mut start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         let mut vfut = Vec::new();
 
         if let Some(tcp_server) = self.tcp_server {
-            vfut.push(tcp_server.run(start_stat.new_child("tcp")).boxed());
+            vfut.push(tcp_server.run(start_stat.new_child("tcp"), canceler.clone()).boxed());
         }
 
         if let Some(udp_server) = self.udp_server {
             // NOTE: SOCKS 5 RFC requires TCP handshake for UDP ASSOCIATE command
             // But here we can start a standalone UDP SOCKS 5 relay server, for special use cases
-            vfut.push(udp_server.run(start_stat.new_child("udp")).boxed());
+            vfut.push(udp_server.run(start_stat.new_child("udp"), canceler.clone()).boxed());
         }
 
         vfut.push(start_stat.wait().boxed());

@@ -4,7 +4,10 @@
 
 use std::{io, sync::Arc};
 
-use shadowsocks::net::{AcceptOpts, ConnectOpts};
+use shadowsocks::{
+    canceler::Canceler,
+    net::{AcceptOpts, ConnectOpts},
+};
 use tracing::trace;
 
 use crate::{
@@ -18,7 +21,7 @@ pub use self::server::{Manager, ManagerBuilder};
 pub mod server;
 
 /// Starts a manager server
-pub async fn run(config: Config) -> io::Result<()> {
+pub async fn run(config: Config, canceler: Arc<Canceler>) -> io::Result<()> {
     assert_eq!(config.config_type, ConfigType::Manager);
 
     trace!("{:?}", config);
@@ -91,8 +94,8 @@ pub async fn run(config: Config) -> io::Result<()> {
     let manager = manager_builder.build().await?;
 
     for svr_inst in config.server {
-        manager.add_server(svr_inst.config).await;
+        manager.add_server(canceler.clone(), svr_inst.config).await;
     }
 
-    manager.run().await
+    manager.run(canceler.clone()).await
 }

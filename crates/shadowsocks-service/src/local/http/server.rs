@@ -5,7 +5,7 @@
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use hyper::{server::conn::http1, service};
-use shadowsocks::{config::ServerAddr, context::Context, net::TcpListener};
+use shadowsocks::{canceler::Canceler, config::ServerAddr, context::Context, net::TcpListener};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     time,
@@ -14,7 +14,7 @@ use tracing::{error, info, trace};
 
 use crate::local::{
     context::ServiceContext, loadbalancing::PingBalancer, net::tcp::listener::create_standard_tcp_listener,
-    start_stat::StartStat, CancelWaiter,
+    start_stat::StartStat,
 };
 
 use super::{http_client::HttpClient, http_service::HttpService, tokio_rt::TokioIo};
@@ -30,13 +30,8 @@ pub struct HttpBuilder {
 
 impl HttpBuilder {
     /// Create a new HTTP Local server builder
-    pub fn new(
-        context: Arc<Context>,
-        cancel_waiter: CancelWaiter,
-        client_config: ServerAddr,
-        balancer: PingBalancer,
-    ) -> HttpBuilder {
-        let context = ServiceContext::new(context, cancel_waiter);
+    pub fn new(context: Arc<Context>, client_config: ServerAddr, balancer: PingBalancer) -> HttpBuilder {
+        let context = ServiceContext::new(context);
         HttpBuilder::with_context(Arc::new(context), client_config, balancer)
     }
 
@@ -103,7 +98,7 @@ impl Http {
     }
 
     /// Run server
-    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         // https://www.ietf.org/rfc/rfc2068.txt
         // HTTP Proxy is based on HTTP/1.1
 
@@ -115,22 +110,40 @@ impl Http {
         start_stat.notify().await?;
 
         let handler = HttpConnectionHandler::new(self.context, self.balancer);
+        let mut cancel_waiter = canceler.waiter();
 
         loop {
-            let (stream, peer_addr) = match self.listener.accept().await {
-                Ok(s) => s,
-                Err(err) => {
-                    error!("failed to accept HTTP clients, err: {}", err);
-                    time::sleep(Duration::from_secs(1)).await;
-                    continue;
+            let (stream, peer_addr) = tokio::select! {
+                r = self.listener.accept() => {
+                    match r {
+                        Ok(s) => s,
+                        Err(err) => {
+                            error!("failed to accept HTTP clients, err: {}", err);
+                            time::sleep(Duration::from_secs(1)).await;
+                            continue;
+                        }
+                    }
+                },
+                _ = cancel_waiter.wait() => {
+                    info!("HTTP server canceled");
+                    return Ok(());
                 }
             };
 
             trace!("HTTP accepted client from {}", peer_addr);
             let handler = handler.clone();
+            let canceler = canceler.clone();
             tokio::spawn(async move {
-                if let Err(err) = handler.serve_connection(stream, peer_addr).await {
-                    error!("HTTP connection {} handler failed with error: {}", peer_addr, err);
+                let mut cancel_waiter = canceler.waiter();
+                tokio::select! {
+                    r = handler.serve_connection(stream, peer_addr) => {
+                        if let Err(err) = r {
+                            error!("HTTP connection {} handler failed with error: {}", peer_addr, err);
+                        }
+                    }
+                    _ = cancel_waiter.wait() => {
+                        trace!("HTTP connection {} canceled", peer_addr);
+                    },
                 }
             });
         }

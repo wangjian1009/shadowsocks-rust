@@ -9,15 +9,10 @@ use std::{
 };
 
 use shadowsocks::{
-    config::ServerProtocol,
-    crypto::CipherKind,
-    net::AcceptOpts,
-    relay::tcprelay::{utils::copy_encrypted_bidirectional, ProxyServerStream},
-    transport::{
+    canceler::Canceler, config::ServerProtocol, crypto::CipherKind, net::AcceptOpts, relay::tcprelay::{utils::copy_encrypted_bidirectional, ProxyServerStream}, transport::{
         direct::{TcpAcceptor, TcpConnector},
         Acceptor, Connector, StreamConnection,
-    },
-    ServerAddr, ServerConfig,
+    }, ServerAddr, ServerConfig
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -208,19 +203,19 @@ impl TcpServer {
     }
 
     /// Start server's accept loop
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self, canceler: Arc<Canceler>) -> io::Result<()> {
         let connector = self.connector;
         match self.listener {
             TcpServerData::Native(listener) => {
-                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg).await
+                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg, canceler).await
             }
             #[cfg(feature = "transport-ws")]
             TcpServerData::Ws(listener) => {
-                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg).await
+                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg, canceler).await
             }
             #[cfg(feature = "transport-tls")]
             TcpServerData::Tls(listener) => {
-                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg).await
+                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg, canceler).await
             }
             #[cfg(feature = "transport-restls")]
             TcpServerData::Restls(listener) => {
@@ -228,7 +223,7 @@ impl TcpServer {
             }
             #[cfg(all(feature = "transport-ws", feature = "transport-tls"))]
             TcpServerData::Wss(listener) => {
-                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg).await
+                Self::run_with_acceptor(self.context, listener, connector, &self.svr_cfg, canceler).await
             }
             #[cfg(feature = "transport-mkcp")]
             TcpServerData::Mkcp(listener) => {
@@ -251,6 +246,7 @@ impl TcpServer {
         mut listener: impl Acceptor,
         connector: Arc<TcpConnector>,
         svr_cfg: &ServerConfig,
+        canceler: Arc<Canceler>,
     ) -> io::Result<()> {
         let server_policy = Arc::new(Box::new(ServerPolicy::new(context.clone(), svr_cfg.timeout()))
             as Box<dyn shadowsocks::policy::ServerPolicy>);
@@ -274,7 +270,7 @@ impl TcpServer {
         if let ServerProtocol::Trojan(trojan_config) = svr_cfg.protocol() {
             return shadowsocks::trojan::server::serve(
                 listener,
-                context.cancel_waiter(),
+                canceler.clone(),
                 trojan_config,
                 svr_cfg.request_recv_timeout(),
                 svr_cfg.idle_timeout(),

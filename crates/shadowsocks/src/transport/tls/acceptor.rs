@@ -108,7 +108,7 @@ impl<T: Acceptor> TlsAcceptor<T> {
         tls_stream_tx: Sender<(TokioTlsStream<T::TS>, Option<SocketAddr>)>,
         base_stream: T::TS,
         source_addr: Option<SocketAddr>,
-        cancel_waiter: CancelWaiter,
+        mut cancel_waiter: CancelWaiter,
     ) {
         tokio::select! {
             _ = cancel_waiter.wait() => {

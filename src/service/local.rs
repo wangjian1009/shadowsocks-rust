@@ -1116,7 +1116,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         let config_path = config.config_path.clone();
         let canceler = Arc::new(Canceler::new());
 
-        let instance = create_local(config, canceler.clone()).await.expect("create local");
+        let instance = create_local(config).await.expect("create local");
 
         if let Some(config_path) = config_path {
             launch_reload_server_task(
@@ -1126,8 +1126,8 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             );
         }
 
-        let abort_signal = monitor::create_signal_monitor(canceler);
-        let server = instance.run();
+        let abort_signal = monitor::create_signal_monitor(canceler.clone());
+        let server = instance.run(canceler);
 
         tokio::pin!(abort_signal);
         tokio::pin!(server);
@@ -1166,7 +1166,7 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 use shadowsocks_service::shadowsocks::canceler::CancelWaiter;
 
 #[cfg(unix)]
-fn launch_reload_server_task(config_path: PathBuf, mut balancer: Option<PingBalancer>, cancel_waiter: CancelWaiter) {
+fn launch_reload_server_task(config_path: PathBuf, mut balancer: Option<PingBalancer>, mut cancel_waiter: CancelWaiter) {
     use tokio::signal::unix::{signal, SignalKind};
     use tracing::{info_span, Instrument};
 

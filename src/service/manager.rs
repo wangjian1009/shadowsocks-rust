@@ -502,10 +502,10 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
     };
 
     let main_fut = async move {
-        let app_cancel = Arc::new(Canceler::new());
+        let canceler = Arc::new(Canceler::new());
 
-        let abort_signal = monitor::create_signal_monitor(app_cancel.clone());
-        let server = run_manager(config);
+        let abort_signal = monitor::create_signal_monitor(canceler.clone());
+        let server = run_manager(config, canceler);
 
         tokio::pin!(abort_signal);
         tokio::pin!(server);

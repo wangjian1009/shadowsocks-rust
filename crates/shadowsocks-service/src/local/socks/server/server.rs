@@ -1,6 +1,6 @@
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
-use shadowsocks::{config::Mode, net::TcpListener as ShadowTcpListener, ServerAddr};
+use shadowsocks::{canceler::Canceler, config::Mode, net::TcpListener as ShadowTcpListener, ServerAddr};
 use tokio::{net::TcpStream, time};
 use tracing::{error, info};
 
@@ -99,20 +99,21 @@ impl SocksTcpServer {
     }
 
     /// Start TCP accept loop
-    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         info!("shadowsocks socks TCP listening on {}", self.listener.local_addr()?);
         start_stat.notify().await?;
 
         // If UDP is enabled, SOCK5 UDP_ASSOCIATE command will let client to send requests to this address
         let udp_bind_addr = Arc::new(self.udp_bind_addr);
-        let cancel_waiter = self.context.cancel_waiter();
         #[cfg(feature = "local-http")]
         let http_handler = HttpConnectionHandler::new(self.context.clone(), self.balancer.clone());
+        let mut cancel_waiter = canceler.waiter();
 
         loop {
             let r = tokio::select! {
                 r = self.listener.accept() => r,
                 _ = cancel_waiter.wait() => {
+                    info!("shadowsocks socks TCP canceled");
                     return Ok(());
                 }
             };

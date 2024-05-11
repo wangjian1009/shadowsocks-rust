@@ -7,7 +7,9 @@ use std::{
     time::Duration,
 };
 
-use shadowsocks::{lookup_then, net::TcpListener as ShadowTcpListener, relay::socks5::Address, ServerAddr};
+use shadowsocks::{
+    canceler::Canceler, lookup_then, net::TcpListener as ShadowTcpListener, relay::socks5::Address, ServerAddr,
+};
 use tokio::{
     net::{TcpListener, TcpStream},
     time,
@@ -113,7 +115,7 @@ impl RedirTcpServer {
     }
 
     /// Start serving
-    pub async fn run(self, start_stat: StartStat) -> io::Result<()> {
+    pub async fn run(self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         let listener = ShadowTcpListener::from_listener(self.listener, self.context.accept_opts())?;
 
         let actual_local_addr = listener.local_addr().expect("determine port bound to");
@@ -124,11 +126,12 @@ impl RedirTcpServer {
         );
         start_stat.notify().await?;
 
-        let cancel_waiter = self.context.cancel_waiter();
+        let mut cancel_waiter = canceler.waiter();
         loop {
             let r = tokio::select! {
                 r = listener.accept() => { r },
                 _ = cancel_waiter.wait() => {
+                    info!("shadowsocks TCP redirect canceled");
                     return Ok(());
                 }
             };
