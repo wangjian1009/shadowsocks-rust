@@ -3,7 +3,7 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
-
+use tracing::Instrument;
 use pin_project::pin_project;
 
 #[derive(Debug)]
@@ -146,6 +146,6 @@ where
     F::Output: Send + 'static,
 {
     fn execute(&self, future: F) {
-        tokio::spawn(future);
+        tokio::spawn(future.in_current_span());
     }
 }

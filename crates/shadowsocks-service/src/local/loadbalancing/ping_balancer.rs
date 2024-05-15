@@ -32,7 +32,7 @@ use tokio::{
     task::JoinHandle,
     time,
 };
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn, Instrument};
 
 use crate::local::{context::ServiceContext, net::AutoProxyClientStream};
 
@@ -303,7 +303,7 @@ impl PingBalancerContext {
                     let _ = future::join_all(vfut).await;
 
                     panic!("all plugins are exited. all connections may fail, check your configuration");
-                });
+                }.in_current_span());
 
                 Some(plugin_abortable)
             }
@@ -329,7 +329,7 @@ impl PingBalancerContext {
 
         let checker_abortable = {
             let shared_context = shared_context.clone();
-            tokio::spawn(async move { shared_context.checker_task().await })
+            tokio::spawn(async move { shared_context.checker_task().await }.in_current_span())
         };
 
         Ok((

@@ -7,7 +7,7 @@ use shadowsocks::net::{AcceptOpts, TcpListener};
 
 mod data;
 mod server;
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 
 use server::Svc;
 
@@ -68,7 +68,7 @@ impl MaintainServer {
                 {
                     println!("Error serving connection: {:?}", err);
                 }
-            });
+            }.in_current_span());
         }
     }
 }

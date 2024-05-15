@@ -16,7 +16,7 @@ use hyper::{
 use lru_time_cache::LruCache;
 use shadowsocks::relay::Address;
 use tokio::sync::Mutex;
-use tracing::{error, trace};
+use tracing::{error, trace, Instrument};
 
 use crate::local::{context::ServiceContext, loadbalancing::PingBalancer, net::AutoProxyClientStream};
 
@@ -196,7 +196,7 @@ impl HttpConnection {
             if let Err(err) = connection.await {
                 error!("HTTP/1.x connection to host: {} aborted with error: {}", host, err);
             }
-        });
+        }.in_current_span());
 
         Ok(HttpConnection::Http1(send_request))
     }
@@ -227,7 +227,7 @@ impl HttpConnection {
                 if let Err(err) = connection.await {
                     error!("HTTP/2 TLS connection to host: {} aborted with error: {}", host, err);
                 }
-            });
+            }.in_current_span());
 
             Ok(HttpConnection::Http2(send_request))
         } else {
@@ -246,7 +246,7 @@ impl HttpConnection {
                 if let Err(err) = connection.await {
                     error!("HTTP/1.x TLS connection to host: {} aborted with error: {}", host, err);
                 }
-            });
+            }.in_current_span());
 
             Ok(HttpConnection::Http1(send_request))
         }

@@ -1,10 +1,7 @@
 //! Shadowsocks TCP transparent proxy
 
 use std::{
-    io,
-    net::{IpAddr, SocketAddr},
-    sync::Arc,
-    time::Duration,
+    future::IntoFuture, io, net::{IpAddr, SocketAddr}, sync::Arc, time::Duration
 };
 
 use shadowsocks::{
@@ -164,7 +161,7 @@ impl RedirTcpServer {
                 if let Err(err) = handle_redir_client(&context, balancer, socket, peer_addr, dst_addr).await {
                     debug!("TCP redirect client, error: {:?}", err);
                 }
-            });
+            }.into_future());
         }
     }
 }

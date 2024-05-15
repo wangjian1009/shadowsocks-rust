@@ -20,7 +20,7 @@ use shadowsocks::{
     ServerAddr,
 };
 use tokio::{sync::Mutex, task::JoinHandle};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn, Instrument};
 
 use crate::{
     config::RedirType,
@@ -66,7 +66,7 @@ impl UdpRedirInboundCache {
                     tokio::time::sleep(INBOUND_SOCKET_CACHE_EXPIRATION).await;
                     let _ = cache.lock().await.iter();
                 }
-            })
+            }.in_current_span())
         };
 
         UdpRedirInboundCache { cache, watcher }

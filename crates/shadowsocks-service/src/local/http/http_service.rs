@@ -11,7 +11,7 @@ use hyper::{
     HeaderMap, Method, Request, Response, StatusCode, Uri, Version,
 };
 use shadowsocks::relay::Address;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, Instrument};
 
 use crate::local::{
     context::ServiceContext,
@@ -130,7 +130,7 @@ impl HttpService {
                         error!("failed to upgrade CONNECT request, error: {}", err);
                     }
                 }
-            });
+            }.in_current_span());
 
             return Ok(Response::new(empty_body()));
         }

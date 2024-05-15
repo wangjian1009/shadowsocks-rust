@@ -10,7 +10,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     time,
 };
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, Instrument};
 
 use crate::local::{
     context::ServiceContext, loadbalancing::PingBalancer, net::tcp::listener::create_standard_tcp_listener,
@@ -145,7 +145,7 @@ impl Http {
                         trace!("HTTP connection {} canceled", peer_addr);
                     },
                 }
-            });
+            }.in_current_span());
         }
     }
 }

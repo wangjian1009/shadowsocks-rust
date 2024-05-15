@@ -2,7 +2,7 @@
 
 #[cfg(unix)]
 use std::path::PathBuf;
-use std::{collections::HashMap, io, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::IntoFuture, io, net::SocketAddr, sync::Arc, time::Duration};
 
 use shadowsocks::{
     canceler::Canceler,
@@ -312,7 +312,7 @@ impl Manager {
             }
         };
 
-        let abortable = tokio::spawn(server.run(canceler));
+        let abortable = tokio::spawn(server.run(canceler).into_future());
 
         servers.insert(
             server_port,

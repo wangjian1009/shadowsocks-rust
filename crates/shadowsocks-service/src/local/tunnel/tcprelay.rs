@@ -4,7 +4,7 @@ use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use shadowsocks::{canceler::Canceler, net::TcpListener as ShadowTcpListener, relay::socks5::Address, ServerAddr};
 use tokio::{net::TcpStream, time};
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, Instrument};
 
 use crate::local::{
     context::ServiceContext,
@@ -117,7 +117,7 @@ impl TunnelTcpServer {
                 self.balancer.clone(),
                 peer_addr,
                 forward_addr.clone(),
-            ));
+            ).in_current_span());
         }
     }
 }

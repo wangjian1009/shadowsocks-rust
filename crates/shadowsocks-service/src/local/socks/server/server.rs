@@ -2,7 +2,7 @@ use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use shadowsocks::{canceler::Canceler, config::Mode, net::TcpListener as ShadowTcpListener, ServerAddr};
 use tokio::{net::TcpStream, time};
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 
 #[cfg(feature = "local-http")]
 use crate::local::http::HttpConnectionHandler;
@@ -143,7 +143,7 @@ impl SocksTcpServer {
                 if let Err(err) = handler.handle_tcp_client().await {
                     error!("socks5 tcp client handler error: {}", err);
                 }
-            });
+            }.in_current_span());
         }
     }
 }

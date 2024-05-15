@@ -1,6 +1,7 @@
 use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
 use shadowsocks::{canceler::Canceler, net::TcpListener};
+use tracing::Instrument;
 use std::{io, net::SocketAddr, sync::Arc};
 
 use crate::local::{start_stat::StartStat, ServiceContext};
@@ -67,7 +68,7 @@ impl MaintainServer {
                 {
                     println!("Error serving connection: {:?}", err);
                 }
-            });
+            }.in_current_span());
         }
     }
 }
