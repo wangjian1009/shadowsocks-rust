@@ -8,6 +8,7 @@ use std::{
     },
     task::{self, Poll},
 };
+use tracing::Instrument;
 
 use tokio::sync::mpsc;
 
@@ -105,7 +106,7 @@ impl MkcpConnectorConnection {
                     if let Err(err) = remove_conn_tx.send(id).await {
                         tracing::error!("MkcpConnector: {}", err);
                     }
-                });
+                }.in_current_span());
             }
         };
 
@@ -114,7 +115,7 @@ impl MkcpConnectorConnection {
 
         let recv_task = {
             let connection = connection.clone();
-            tokio::spawn(async move { Self::handle_incoming(r, remove_conn_rx, connection).await })
+            tokio::spawn(async move { Self::handle_incoming(r, remove_conn_rx, connection).await }.in_current_span())
         };
 
         Self {

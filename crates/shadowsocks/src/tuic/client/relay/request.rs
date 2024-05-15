@@ -31,7 +31,7 @@ pub fn listen_requests(
 
     let listen = async move {
         while let Some(req) = req_rx.recv().await {
-            tokio::spawn(process_request(conn.clone(), req, timeout, reg.clone()));
+            tokio::spawn(process_request(conn.clone(), req, timeout, reg.clone()).in_current_span());
         }
     };
 
@@ -57,7 +57,7 @@ async fn process_request(conn: Arc<AsyncMutex<Option<Connection>>>, req: Request
                 while let Some((pkt, addr)) = pkt_send_rx.recv().await {
                     tokio::spawn(
                         conn.clone()
-                            .handle_packet_to(assoc_id, pkt, addr, conn.udp_relay_mode()),
+                            .handle_packet_to(assoc_id, pkt, addr, conn.udp_relay_mode()).in_current_span(),
                     );
                 }
 

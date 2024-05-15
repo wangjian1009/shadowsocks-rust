@@ -73,9 +73,9 @@ pub async fn init(
         tracing::info!("[relay] Started. Target server: {server_addr}");
 
         tokio::select! {
-            _ = tokio::spawn(manage_connection) => {}
-            _ = tokio::spawn(listen_requests) => {}
-            _ = tokio::spawn(listen_incoming) => {}
+            _ = tokio::spawn(manage_connection.in_current_span()) => {}
+            _ = tokio::spawn(listen_requests.in_current_span()) => {}
+            _ = tokio::spawn(listen_incoming.in_current_span()) => {}
         }
 
         std::io::Result::Ok(())

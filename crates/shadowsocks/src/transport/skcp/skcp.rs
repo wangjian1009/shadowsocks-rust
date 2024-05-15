@@ -331,7 +331,7 @@ mod test {
                     tracing::trace!("kcp1 next tick {:?}", next);
                     time::sleep_until(Instant::from_std(next)).await;
                 }
-            })
+            }.in_current_span())
         };
 
         let kcp2_task = {
@@ -343,7 +343,7 @@ mod test {
                     tracing::trace!("kcp2 next tick {:?}", next);
                     time::sleep_until(Instant::from_std(next)).await;
                 }
-            })
+            }.in_current_span())
         };
 
         const SEND_BUFFER: &[u8] = b"HELLO WORLD";
@@ -382,7 +382,7 @@ mod test {
                     }
                 }
             }
-        });
+        }.in_current_span());
 
         {
             let mut buf = [0u8; 1024];

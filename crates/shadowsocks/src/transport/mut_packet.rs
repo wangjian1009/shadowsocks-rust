@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use tracing::Instrument;
 use std::{io, sync::Arc};
 use tokio::{sync::mpsc, task::JoinHandle};
 
@@ -38,7 +39,7 @@ impl MutPacketWriter {
                 }
                 tokio::task::yield_now().await;
             }
-        });
+        }.in_current_span());
 
         Self {
             sender: tx,
@@ -66,7 +67,7 @@ impl MutPacketWriter {
                 }
                 tokio::task::yield_now().await;
             }
-        });
+        }.in_current_span());
 
         Self {
             sender: tx,

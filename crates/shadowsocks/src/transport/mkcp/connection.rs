@@ -2,6 +2,7 @@ use arc_swap::ArcSwap;
 use bytes::Bytes;
 use futures::{ready, FutureExt};
 use spin::Mutex as SpinMutex;
+use tracing::Instrument;
 use std::{
     fmt::{self, Display},
     io,
@@ -655,7 +656,7 @@ impl MkcpConnection {
                     ping_update_interval,
                 )
                 .await
-            })
+            }.in_current_span())
         };
 
         let conn = MkcpConnection {

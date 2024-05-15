@@ -30,7 +30,7 @@ async fn test() {
             w.write_all_buf(&mut Cursor::new(SENDING_DATA))
                 .await
                 .unwrap_or_else(|err| panic!("客户端发送数据失败 {}", err));
-        });
+        }.in_current_span());
 
         let mut recv_buf = [0u8; SENDING_DATA.len()];
 

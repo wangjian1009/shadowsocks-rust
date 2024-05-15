@@ -15,11 +15,7 @@ use bytes::Bytes;
 use futures::future;
 use lru_time_cache::LruCache;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
-use tokio::{
-    sync::mpsc,
-    task::JoinHandle,
-    time,
-};
+use tokio::{sync::mpsc, task::JoinHandle, time};
 use tracing::{debug, error, info_span, trace, warn, Instrument, Span};
 
 use shadowsocks::{
@@ -365,14 +361,8 @@ where
             span: span.clone(),
         };
 
-        tokio::spawn(
-            async move {
-                assoc.dispatch_packet(receiver).await;
-                tracing::error!("xxxxx dispatch_packet end")
-            }
-            .instrument(span),
-        );
-    
+        tokio::spawn(assoc.dispatch_packet(receiver).instrument(span));
+
         sender
     }
 

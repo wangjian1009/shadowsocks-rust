@@ -188,10 +188,10 @@ impl Connection {
         };
 
         // send auth
-        tokio::spawn(Self::send_authentication(conn.clone(), config.token_digest));
+        tokio::spawn(Self::send_authentication(conn.clone(), config.token_digest).in_current_span());
 
         // heartbeat
-        tokio::spawn(Self::heartbeat(conn.clone(), config.heartbeat_interval));
+        tokio::spawn(Self::heartbeat(conn.clone(), config.heartbeat_interval).in_current_span());
 
         conn
     }

@@ -149,6 +149,7 @@ async fn hickory_dns_notify_update_dns(resolver: Arc<HickoryDnsSystemResolver>) 
 
     use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Result as NotifyResult, Watcher};
     use tokio::{sync::watch, time};
+    use tracing::Instrument;
 
     use super::hickory_dns_resolver::create_resolver;
 
@@ -206,7 +207,7 @@ async fn hickory_dns_notify_update_dns(resolver: Arc<HickoryDnsSystemResolver>) 
                         tracing::error!("failed to reload {DNS_RESOLV_FILE_PATH}, error: {err}");
                     }
                 }
-            })
+            }.in_current_span())
         };
 
         update_task = Some(task);
@@ -243,13 +244,15 @@ impl DnsResolver {
 
         cfg_if! {
             if #[cfg(all(feature = "hickory-dns", unix, not(target_os = "android")))] {
+                use tracing::Instrument;
+
                 let abortable = {
                     let inner = inner.clone();
                     tokio::spawn(async {
                         if let Err(err) = hickory_dns_notify_update_dns(inner).await {
                             tracing::error!("failed to watch DNS system configuration changes, error: {}", err);
                         }
-                    })
+                    }.in_current_span())
                 };
 
                 Ok(DnsResolver::HickoryDnsSystem { inner, abortable })

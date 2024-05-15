@@ -738,7 +738,7 @@ mod tests {
                     let response = p.get_request();
                     assert_eq!(response, encode(pub_key.as_bytes()));
                 }
-            }));
+            }.in_current_span()));
         }
 
         for t in threads {

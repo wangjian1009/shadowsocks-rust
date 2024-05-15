@@ -138,7 +138,7 @@ impl KcpSession {
                         }
                     }
                 }
-            })
+            }.in_current_span())
         };
 
         // Per-session updater
@@ -214,7 +214,7 @@ impl KcpSession {
                 io_task_handle.abort();
 
                 trace!("[SESSION] KCP session closed");
-            });
+            }.in_current_span());
         }
 
         session

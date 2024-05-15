@@ -159,7 +159,7 @@ impl KcpListener {
                     }
                 }
             }
-        });
+        }.in_current_span());
 
         Ok(KcpListener {
             udp: server_udp,
@@ -237,9 +237,9 @@ mod test {
                         stream.write_all(data).await.unwrap();
                         stream.flush().await.unwrap();
                     }
-                });
+                }.in_current_span());
             }
-        });
+        }.in_current_span());
 
         let mut vfut = Vec::new();
 

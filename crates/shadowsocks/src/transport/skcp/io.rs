@@ -36,7 +36,7 @@ impl UdpOutput {
                         tracing::error!("[SEND] UDP delayed send failed, error: {}", err);
                     }
                 }
-            });
+            }.in_current_span());
         }
 
         UdpOutput {

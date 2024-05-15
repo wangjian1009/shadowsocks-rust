@@ -99,7 +99,7 @@ impl Dispatcher {
                     tracing::info!("tuic: server {}: serve closed by notify", addr);
                 }
             }
-        });
+        }.in_current_span());
         Ok(Runing { task, req_tx })
     }
 

@@ -16,6 +16,7 @@ use tokio::{
 };
 
 use crate::{net::UdpSocket, ServerAddr};
+use tracing::Instrument;
 
 #[cfg(feature = "rate-limit")]
 use crate::transport::RateLimiter;
@@ -87,7 +88,7 @@ impl MkcpAcceptor {
                         tracing::error!("MkcpAcceptor: {}: handler incoming error: {}", context.local_addr, err);
                     }
                 }
-            })
+            }.in_current_span())
         };
 
         MkcpAcceptor {
@@ -169,7 +170,7 @@ impl MkcpAcceptor {
                                     if let Err(err) = remove_conn_tx.send(id).await {
                                         tracing::error!("MkcpAcceptor: {}", err);
                                     }
-                                });
+                                }.in_current_span());
                             }
                         };
 

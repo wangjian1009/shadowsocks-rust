@@ -79,6 +79,12 @@ pub struct ProxySocket {
     user_manager: Option<Arc<ServerUserManager>>,
 }
 
+impl Drop for ProxySocket {
+    fn drop(&mut self) {
+        trace!("proxy UDP socket dropped {:?}", self.socket.local_addr());
+    }
+}
+
 impl ProxySocket {
     /// Create a client to communicate with Shadowsocks' UDP server (outbound)
     pub async fn connect(
@@ -108,7 +114,7 @@ impl ProxySocket {
             svr_cfg.udp_external_addr(),
             opts
         );
-
+        
         Ok(ProxySocket::from_socket(
             UdpSocketType::Client,
             context,

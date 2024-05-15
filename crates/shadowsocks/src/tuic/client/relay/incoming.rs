@@ -44,7 +44,7 @@ pub async fn listen_incoming(mut next_incoming_rx: UdpRelayMode<Receiver<Datagra
                 };
 
                 // process datagram
-                tokio::spawn(conn.clone().process_incoming_datagram(pkt));
+                tokio::spawn(conn.clone().process_incoming_datagram(pkt).in_current_span());
             },
             UdpRelayMode::Quic(mut uni) => loop {
                 let recv = match uni.next().await {
@@ -54,7 +54,7 @@ pub async fn listen_incoming(mut next_incoming_rx: UdpRelayMode<Receiver<Datagra
                 };
 
                 // process uni stream
-                tokio::spawn(conn.clone().process_incoming_uni_stream(recv));
+                tokio::spawn(conn.clone().process_incoming_uni_stream(recv).in_current_span());
             },
         };
 
