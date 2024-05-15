@@ -495,7 +495,7 @@ impl TcpTun {
 
     pub async fn handle_packet(
         &mut self,
-        canceler: &Canceler,
+        canceler: &Arc<Canceler>,
         src_addr: SocketAddr,
         dst_addr: SocketAddr,
         tcp_packet: &TcpPacket<&[u8]>,
@@ -534,18 +534,13 @@ impl TcpTun {
             // establish a tunnel
             let context = self.context.clone();
             let balancer = self.balancer.clone();
-            let mut cancel_waiter = canceler.waiter();
+            let canceler = canceler.clone();
             tokio::spawn(
                 async move {
-                    tokio::select! {
-                        r = handle_redir_client(context, balancer, connection, src_addr, dst_addr) => {
-                            if let Err(err) = r {
-                                error!("TCP tunnel failure, {} <-> {}, error: {}", src_addr, dst_addr, err);
-                            }
-                        }
-                        _ = cancel_waiter.wait() => {
-                            debug!("TCP tunnel canceled, {} <-> {}", src_addr, dst_addr);
-                        }
+                    if let Err(err) =
+                        handle_redir_client(context, canceler, balancer, connection, src_addr, dst_addr).await
+                    {
+                        error!("TCP tunnel failure, {} <-> {}, error: {}", src_addr, dst_addr, err);
                     }
                 }
                 .in_current_span(),
@@ -578,6 +573,7 @@ impl TcpTun {
 /// This method must be called after handshaking with client (for example, socks5 handshaking)
 async fn establish_client_tcp_redir<'a>(
     context: Arc<ServiceContext>,
+    canceler: Arc<Canceler>,
     balancer: PingBalancer,
     mut stream: TcpConnection,
     peer_addr: SocketAddr,
@@ -590,15 +586,23 @@ async fn establish_client_tcp_redir<'a>(
 
     let server = balancer.best_tcp_server();
     let svr_cfg = server.server_config();
+    let mut waiter = canceler.waiter();
 
     let mut remote = AutoProxyClientStream::connect(&context, server.as_ref(), addr).await?;
     tracing::info!("connect successed");
 
-    establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
+    tokio::select! {
+        r = establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).instrument(info_span!("tcp", target = ?addr)) => r,
+        _ = waiter.wait() => {
+            tracing::info!("connection cancelled");
+            Ok(())
+        }
+    }
 }
 
 async fn handle_redir_client(
     context: Arc<ServiceContext>,
+    canceler: Arc<Canceler>,
     balancer: PingBalancer,
     s: TcpConnection,
     peer_addr: SocketAddr,
@@ -613,7 +617,7 @@ async fn handle_redir_client(
         }
     }
     let target_addr = Address::from(daddr);
-    establish_client_tcp_redir(context, balancer, s, peer_addr, &target_addr)
+    establish_client_tcp_redir(context, canceler, balancer, s, peer_addr, &target_addr)
         .instrument(info_span!("tcp", target = ?target_addr))
         .await
 }

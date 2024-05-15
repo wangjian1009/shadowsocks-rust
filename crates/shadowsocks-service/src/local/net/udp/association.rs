@@ -15,7 +15,11 @@ use bytes::Bytes;
 use futures::future;
 use lru_time_cache::LruCache;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
-use tokio::{sync::mpsc, task::JoinHandle, time};
+use tokio::{
+    sync::mpsc,
+    task::JoinHandle,
+    time,
+};
 use tracing::{debug, error, info_span, trace, warn, Instrument, Span};
 
 use shadowsocks::{
@@ -224,19 +228,9 @@ struct UdpAssociation<W>
 where
     W: UdpInboundWrite + Send + Sync + Unpin + 'static,
 {
-    assoc_handle: JoinHandle<()>,
     sender: mpsc::Sender<(Address, Bytes, Span)>,
     writer: PhantomData<W>,
     span: Span,
-}
-
-impl<W> Drop for UdpAssociation<W>
-where
-    W: UdpInboundWrite + Send + Sync + Unpin + 'static,
-{
-    fn drop(&mut self) {
-        self.assoc_handle.abort();
-    }
 }
 
 impl<W> UdpAssociation<W>
@@ -252,7 +246,7 @@ where
         server_session_expire_duration: Duration,
     ) -> UdpAssociation<W> {
         let span = info_span!("udp-session", peer.addr = peer_addr.to_string());
-        let (assoc_handle, sender) = UdpAssociationContext::create(
+        let sender = UdpAssociationContext::create(
             context,
             peer_addr,
             close_tx,
@@ -262,7 +256,6 @@ where
             span.clone(),
         );
         UdpAssociation {
-            assoc_handle,
             sender,
             writer: PhantomData,
             span,
@@ -323,7 +316,7 @@ where
 {
     fn drop(&mut self) {
         let _enter = self.span.enter();
-        trace!("udp association destoried");
+        error!("udp association context destoried");
     }
 }
 
@@ -348,7 +341,7 @@ where
         respond_writer: W,
         server_session_expire_duration: Duration,
         span: Span,
-    ) -> (JoinHandle<()>, mpsc::Sender<(Address, Bytes, Span)>) {
+    ) -> mpsc::Sender<(Address, Bytes, Span)> {
         // Pending packets UDP_ASSOCIATION_SEND_CHANNEL_SIZE for each association should be good enough for a server.
         // If there are plenty of packets stuck in the channel, dropping excessive packets is a good way to protect the server from
         // being OOM.
@@ -371,9 +364,16 @@ where
             server_session_expire_duration,
             span: span.clone(),
         };
-        let handle = tokio::spawn(assoc.dispatch_packet(receiver).instrument(span));
 
-        (handle, sender)
+        tokio::spawn(
+            async move {
+                assoc.dispatch_packet(receiver).await;
+                tracing::error!("xxxxx dispatch_packet end")
+            }
+            .instrument(span),
+        );
+    
+        sender
     }
 
     #[cfg(not(feature = "rate-limit"))]
@@ -478,12 +478,12 @@ where
                         Some(d) => d,
                         None => {
                             debug!("receive channel closed");
-                            break UdpAssociationCloseReason::InternalError;
+                            break None;
                         }
                     };
 
                     if let Err(close_reason) = self.dispatch_received_packet(&target_addr, &data, &mut check_rate_limit_size).instrument(span).await {
-                        break close_reason;
+                        break Some(close_reason);
                     }
                 }
 
@@ -501,7 +501,7 @@ where
                     let span = info_span!("udp.remote", target = addr.to_string(), source = "bypass");
                     let addr = Address::from(addr);
                     if let Err(close_reason) = self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true, &mut check_rate_limit_size).instrument(span).await {
-                        break close_reason;
+                        break Some(close_reason);
                     }
                 }
 
@@ -519,7 +519,7 @@ where
                     let span = info_span!("udp.remote", target = addr.to_string(), source = "bypass");
                     let addr = Address::from(addr);
                     if let Err(close_reason) = self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut check_rate_limit_size).instrument(span).await {
-                        break close_reason;
+                        break Some(close_reason);
                     }
                 }
 
@@ -569,29 +569,31 @@ where
 
                     idle_timeout.tick();
                     if let Err(close_reason) = self.send_received_respond_packet(&addr, &proxied_buffer[..n], false, &mut check_rate_limit_size).instrument(span.clone()).await {
-                        break close_reason;
+                        break Some(close_reason);
                     }
                 }
 
                 _ = close_notify.notified() => {
                     trace!("fake closed");
-                    break UdpAssociationCloseReason::FakeClose;
+                    break Some(UdpAssociationCloseReason::FakeClose);
                 }
 
                 _ = &mut idle_timeout => {
                     trace!("idle timeout");
-                    break UdpAssociationCloseReason::IdleTimeout;
+                    break Some(UdpAssociationCloseReason::IdleTimeout);
                 }
             }
         };
 
-        match self.close_tx.send((self.peer_addr, close_reason)).await {
-            Ok(()) => {
-                // 发送关闭消息以后，等待被删除，但是为了防止泄漏，此处用 sleep(1) 等待
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-            Err(err) => {
-                error!(error = ?err, "send close reason fail");
+        if let Some(close_reason) = close_reason {
+            match self.close_tx.send((self.peer_addr, close_reason)).await {
+                Ok(()) => {
+                    // 发送关闭消息以后，等待被删除，但是为了防止泄漏，此处用 sleep(1) 等待
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Err(err) => {
+                    error!(error = ?err, "send close reason fail");
+                }
             }
         }
     }

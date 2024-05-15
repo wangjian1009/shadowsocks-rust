@@ -11,7 +11,7 @@ use std::{
 
 use byte_string::ByteStr;
 use ipnet::{IpNet, Ipv4Net};
-use shadowsocks::{config::Mode, canceler::Canceler};
+use shadowsocks::{canceler::Canceler, config::Mode};
 use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
 use tokio::io::AsyncReadExt;
 use tracing::{debug, error, info, trace, warn};
@@ -143,6 +143,12 @@ pub struct Tun {
     mode: Mode,
 }
 
+impl Drop for Tun {
+    fn drop(&mut self) {
+        debug!("tun device dropped");
+    }
+}
+
 impl Tun {
     /// Start serving
     pub async fn run(mut self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
@@ -242,7 +248,7 @@ impl Tun {
                     let packet = &mut packet_buffer[IFF_PI_PREFIX_LEN..n];
                     trace!("[TUN] received IP packet {:?}", ByteStr::new(packet));
 
-                    if let Err(err) = self.handle_tun_frame(canceler.as_ref(), &address_broadcast, packet).await {
+                    if let Err(err) = self.handle_tun_frame(&canceler, &address_broadcast, packet).await {
                         error!("[TUN] handle IP frame failed, error: {}", err);
                     }
                 }
@@ -281,7 +287,12 @@ impl Tun {
         }
     }
 
-    async fn handle_tun_frame(&mut self, canceler: &Canceler,  device_broadcast_addr: &Ipv4Addr, frame: &[u8]) -> smoltcp::wire::Result<()> {
+    async fn handle_tun_frame(
+        &mut self,
+        canceler: &Arc<Canceler>,
+        device_broadcast_addr: &Ipv4Addr,
+        frame: &[u8],
+    ) -> smoltcp::wire::Result<()> {
         let packet = match IpPacket::new_checked(frame)? {
             Some(packet) => packet,
             None => {
