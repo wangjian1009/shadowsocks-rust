@@ -303,17 +303,6 @@ where
     client_packet_id: u64,
     server_session: Option<ServerSessionContext>,
     server_session_expire_duration: Duration,
-    span: Span,
-}
-
-impl<W> Drop for UdpAssociationContext<W>
-where
-    W: UdpInboundWrite + Send + Sync + Unpin + 'static,
-{
-    fn drop(&mut self) {
-        let _enter = self.span.enter();
-        error!("udp association context destoried");
-    }
 }
 
 thread_local! {
@@ -358,10 +347,14 @@ where
             client_packet_id: 0,
             server_session: None,
             server_session_expire_duration,
-            span: span.clone(),
         };
 
-        tokio::spawn(assoc.dispatch_packet(receiver).instrument(span));
+        tokio::spawn(
+            async move {
+                assoc.dispatch_packet(receiver).await;
+            }
+            .instrument(span),
+        );
 
         sender
     }
@@ -576,14 +569,8 @@ where
         };
 
         if let Some(close_reason) = close_reason {
-            match self.close_tx.send((self.peer_addr, close_reason)).await {
-                Ok(()) => {
-                    // 发送关闭消息以后，等待被删除，但是为了防止泄漏，此处用 sleep(1) 等待
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-                Err(err) => {
-                    error!(error = ?err, "send close reason fail");
-                }
+            if let Err(err) = self.close_tx.send((self.peer_addr, close_reason)).await {
+                error!(error = ?err, "send close reason fail");
             }
         }
     }

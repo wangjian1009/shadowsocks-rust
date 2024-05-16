@@ -140,7 +140,7 @@ fn rebuild_vless_wss() {
 
     let url = config.to_url();
 
-    tracing::error!("xxxx: url={}", url);
+    // tracing::error!("xxxx: url={}", url);
     let config_rebuild = url.parse::<ServerConfig>().unwrap();
 
     assert_eq!(config, config_rebuild);

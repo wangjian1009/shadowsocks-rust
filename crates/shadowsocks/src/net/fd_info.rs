@@ -6,7 +6,7 @@ pub async fn dump_fd_info(prefix: Option<&str>) {
         Some(prefix) => format!("{}: ", prefix),
         None => "".into(),
     };
-    
+
     match load_fd_info().await {
         Ok(fd_info) => {
             for info in fd_info {
@@ -147,7 +147,7 @@ pub async fn load_fd_info() -> Result<Vec<FdInfo>, String> {
                 Ok(Some((addr, addr_len))) => {
                     sock_info.push_str(" -- ");
                     sock_info.push_str(&sockaddr_storage_to_socket_addr(&addr, addr_len));
-                },
+                }
                 Ok(None) => {
                     continue;
                 }
@@ -268,19 +268,14 @@ fn sockaddr_storage_to_socket_addr(storage: &libc::sockaddr_storage, addr_len: l
         format!("{}:{}", addr, port)
     } else if storage.ss_family == libc::AF_UNIX as libc::sa_family_t {
         let s = unsafe { &*(storage as *const libc::sockaddr_storage as *const libc::sockaddr_un) };
-        assert!(addr_len >= 1, "addr_len must be at least 1");
+        assert!(addr_len >= 2, "addr_len must be at least 2");
 
-        if addr_len as usize >= s.sun_path.len() {
+        let path_len = addr_len as usize - 2;
+        if path_len > s.sun_path.len() {
             return "addr len overflow".to_string();
         }
 
-        match String::from_utf8(
-            s.sun_path[1..((addr_len - 1) as usize)]
-                .iter()
-                .cloned()
-                .map(|c| c as u8)
-                .collect(),
-        ) {
+        match String::from_utf8(s.sun_path[..path_len].iter().cloned().map(|c| c as u8).collect()) {
             Ok(path) => path,
             Err(_) => "invalid-utf8".to_string(),
         }
