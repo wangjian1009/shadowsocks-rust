@@ -19,6 +19,13 @@ pub mod tcp;
 pub mod udp;
 pub mod util;
 
+cfg_if::cfg_if! {
+    if #[cfg(unix)] {
+        mod fd_info;
+        pub use fd_info::{FdInfo, load_fd_info, dump_fd_info};
+    }
+}
+
 mod addr_category;
 pub use addr_category::AddrCategory;
 
