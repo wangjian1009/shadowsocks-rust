@@ -103,7 +103,9 @@ impl<'a> phy::TxToken for VirtTxToken<'a> {
     {
         let mut buffer = vec![0u8; len];
         let result = f(&mut buffer);
-        self.0.out_buf.send(buffer).expect("channel closed unexpectly");
+        if let Err(err) = self.0.out_buf.send(buffer) {
+            tracing::error!(err=?err, "channel closed unexpectly");
+        }
         result
     }
 }

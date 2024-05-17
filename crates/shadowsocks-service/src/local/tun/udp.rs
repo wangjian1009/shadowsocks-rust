@@ -139,7 +139,13 @@ impl UdpInboundWrite for UdpTunInboundWriter {
 
                 let packet = BytesMut::with_capacity(builder.size(data.len()));
                 let mut packet_writer = packet.writer();
-                builder.write(&mut packet_writer, data).expect("PacketBuilder::write");
+
+                if let Err(err) = builder.write(&mut packet_writer, data) {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("PacketBuilder::write failed: {:?}", err),
+                    ));
+                }
 
                 packet_writer.into_inner()
             }
@@ -149,7 +155,13 @@ impl UdpInboundWrite for UdpTunInboundWriter {
 
                 let packet = BytesMut::with_capacity(builder.size(data.len()));
                 let mut packet_writer = packet.writer();
-                builder.write(&mut packet_writer, data).expect("PacketBuilder::write");
+
+                if let Err(err) = builder.write(&mut packet_writer, data) {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("PacketBuilder::write failed: {:?}", err),
+                    ));
+                }
 
                 packet_writer.into_inner()
             }
@@ -161,7 +173,11 @@ impl UdpInboundWrite for UdpTunInboundWriter {
             }
         };
 
-        self.tun_tx.send(packet).await.expect("tun_tx::send");
+        self.tun_tx
+            .send(packet)
+            .await
+            .map_err(|e| io::Error::new(ErrorKind::Other, format!("failed to send packet to tun: {}", e)))?;
+
         Ok(())
     }
 }
