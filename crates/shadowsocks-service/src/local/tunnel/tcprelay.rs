@@ -149,13 +149,13 @@ async fn handle_tcp_client(
     );
 
     #[cfg(feature = "rate-limit")]
-    let mut stream = shadowsocks::transport::RateLimitedStream::from_stream(stream, Some(context.rate_limiter()));
+    let stream = shadowsocks::transport::RateLimitedStream::from_stream(stream, Some(context.rate_limiter()));
 
     let mut remote = AutoProxyClientStream::connect_proxied(&context, &server, &forward_addr).await?;
     establish_tcp_tunnel(
         context.as_ref(),
         svr_cfg,
-        &mut stream,
+        stream,
         &mut remote,
         peer_addr,
         &forward_addr,

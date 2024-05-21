@@ -10,7 +10,7 @@ use hyper::{
     http::uri::{Authority, Scheme},
     HeaderMap, Method, Request, Response, StatusCode, Uri, Version,
 };
-use shadowsocks::relay::Address;
+use shadowsocks::{relay::Address, transport::AsyncPing};
 use tracing::{debug, error, trace, Instrument};
 
 use crate::local::{
@@ -32,6 +32,8 @@ pub struct HttpService {
     http_client: HttpClient,
     balancer: PingBalancer,
 }
+
+impl<T> AsyncPing for TokioIo<T> {}
 
 impl HttpService {
     pub fn new(
@@ -101,36 +103,45 @@ impl HttpService {
 
             let client_addr = self.peer_addr;
             let context = self.context.clone();
-            tokio::spawn(async move {
-                match hyper::upgrade::on(req).await {
-                    Ok(upgraded) => {
-                        trace!("CONNECT tunnel upgrade success, {} <-> {}", client_addr, host);
+            tokio::spawn(
+                async move {
+                    match hyper::upgrade::on(req).await {
+                        Ok(upgraded) => {
+                            trace!("CONNECT tunnel upgrade success, {} <-> {}", client_addr, host);
 
-                        let mut upgraded_io = TokioIo::new(upgraded);
+                            let mut upgraded_io = TokioIo::new(upgraded);
 
-                        let _ = match server_opt {
-                            Some(server) => {
-                                establish_tcp_tunnel(
-                                    context.as_ref(),
-                                    server.server_config(),
-                                    &mut upgraded_io,
-                                    &mut stream,
-                                    client_addr,
-                                    &host,
-                                )
-                                .await
-                            }
-                            None => {
-                                establish_tcp_tunnel_bypassed(&mut upgraded_io, &mut stream, client_addr, &host, None)
+                            let _ = match server_opt {
+                                Some(server) => {
+                                    establish_tcp_tunnel(
+                                        context.as_ref(),
+                                        server.server_config(),
+                                        upgraded_io,
+                                        &mut stream,
+                                        client_addr,
+                                        &host,
+                                    )
                                     .await
-                            }
-                        };
-                    }
-                    Err(err) => {
-                        error!("failed to upgrade CONNECT request, error: {}", err);
+                                }
+                                None => {
+                                    establish_tcp_tunnel_bypassed(
+                                        &mut upgraded_io,
+                                        &mut stream,
+                                        client_addr,
+                                        &host,
+                                        None,
+                                    )
+                                    .await
+                                }
+                            };
+                        }
+                        Err(err) => {
+                            error!("failed to upgrade CONNECT request, error: {}", err);
+                        }
                     }
                 }
-            }.in_current_span());
+                .in_current_span(),
+            );
 
             return Ok(Response::new(empty_body()));
         }

@@ -28,7 +28,7 @@ use crate::{
         socks5,
         tcprelay::crypto_io::{CryptoRead, CryptoStream, CryptoWrite, StreamType},
     },
-    transport::{Connector, DeviceOrGuard, StreamConnection},
+    transport::{AsyncPing, Connector, DeviceOrGuard, StreamConnection},
     ServerAddr,
 };
 
@@ -70,6 +70,8 @@ impl<S: StreamConnection> StreamConnection for ProxyClientStream<S> {
         self.stream.get_ref().physical_device()
     }
 }
+
+impl<S: StreamConnection> AsyncPing for ProxyClientStream<S> {}
 
 impl<S: StreamConnection> ProxyClientStream<S> {
     /// Connect to target `addr` via shadowsocks' server configured by `svr_cfg`

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use cfg_if::cfg_if;
-use std::{io, net::SocketAddr};
+use std::{io, net::SocketAddr, pin::Pin, task};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{net::ConnectOpts, ServerAddr};
@@ -51,8 +51,21 @@ pub mod skcp;
 #[cfg(feature = "transport-restls")]
 pub mod restls;
 
+pub trait AsyncPing {
+    fn supports_ping(&self) -> bool {
+        false
+    }
+
+    // Write a ping message to the stream, if supported.
+    // This should end up calling the highest level stream abstraction that supports
+    // pings, and should only result in a single message.
+    fn poll_write_ping(self: Pin<&mut Self>, _cx: &mut task::Context<'_>) -> task::Poll<io::Result<bool>> {
+        unimplemented!("ping not supported")
+    }
+}
+
 /// Stream traits
-pub trait StreamConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {
+pub trait StreamConnection: AsyncRead + AsyncWrite + AsyncPing + Send + Sync + Unpin {
     fn check_connected(&self) -> bool;
 
     #[cfg(feature = "rate-limit")]
@@ -102,6 +115,16 @@ pub trait Acceptor: Send + Sync + 'static {
     async fn accept(&mut self) -> io::Result<(Self::TS, Option<SocketAddr>)>;
 
     fn local_addr(&self) -> io::Result<SocketAddr>;
+}
+
+impl AsyncPing for Box<dyn StreamConnection> {
+    fn supports_ping(&self) -> bool {
+        self.as_ref().supports_ping()
+    }
+
+    fn poll_write_ping(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<io::Result<bool>> {
+        Pin::new(&mut **self).poll_write_ping(cx)
+    }
 }
 
 impl StreamConnection for Box<dyn StreamConnection> {

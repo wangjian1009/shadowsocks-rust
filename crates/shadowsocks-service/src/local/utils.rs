@@ -6,8 +6,9 @@ use shadowsocks::{
     config::{ServerConfig, ServerProtocol},
     relay::{
         socks5::Address,
-        tcprelay::{utils::copy_encrypted_bidirectional, utils_copy::copy_bidirectional},
+        tcprelay::{utils::copy_encrypted_bidirectional, copy_bidirectional},
     },
+    transport::AsyncPing
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -35,8 +36,8 @@ pub(crate) async fn establish_tcp_tunnel<P, S>(
     target_addr: &Address,
 ) -> io::Result<()>
 where
-    P: AsyncRead + AsyncWrite + Unpin,
-    S: AsyncRead + AsyncWrite + AutoProxyIo + Unpin,
+    P: AsyncRead + AsyncWrite + AsyncPing + Unpin,
+    S: AsyncRead + AsyncWrite + AsyncPing + AutoProxyIo + Unpin,
 {
     if shadow.is_proxied() {
         debug!(
@@ -112,13 +113,13 @@ where
     let r = match svr_cfg.protocol() {
         ServerProtocol::SS(ss_cfg) => copy_encrypted_bidirectional(ss_cfg.method(), shadow, &mut plain, None).await,
         #[cfg(feature = "trojan")]
-        ServerProtocol::Trojan(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
+        ServerProtocol::Trojan(_cfg) => copy_bidirectional(shadow, &mut plain, None, false, false).await,
         #[cfg(feature = "vless")]
-        ServerProtocol::Vless(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
+        ServerProtocol::Vless(_cfg) => copy_bidirectional(shadow, &mut plain, None, false, false).await,
         #[cfg(feature = "tuic")]
-        ServerProtocol::Tuic(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
+        ServerProtocol::Tuic(_cfg) => copy_bidirectional(shadow, &mut plain, None, false, false).await,
         #[cfg(feature = "wireguard")]
-        ServerProtocol::WG(_cfg) => copy_bidirectional(shadow, &mut plain, None).await,
+        ServerProtocol::WG(_cfg) => { unimplemented!() },
     };
     match r {
         Ok((wn, rn)) => {
@@ -151,12 +152,12 @@ pub(crate) async fn establish_tcp_tunnel_bypassed<P, S>(
     idle_timeout: Option<Duration>,
 ) -> io::Result<()>
 where
-    P: AsyncRead + AsyncWrite + Unpin,
-    S: AsyncRead + AsyncWrite + Unpin,
+    P: AsyncRead + AsyncWrite + AsyncPing + Unpin,
+    S: AsyncRead + AsyncWrite + AsyncPing + Unpin,
 {
     debug!("established tcp tunnel {} <-> {} bypassed", peer_addr, target_addr);
 
-    let r = copy_bidirectional(plain, shadow, idle_timeout).await;
+    let r = copy_bidirectional(plain, shadow, idle_timeout, false, false).await;
     match r {
         Ok((rn, wn)) => {
             trace!(

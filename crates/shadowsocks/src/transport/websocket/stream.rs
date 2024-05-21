@@ -8,6 +8,7 @@ use tokio::io::{self, AsyncRead, AsyncWrite, ReadBuf};
 use super::super::{StreamConnection, RateLimiter, Device, DeviceOrGuard};
 use super::config::WebsocketPingType;
 
+use crate::transport::AsyncPing;
 use crate::util::allocate_vec;
 
 pub struct WebsocketStream<S> {
@@ -459,6 +460,7 @@ impl<S: StreamConnection> WebsocketStream<S> {
         );
         self.write_frame_end_offset += written;
 
+        tracing::trace!("write ping frame");
         true
     }
 
@@ -496,6 +498,7 @@ impl<S: StreamConnection> WebsocketStream<S> {
         );
         self.write_frame_end_offset += written;
 
+        tracing::trace!("write pong frame");
         true
     }
 
@@ -732,12 +735,12 @@ impl<S: StreamConnection> AsyncWrite for WebsocketStream<S> {
     }
 }
 
-impl<S:StreamConnection> WebsocketStream<S> {
-    pub fn supports_ping(&self) -> bool {
+impl<S:StreamConnection> AsyncPing for WebsocketStream<S> {
+    fn supports_ping(&self) -> bool {
         self.ping_type != WebsocketPingType::Disabled
     }
 
-    pub fn poll_write_ping(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<bool>> {
+    fn poll_write_ping(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<bool>> {
         let this = self.get_mut();
 
         if this.pending_write_pong {

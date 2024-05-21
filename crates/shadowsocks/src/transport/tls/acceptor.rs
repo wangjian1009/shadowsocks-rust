@@ -9,7 +9,7 @@ use crate::{
     ssl,
 };
 
-use super::super::{Acceptor, DeviceOrGuard, StreamConnection};
+use super::super::{Acceptor, AsyncPing, DeviceOrGuard, StreamConnection};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TlsAcceptorConfig {
@@ -40,6 +40,8 @@ impl<S: StreamConnection> StreamConnection for TokioTlsStream<S> {
         self.get_ref().0.physical_device()
     }
 }
+
+impl<S: StreamConnection> AsyncPing for TokioTlsStream<S> {}
 
 #[async_trait]
 impl<T, S> Acceptor for TlsAcceptor<T>

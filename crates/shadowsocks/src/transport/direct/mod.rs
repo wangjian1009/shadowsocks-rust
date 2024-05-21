@@ -2,7 +2,7 @@ mod acceptor;
 mod connector;
 mod packet;
 
-use super::{Device, DeviceOrGuard, StreamConnection};
+use super::{Device, DeviceOrGuard, StreamConnection, AsyncPing};
 pub use acceptor::TcpAcceptor;
 use cfg_if::cfg_if;
 pub use connector::TcpConnector;
@@ -32,6 +32,8 @@ impl StreamConnection for crate::net::TcpStream {
     }
 }
 
+impl AsyncPing for crate::net::TcpStream {}
+
 impl StreamConnection for tokio::net::TcpStream {
     fn check_connected(&self) -> bool {
         crate::net::check_peekable(self)
@@ -46,3 +48,5 @@ impl StreamConnection for tokio::net::TcpStream {
         DeviceOrGuard::Device(Device::Tcp(self))
     }
 }
+
+impl AsyncPing for tokio::net::TcpStream {}

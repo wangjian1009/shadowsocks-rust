@@ -7,7 +7,7 @@ use tracing::{debug, error, warn};
 
 use crate::{
     policy::{ServerPolicy, StreamAction},
-    relay::tcprelay::utils_copy::copy_bidirectional,
+    relay::tcprelay::copy_bidirectional,
     timeout::TimeoutWaiter,
     transport::{MonTraffic, RateLimitedStream, StreamConnection},
     ServerAddr,
@@ -76,7 +76,7 @@ pub(super) async fn serve_tcp(
             let mut incoming = MonTraffic::new(incoming, server_policy.create_connection_flow_state_tcp());
 
             // let (down, up) = copy_bidirectional(&mut target, &mut incoming, Some(idle_timeout)).await;
-            match copy_bidirectional(&mut target, &mut incoming, Some(idle_timeout)).await {
+            match copy_bidirectional(&mut target, &mut incoming, Some(idle_timeout), false, false).await {
                 Ok((down, up)) => {
                     debug!(up, down, "transfer finished");
                     CloseReason::SockClosed

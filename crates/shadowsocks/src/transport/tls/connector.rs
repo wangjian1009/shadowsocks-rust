@@ -8,7 +8,7 @@ use tokio_rustls::{
 
 use crate::{net::ConnectOpts, ssl, ServerAddr};
 
-use super::super::{Connector, DeviceOrGuard, StreamConnection};
+use super::super::{AsyncPing, Connector, DeviceOrGuard, StreamConnection};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TlsConnectorConfig {
@@ -37,6 +37,8 @@ impl<S: StreamConnection> StreamConnection for TokioTlsStream<S> {
         self.get_ref().0.physical_device()
     }
 }
+
+impl<S: StreamConnection> AsyncPing for TokioTlsStream<S> {}
 
 impl<C: Connector> TlsConnector<C> {
     pub fn new(config: &TlsConnectorConfig, inner: C) -> io::Result<Self> {
@@ -73,7 +75,8 @@ where
         } else {
             match destination {
                 ServerAddr::SocketAddr(sa) => ServerName::IpAddress(sa.ip()),
-                ServerAddr::DomainName(ref dname, _) => ServerName::try_from(dname.as_str()).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?,
+                ServerAddr::DomainName(ref dname, _) => ServerName::try_from(dname.as_str())
+                    .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?,
             }
         };
         let stream = TokioTlsConnector::from(self.tls_config.clone())

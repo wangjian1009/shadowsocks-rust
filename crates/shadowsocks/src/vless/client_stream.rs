@@ -16,10 +16,10 @@ use tokio::{
 use crate::{
     config::ServerConfig,
     net::ConnectOpts,
-    transport::{Connector, DeviceOrGuard, StreamConnection},
+    transport::{AsyncPing, Connector, DeviceOrGuard, StreamConnection},
 };
 
-use super::{encoding, new_error, protocol, UUID, Address};
+use super::{encoding, new_error, protocol, Address, UUID};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClientConfig {
@@ -45,6 +45,7 @@ enum ClientStreamReadState {
 /// A stream for sending / receiving data stream from remote server via vless' proxy server
 #[pin_project(project = ClientStreamProj)]
 pub struct ClientStream<S> {
+    #[pin]
     stream: S,
     write_state: ClientStreamWriteState,
     read_state: ClientStreamReadState,
@@ -62,6 +63,17 @@ impl<S: StreamConnection> StreamConnection for ClientStream<S> {
 
     fn physical_device(&self) -> DeviceOrGuard<'_> {
         self.stream.physical_device()
+    }
+}
+
+impl<S: StreamConnection> AsyncPing for ClientStream<S> {
+    fn supports_ping(&self) -> bool {
+        self.stream.supports_ping()
+    }
+
+    fn poll_write_ping(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<bool>> {
+        let ClientStreamProj { stream, .. } = self.project();
+        stream.poll_write_ping(cx)
     }
 }
 

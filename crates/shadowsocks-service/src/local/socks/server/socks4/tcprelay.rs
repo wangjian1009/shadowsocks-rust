@@ -142,7 +142,7 @@ impl Socks4TcpHandler {
                 establish_tcp_tunnel(
                     &self.context,
                     svr_cfg,
-                    &mut stream,
+                    stream,
                     &mut remote,
                     peer_addr,
                     &target_addr,

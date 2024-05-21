@@ -294,7 +294,7 @@ impl Socks5TcpHandler {
             match server_opt {
                 Some(server) => {
                     #[cfg(feature = "rate-limit")]
-                    let mut stream = shadowsocks::transport::RateLimitedStream::from_stream(
+                    let stream = shadowsocks::transport::RateLimitedStream::from_stream(
                         stream,
                         Some(self.context.rate_limiter()),
                     );
@@ -303,7 +303,7 @@ impl Socks5TcpHandler {
                     establish_tcp_tunnel(
                         self.context.as_ref(),
                         svr_cfg,
-                        &mut stream,
+                        stream,
                         &mut remote,
                         peer_addr,
                         &target_addr,

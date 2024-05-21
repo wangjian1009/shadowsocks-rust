@@ -21,6 +21,8 @@ use governor::{
 };
 use nonzero_ext::*;
 
+use crate::transport::AsyncPing;
+
 use super::{
     super::{DeviceOrGuard, StreamConnection},
     BoundWidth,
@@ -359,8 +361,23 @@ where
     }
 }
 
-use cfg_if::cfg_if;
-cfg_if! {
+impl<S> AsyncPing for RateLimitedStream<S>
+where
+    S: AsyncPing + Unpin,
+{
+    #[inline]
+    fn supports_ping(&self) -> bool {
+        self.stream.supports_ping()
+    }
+
+    #[inline]
+    fn poll_write_ping(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<io::Result<bool>> {
+        let stream = Pin::new(&mut self.stream);
+        stream.poll_write_ping(cx)
+    }
+}
+
+cfg_if::cfg_if! {
     if #[cfg(unix)] {
         use std::os::unix::io::{AsRawFd, RawFd};
         impl<S: AsRawFd> AsRawFd for RateLimitedStream<S> {

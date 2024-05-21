@@ -49,7 +49,7 @@ async fn establish_client_tcp_redir<'a>(
 
     let mut remote = AutoProxyClientStream::connect(context, &server, addr).await?;
 
-    establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).await
+    establish_tcp_tunnel(context.as_ref(), svr_cfg, stream, &mut remote, peer_addr, addr).await
 }
 
 async fn handle_redir_client(

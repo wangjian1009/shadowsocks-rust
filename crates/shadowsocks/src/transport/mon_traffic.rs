@@ -9,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{net::FlowStat, ServerAddr};
 
-use super::{DeviceOrGuard, PacketMutWrite, PacketRead, PacketWrite, StreamConnection};
+use super::{AsyncPing, DeviceOrGuard, PacketMutWrite, PacketRead, PacketWrite, StreamConnection};
 
 #[cfg(feature = "rate-limit")]
 use super::RateLimiter;
@@ -93,6 +93,16 @@ impl<T: StreamConnection> StreamConnection for MonTraffic<T> {
 
     fn physical_device(&self) -> DeviceOrGuard<'_> {
         self.s.physical_device()
+    }
+}
+
+impl<T: AsyncPing> AsyncPing for MonTraffic<T> {
+    fn supports_ping(&self) -> bool {
+        self.s.supports_ping()
+    }
+
+    fn poll_write_ping(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<bool>> {
+        self.project().s.poll_write_ping(cx)
     }
 }
 

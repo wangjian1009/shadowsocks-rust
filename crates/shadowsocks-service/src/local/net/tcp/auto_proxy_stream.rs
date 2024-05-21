@@ -15,7 +15,7 @@ use shadowsocks::{
     create_connector_then,
     net::{ConnectOpts, FlowStat},
     relay::{socks5::Address, tcprelay::proxy_stream::ProxyClientStream},
-    transport::{DeviceOrGuard, RateLimitedStream, StreamConnection},
+    transport::{DeviceOrGuard, RateLimitedStream, StreamConnection, AsyncPing},
     ServerAddr,
 };
 
@@ -518,6 +518,40 @@ impl StreamConnection for AutoProxyClientStream {
             #[cfg(feature = "tuic")]
             AutoProxyClientStreamStream::ProxiedTuic(ref s, ..) => s.physical_device(),
             AutoProxyClientStreamStream::Bypassed(ref s) => s.physical_device(),
+        }
+    }
+}
+
+impl AsyncPing for AutoProxyClientStream {
+    fn supports_ping(&self) -> bool {
+        match self.s {
+            AutoProxyClientStreamStream::Proxied(ref s) => s.supports_ping(),
+            #[cfg(feature = "trojan")]
+            AutoProxyClientStreamStream::ProxiedTrojan(ref s) => s.supports_ping(),
+            #[cfg(feature = "vless")]
+            AutoProxyClientStreamStream::ProxiedVless(ref s) => s.supports_ping(),
+            #[cfg(feature = "tuic")]
+            AutoProxyClientStreamStream::ProxiedTuic(ref s, ..) => s.supports_ping(),
+            AutoProxyClientStreamStream::Bypassed(ref s) => s.supports_ping(),
+        }
+    }
+
+    fn poll_write_ping(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<bool>> {
+        let AutoProxyClientStreamProj { s, c } = self.project();
+
+        if let Err(err) = Self::is_fake_closed(c, cx) {
+            return Poll::Ready(Err(err));
+        }
+
+        match s.project() {
+            AutoProxyClientStreamStreamProj::Proxied(s) => s.poll_write_ping(cx),
+            #[cfg(feature = "trojan")]
+            AutoProxyClientStreamStreamProj::ProxiedTrojan(s) => s.poll_write_ping(cx),
+            #[cfg(feature = "vless")]
+            AutoProxyClientStreamStreamProj::ProxiedVless(s) => s.poll_write_ping(cx),
+            #[cfg(feature = "tuic")]
+            AutoProxyClientStreamStreamProj::ProxiedTuic(s, ..) => s.poll_write_ping(cx),
+            AutoProxyClientStreamStreamProj::Bypassed(s) => s.poll_write_ping(cx),
         }
     }
 }

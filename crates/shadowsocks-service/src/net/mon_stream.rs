@@ -12,7 +12,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use shadowsocks::{
     net::FlowStat,
-    transport::{DeviceOrGuard, StreamConnection},
+    transport::{DeviceOrGuard, StreamConnection, AsyncPing},
 };
 
 /// Monitored `ProxyStream`
@@ -118,8 +118,19 @@ where
     }
 }
 
-use cfg_if::cfg_if;
-cfg_if! {
+impl<S: StreamConnection> AsyncPing for MonProxyStream<S> {
+    #[inline]
+    fn supports_ping(&self) -> bool {
+        self.stream.supports_ping()
+    }
+
+    #[inline]
+    fn poll_write_ping(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<bool>> {
+        self.project().stream.poll_write_ping(cx)
+    }
+}
+
+cfg_if::cfg_if! {
     if #[cfg(unix)] {
         use std::os::unix::io::{AsRawFd, RawFd};
         impl<S: AsRawFd> AsRawFd for MonProxyStream<S> {

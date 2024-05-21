@@ -24,7 +24,7 @@ impl Default for WebSocketConnectorConfig {
         Self {
             uri: Url::parse("ws://dumy/").unwrap(),
             headers: None,
-            ping_type: WebsocketPingType::Disabled,
+            ping_type: WebsocketPingType::PingFrame,
         }
     }
 }
@@ -74,9 +74,10 @@ impl<T: Connector> Connector for WebSocketConnector<T> {
 
         http_request.push_str(concat!("Sec-WebSocket-Version: 13\r\n", "Sec-WebSocket-Key: "));
         http_request.push_str(&websocket_key);
+        tracing::trace!("websocket handshake request\n{}", http_request);
+
         http_request.push_str("\r\n\r\n");
 
-        // tracing::debug!("websocket send handshake request {}", http_request);
         client_stream.write_all(&http_request.into_bytes()).await?;
         client_stream.flush().await?;
 
@@ -85,9 +86,15 @@ impl<T: Connector> Connector for WebSocketConnector<T> {
             headers: response_headers,
             line_reader,
         } = ParsedHttpData::parse(&mut client_stream).await?;
-        // tracing::error!("xxxxxx: ws response: read success: {:?}", first_line);
-        // tracing::error!("xxxxxx: ws response:      headers: {:?}", response_headers);
-        // tracing::error!("xxxxxx: ws response:      unparsed: {:?}", String::from_utf8_lossy(line_reader.unparsed_data()));
+
+        tracing::trace!(
+            "websocket handshake response\n{}{}",
+            first_line,
+            response_headers
+                .iter()
+                .map(|(k, v)| format!("\n{}: {}", k, v))
+                .collect::<String>()
+        );
 
         if !first_line.starts_with("HTTP/1.1 101") && !first_line.starts_with("HTTP/1.0 101") {
             return Err(std::io::Error::new(

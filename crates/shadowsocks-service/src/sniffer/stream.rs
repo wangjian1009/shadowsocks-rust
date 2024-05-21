@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
     task::{self, Poll},
 };
+use shadowsocks::transport::AsyncPing;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use super::{SnifferChain, SnifferCheckError, SnifferProtocol};
@@ -212,6 +213,22 @@ where
     ) -> Poll<io::Result<usize>> {
         let stream = Pin::new(&mut self.stream);
         stream.poll_write_vectored(cx, bufs)
+    }
+}
+
+impl<S, C: SnifferChain> AsyncPing for SnifferStream<S, C>
+where
+    S: AsyncPing + Unpin,
+{
+    #[inline]
+    fn supports_ping(&self) -> bool {
+        self.stream.supports_ping()
+    }
+
+    #[inline]
+    fn poll_write_ping(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<io::Result<bool>> {
+        let stream = Pin::new(&mut self.stream);
+        stream.poll_write_ping(cx)
     }
 }
 

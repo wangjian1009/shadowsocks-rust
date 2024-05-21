@@ -16,7 +16,7 @@ use tracing::error;
 use crate::{
     config::ServerConfig,
     net::ConnectOpts,
-    transport::{Connector, DeviceOrGuard, StreamConnection},
+    transport::{AsyncPing, Connector, DeviceOrGuard, StreamConnection},
     ServerAddr,
 };
 
@@ -53,6 +53,8 @@ impl<S: StreamConnection> StreamConnection for DelayConnectStream<S> {
         self.stream.physical_device()
     }
 }
+
+impl<S: StreamConnection> AsyncPing for DelayConnectStream<S> {}
 
 impl<S: StreamConnection> DelayConnectStream<S> {
     /// Connect to target `addr` via trojan' server configured by `svr_cfg`, maps `TcpStream` to customized stream with `map_fn`

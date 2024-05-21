@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-use shadowsocks::{canceler::Canceler, net::TcpSocketOpts, relay::socks5::Address};
+use shadowsocks::{canceler::Canceler, net::TcpSocketOpts, relay::socks5::Address, transport::AsyncPing};
 use smoltcp::{
     iface::{Config as InterfaceConfig, Interface, SocketHandle, SocketSet},
     phy::{DeviceCapabilities, Medium},
@@ -232,6 +232,8 @@ impl AsyncWrite for TcpConnection {
         Poll::Pending
     }
 }
+
+impl AsyncPing for TcpConnection {}
 
 pub struct TcpTun {
     context: Arc<ServiceContext>,
@@ -592,7 +594,7 @@ async fn establish_client_tcp_redir<'a>(
     tracing::info!("connect successed");
 
     tokio::select! {
-        r = establish_tcp_tunnel(context.as_ref(), svr_cfg, &mut stream, &mut remote, peer_addr, addr).instrument(info_span!("tcp", target = ?addr)) => r,
+        r = establish_tcp_tunnel(context.as_ref(), svr_cfg, stream, &mut remote, peer_addr, addr).instrument(info_span!("tcp", target = ?addr)) => r,
         _ = waiter.wait() => {
             tracing::info!("connection cancelled");
             Ok(())

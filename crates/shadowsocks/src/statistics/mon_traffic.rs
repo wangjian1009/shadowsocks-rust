@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use crate::transport::AsyncPing;
 use crate::{
     transport::{DeviceOrGuard, PacketMutWrite, PacketRead, PacketWrite, StreamConnection},
     ServerAddr,
@@ -76,6 +77,16 @@ impl<T: StreamConnection> StreamConnection for MonTraffic<T> {
 
     fn physical_device(&self) -> DeviceOrGuard<'_> {
         self.s.physical_device()
+    }
+}
+
+impl<T: AsyncPing> AsyncPing for MonTraffic<T> {
+    fn supports_ping(&self) -> bool {
+        self.s.supports_ping()
+    }
+
+    fn poll_write_ping(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<io::Result<bool>> {
+        self.project().s.poll_write_ping(cx)
     }
 }
 
