@@ -77,9 +77,14 @@ impl CopyBuffer {
                 let mut buf = ReadBuf::new(&mut me.buf[unused_start_index..unused_end_index_exclusive]);
                 match reader.as_mut().poll_read(cx, &mut buf) {
                     Poll::Ready(val) => {
-                        val?;
+                        if let Err(err) = val {
+                            tracing::error!(err=?err, "read error");
+                            return Poll::Ready(Err(err));
+                        }
+
                         let n = buf.filled().len();
                         if n == 0 {
+                            tracing::trace!("read complete, to-write: {} bytes", self.cache_length);
                             self.read_done = true;
                         } else {
                             *has_rw_data = true;
@@ -127,8 +132,16 @@ impl CopyBuffer {
                     .poll_write(cx, &me.buf[used_start_index..used_end_index_exclusive])
                 {
                     Poll::Ready(val) => {
-                        let written = val?;
+                        let written = match val {
+                            Ok(written) => written,
+                            Err(err) => {
+                                tracing::error!(err=?err, "write error");
+                                return Poll::Ready(Err(err));
+                            }
+                        };
+                        
                         if written == 0 {
+                            tracing::error!("write zero byte into writer");
                             return Poll::Ready(Err(io::Error::new(
                                 io::ErrorKind::WriteZero,
                                 "write zero byte into writer",
@@ -159,6 +172,7 @@ impl CopyBuffer {
 
             // If we've written all the data and we've seen EOF, finish the transfer.
             if self.read_done && self.cache_length == 0 {
+                tracing::trace!("write complete");
                 return Poll::Ready(Ok(()));
             }
 
@@ -216,10 +230,17 @@ where
                 ready!(buf.poll_copy(cx, r.as_mut(), w.as_mut(), writed, has_rw_data))?;
                 *state = TransferState::ShuttingDown;
             }
-            TransferState::ShuttingDown => {
-                ready!(w.as_mut().poll_shutdown(cx))?;
-                *state = TransferState::Done;
-            }
+            TransferState::ShuttingDown => match w.as_mut().poll_shutdown(cx) {
+                Poll::Ready(r) => {
+                    if let Err(err) = r {
+                        tracing::error!(err=?err, "shutdown error");
+                    } else {
+                        tracing::trace!("shutdown complete");
+                    }
+                    *state = TransferState::Done;
+                }
+                Poll::Pending => return Poll::Pending,
+            },
             TransferState::Done => return Poll::Ready(Ok(())),
         }
     }
@@ -233,6 +254,8 @@ where
     type Output = io::Result<(u64, u64)>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let _span = tracing::info_span!("copy_bidirectional").entered();
+
         // Unpack self into mut refs to each field to avoid borrow check issues.
         let CopyBidirectional {
             a,
@@ -272,20 +295,24 @@ where
         }
 
         let mut has_rw_data = false;
-        let a_to_b = transfer_one_direction(cx, a_to_b, &mut *a_buf, *a, *b, a_to_b_writed, &mut has_rw_data);
-        let b_to_a = transfer_one_direction(cx, b_to_a, &mut *b_buf, *b, *a, b_to_a_writed, &mut has_rw_data);
-
-        if let Some((timeout, ref mut idle_timeout_future)) = idle_timeout {
-            if has_rw_data {
-                tracing::trace!("XXXXXXX: resetting idle timeout");
-                idle_timeout_future.as_mut().reset(tokio::time::Instant::now() + *timeout);
-            }
-        }
+        let a_to_b = tracing::info_span!("a_to_b")
+            .in_scope(|| transfer_one_direction(cx, a_to_b, &mut *a_buf, *a, *b, a_to_b_writed, &mut has_rw_data));
+        let b_to_a = tracing::info_span!("b_to_a")
+            .in_scope(|| transfer_one_direction(cx, b_to_a, &mut *b_buf, *b, *a, b_to_a_writed, &mut has_rw_data));
 
         if a_to_b.is_ready() {
             return a_to_b.map_ok(|_| (*a_to_b_writed, *b_to_a_writed));
         } else if b_to_a.is_ready() {
             return b_to_a.map_ok(|_| (*a_to_b_writed, *b_to_a_writed));
+        }
+
+        // 没有完成则需要更新idle_timeout
+        if let Some((timeout, ref mut idle_timeout_future)) = idle_timeout {
+            if has_rw_data {
+                idle_timeout_future
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + *timeout);
+            }
         }
 
         Poll::Pending
