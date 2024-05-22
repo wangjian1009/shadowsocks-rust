@@ -49,7 +49,7 @@ mod read_line;
 pub mod util;
 
 #[cfg(any(feature = "tuic", feature = "transport-tls"))]
-pub mod ssl;
+pub mod rustls_util;
 
 #[cfg(feature = "trojan")]
 pub mod trojan;

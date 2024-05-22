@@ -60,7 +60,7 @@ security-replay-attack-detect = ["bloomfilter"]
 
 transport = []
 transport-ws = ["transport", "sha1"]
-transport-tls = ["transport", "tokio-rustls", "webpki", "rustls", "rustls-native-certs", "rustls-pemfile"]
+transport-tls = ["transport", "tokio-rustls", "webpki-roots", "rustls-pemfile"]
 transport-mkcp = ["transport", "arc-swap", "rand"]
 transport-skcp = ["transport"]
 transport-restls = ["anyhow", "tokio-util", "hmac", "sha1"]
@@ -69,7 +69,7 @@ statistics = ["metrics"]
 
 trojan = ["rand"]
 vless = ["rand", "hex"]
-tuic = ["byteorder", "quinn", "parking_lot", "crossbeam-utils", "rustls", "rustls-native-certs", "rustls-pemfile"]
+tuic = ["byteorder", "quinn", "parking_lot", "crossbeam-utils", "rustls-pemfile"]
 wireguard = ["parking_lot", "hex", "chacha20poly1305", "ring", "ip_network_table", "ip_network", "x25519-dalek",  "blake2", "hmac"]
 
 rate-limit = ["governor", "nonzero_ext", "futures-timer", "quanta", "lazy_static", "regex"]
@@ -126,9 +126,9 @@ tokio = { version = "1.9.0", features = [
     "time",
 ] }
 tokio-tfo = "0.2.0"
-tokio-rustls = { version = "0.23.4", optional = true }
+tokio-rustls = { version = "0.25", optional = true }
+webpki-roots = { version = "0.26", optional = true }
 tokio-util = { version = "*", features = ["codec"], optional = true}
-webpki = { version = "0.22", optional = true }
 anyhow = { version = "1.0.68", optional = true }
 hmac = { version = "^0.12", optional = true }
 sha1 = { version = "^0.10.5", optional = true }
@@ -151,9 +151,7 @@ byteorder = { version = "1.4", optional = true }
 crossbeam-utils = { version = "0.8", default-features = false, optional = true }
 parking_lot = { version = "0.12", optional = true }
 quinn = { version = "0.8", optional = true }
-rustls = { version = "0.20", features = ["quic", "dangerous_configuration"], default-features = false, optional = true }
-rustls-native-certs = { version = "0.6", optional = true }
-rustls-pemfile = { version = "1.0", optional = true }
+rustls-pemfile = { version = "2.0", optional = true }
 # chrono = "*"
 
 sha2 = { version = "0.10"}

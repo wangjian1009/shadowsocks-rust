@@ -337,13 +337,11 @@ async fn socks5_tcp_relay_ss_tls() {
         Some(TransportAcceptorConfig::Tls(tls::TlsAcceptorConfig {
             cert: "tests/cert/server.crt".to_owned(),
             key: "tests/cert/server.key".to_owned(),
-            cipher: shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
         })),
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
         Some(TransportConnectorConfig::Tls(tls::TlsConnectorConfig {
             sni: Some("coolvpn.cc".to_owned()),
             cert: None,
-            cipher: shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
         })),
     )
     .await
@@ -363,7 +361,6 @@ async fn socks5_tcp_relay_ss_wss() {
             tls::TlsAcceptorConfig {
                 cert: "tests/cert/server.crt".to_owned(),
                 key: "tests/cert/server.key".to_owned(),
-                cipher: shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
             },
         )),
         ServerProtocol::SS(ShadowsocksConfig::new("test-password", CipherKind::AES_256_GCM)),
@@ -375,7 +372,6 @@ async fn socks5_tcp_relay_ss_wss() {
             tls::TlsConnectorConfig {
                 sni: Some("coolvpn.cc".to_owned()),
                 cert: None,
-                cipher: shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
             },
         )),
     )
@@ -433,7 +429,6 @@ async fn socks5_tcp_relay_tuic() {
 
     let mut client_config = tuic::client::RawConfig::new(
         "token1".to_owned(),
-        shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
     );
     client_config.sni = Some("coolvpn.cc".to_owned());
     client_config.disable_sni = true;
@@ -459,7 +454,6 @@ async fn socks5_tcp_relay_tuic() {
 async fn socks5_udp_relay_tuic() {
     let mut client_config = tuic::client::RawConfig::new(
         "token1".to_owned(),
-        shadowsocks_service::shadowsocks::ssl::get_cipher_suite(None).unwrap(),
     );
     client_config.sni = Some("coolvpn.cc".to_owned());
     client_config.disable_sni = true;

@@ -1,29 +1,27 @@
 use async_trait::async_trait;
 use std::{io, sync::Arc};
 use tokio_rustls::{
-    client::TlsStream as TokioTlsStream,
-    rustls::{ClientConfig, ServerName},
-    TlsConnector as TokioTlsConnector,
+    client::TlsStream,
+    rustls::{pki_types::ServerName, ClientConfig},
 };
 
-use crate::{net::ConnectOpts, ssl, ServerAddr};
+use crate::{net::ConnectOpts, rustls_util, ServerAddr};
 
 use super::super::{AsyncPing, Connector, DeviceOrGuard, StreamConnection};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TlsConnectorConfig {
     pub sni: Option<String>,
-    pub cipher: Vec<ssl::SupportedCipherSuite>,
     pub cert: Option<String>,
 }
 
 pub struct TlsConnector<C: Connector> {
     sni: Option<String>,
-    tls_config: Arc<ClientConfig>,
+    client_config: Arc<ClientConfig>,
     inner: C,
 }
 
-impl<S: StreamConnection> StreamConnection for TokioTlsStream<S> {
+impl<S: StreamConnection> StreamConnection for TlsStream<S> {
     fn check_connected(&self) -> bool {
         self.get_ref().0.check_connected()
     }
@@ -38,23 +36,15 @@ impl<S: StreamConnection> StreamConnection for TokioTlsStream<S> {
     }
 }
 
-impl<S: StreamConnection> AsyncPing for TokioTlsStream<S> {}
+impl<S: StreamConnection> AsyncPing for TlsStream<S> {}
 
 impl<C: Connector> TlsConnector<C> {
     pub fn new(config: &TlsConnectorConfig, inner: C) -> io::Result<Self> {
-        // let cipher_suites =
-        //     ssl::get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
-
-        let mut certs = None;
-        if let Some(cert_file) = config.cert.as_ref() {
-            certs = Some(ssl::client::load_certificates(&vec![cert_file.clone()])?);
-        };
-
-        let tls_config = ssl::client::build_config(certs, config.cipher.as_slice(), None)?;
+        let client_config = rustls_util::create_client_config(false, &[], config.sni.is_some())?;
 
         Ok(Self {
             sni: config.sni.clone(),
-            tls_config: Arc::new(tls_config),
+            client_config: Arc::new(client_config),
             inner,
         })
     }
@@ -66,23 +56,29 @@ where
     S: StreamConnection + 'static,
     C: Connector + Connector<TS = S>,
 {
-    type TS = TokioTlsStream<S>;
+    type TS = TlsStream<S>;
 
     async fn connect(&self, destination: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
         let stream = self.inner.connect(destination, connect_opts).await?;
-        let dns_name = if let Some(sni) = self.sni.as_ref() {
+
+        let server_name = if let Some(sni) = self.sni.as_ref() {
             ServerName::try_from(sni.as_str()).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?
         } else {
             match destination {
-                ServerAddr::SocketAddr(sa) => ServerName::IpAddress(sa.ip()),
+                ServerAddr::SocketAddr(sa) => ServerName::IpAddress(sa.ip().into()),
                 ServerAddr::DomainName(ref dname, _) => ServerName::try_from(dname.as_str())
                     .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?,
             }
         };
-        let stream = TokioTlsConnector::from(self.tls_config.clone())
-            .connect(dns_name, stream)
+
+        let tls_connector: tokio_rustls::TlsConnector = self.client_config.clone().into();
+
+        let tls_stream = tls_connector
+            .connect_with(server_name.to_owned(), stream, |client_conn| {
+                client_conn.set_buffer_limit(Some(32768));
+            })
             .await?;
 
-        Ok(stream)
+        Ok(tls_stream)
     }
 }

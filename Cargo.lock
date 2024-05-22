@@ -3697,7 +3697,6 @@ version = "0.20.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b80e3dec595989ea8510028f30c408a4630db12c9cbb8de34203b89d6577e99"
 dependencies = [
- "log 0.4.20",
  "ring 0.16.20",
  "sct",
  "webpki",
@@ -4036,9 +4035,7 @@ dependencies = [
  "rand_chacha 0.3.1",
  "regex",
  "ring 0.16.20",
- "rustls 0.20.9",
- "rustls-native-certs 0.6.3",
- "rustls-pemfile 1.0.3",
+ "rustls-pemfile 2.0.0",
  "scopeguard",
  "sendfd",
  "serde",
@@ -4051,7 +4048,7 @@ dependencies = [
  "spin 0.9.8",
  "thiserror",
  "tokio",
- "tokio-rustls 0.23.4",
+ "tokio-rustls 0.25.0",
  "tokio-test",
  "tokio-tfo",
  "tokio-util",
@@ -4059,7 +4056,7 @@ dependencies = [
  "tracing-test",
  "untrusted 0.9.0",
  "url",
- "webpki",
+ "webpki-roots 0.26.0",
  "windows-sys 0.52.0",
  "x25519-dalek",
 ]
@@ -4658,17 +4655,6 @@ checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
 dependencies = [
  "native-tls",
  "tokio",
-]
-
-[[package]]
-name = "tokio-rustls"
-version = "0.23.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c43ee83903113e03984cb9e5cebe6c04a5116269e900e3ddba8f068a62adda59"
-dependencies = [
- "rustls 0.20.9",
- "tokio",
- "webpki",
 ]
 
 [[package]]

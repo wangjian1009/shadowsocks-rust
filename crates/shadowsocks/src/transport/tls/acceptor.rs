@@ -6,7 +6,7 @@ use tracing::Instrument;
 
 use crate::{
     canceler::{CancelWaiter, Canceler},
-    ssl,
+    rustls_util,
 };
 
 use super::super::{Acceptor, AsyncPing, DeviceOrGuard, StreamConnection};
@@ -15,7 +15,6 @@ use super::super::{Acceptor, AsyncPing, DeviceOrGuard, StreamConnection};
 pub struct TlsAcceptorConfig {
     pub cert: String,
     pub key: String,
-    pub cipher: Vec<ssl::SupportedCipherSuite>,
 }
 
 pub struct TlsAcceptor<T: Acceptor> {
@@ -85,15 +84,29 @@ where
 
 impl<T: Acceptor> TlsAcceptor<T> {
     pub async fn new(config: &TlsAcceptorConfig, inner: T) -> io::Result<Self> {
-        let certs = ssl::server::load_certificates(&config.cert)?;
-        let priv_key = ssl::server::load_private_key(&config.key)?;
+        let cert = match tokio::fs::read(config.cert.as_str()).await {
+            Ok(cert) => cert,
+            Err(err) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("failed to read cert file: {}, path={}", err, config.cert),
+                ));
+            }
+        };
+
+        let key = match tokio::fs::read(config.key.as_str()).await {
+            Ok(key) => key,
+            Err(err) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("failed to read key file: {}, path={}", err, config.key),
+                ));
+            }
+        };
+        
+        let tls_config = rustls_util::create_server_config(cert.as_slice(), key.as_slice(), &[])?;
 
         let (tls_stream_tx, tls_stream_rx) = mpsc::channel(1);
-
-        // let cipher_suites =
-        //     ssl::get_cipher_suite(config.cipher.as_ref().map(|vs| vs.iter().map(|f| f.as_str()).collect()))?;
-
-        let tls_config = ssl::server::build_config(certs, priv_key, config.cipher.as_slice(), None)?;
 
         let tls_acceptor = Arc::new(TokioTlsAcceptor::from(Arc::new(tls_config)));
         Ok(Self {
