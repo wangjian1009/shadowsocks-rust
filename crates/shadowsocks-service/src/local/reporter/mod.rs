@@ -92,13 +92,13 @@ impl ReporterServer {
                 let speed_tx: u64 = tx_slots.iter().sum();
                 let speed_rx: u64 = rx_slots.iter().sum();
 
-                tracing::trace!(
-                    "report: tx={} rx={} speed_tx={} speed_rx={}",
-                    tx,
-                    rx,
-                    speed_tx,
-                    speed_rx
-                );
+                // tracing::trace!(
+                //     "report: tx={} rx={} speed_tx={} speed_rx={}",
+                //     tx,
+                //     rx,
+                //     speed_tx,
+                //     speed_rx
+                // );
                 let buf: [u64; 4] = [tx, rx, speed_tx, speed_rx];
                 let buf = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const _, 32) };
 
@@ -180,6 +180,10 @@ pub async fn send_local_notify(stat_addr: &LocalFlowStatAddress, cmd: u8, buf: &
                     Err(io::ErrorKind::TimedOut.into())
                 }
             }
+        }
+        LocalFlowStatAddress::Callback(cb) => {
+            cb.call(cmd, buf);
+            Ok(())
         }
     }
 }

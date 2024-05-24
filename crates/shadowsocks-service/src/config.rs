@@ -1120,6 +1120,33 @@ pub struct BalancerConfig {
     pub check_best_interval: Option<Duration>,
 }
 
+pub trait LocalCmdProcessor {
+    fn process(&self, cmd: u8, data: &[u8]);
+}
+
+#[derive(Clone)]
+pub struct LocalFlowStatCallback {
+    processor: std::sync::Arc<Box<dyn LocalCmdProcessor + Sync + Send>>,
+}
+
+impl LocalFlowStatCallback {
+    pub fn call(&self, cmd: u8, data: &[u8]) {
+        (**self.processor).process(cmd, data);
+    }
+
+    pub fn new(processor: impl LocalCmdProcessor + Sync + Send + 'static) -> LocalFlowStatCallback {
+        LocalFlowStatCallback {
+            processor: std::sync::Arc::new(Box::new(processor) as Box<dyn LocalCmdProcessor + Sync + Send>),
+        }
+    }
+}
+
+impl Debug for LocalFlowStatCallback {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalFlowStatCallback").finish()
+    }
+}
+
 /// Address for local to report flow statistic data
 #[cfg(feature = "local-flow-stat")]
 #[derive(Debug, Clone)]
@@ -1129,6 +1156,7 @@ pub enum LocalFlowStatAddress {
     UnixStreamPath(PathBuf),
     /// TCP Stream Address
     TcpStreamAddr(SocketAddr),
+    Callback(LocalFlowStatCallback),
 }
 
 /// Server instance config
