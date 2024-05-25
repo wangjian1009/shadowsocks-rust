@@ -39,6 +39,44 @@ pub struct UdpSocketOpts {
     pub mtu: Option<usize>,
 }
 
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "android")] {
+        /// Protect file descriptor with VPNService
+        pub trait VpnFdProtector {
+            fn protect_fd(&self, fd: std::os::unix::io::RawFd) -> std::io::Result<()>;
+        }
+
+        #[derive(Clone)]
+        pub struct VpnFdProtectorCallback {
+            processor: std::sync::Arc<Box<dyn VpnFdProtector + Sync + Send>>,
+        }
+
+        impl VpnFdProtectorCallback {
+            pub fn protect_fd(&self, fd: std::os::unix::io::RawFd) -> std::io::Result<()> {
+                (**self.processor).protect_fd(fd)
+            }
+
+            pub fn new(processor: impl VpnFdProtector + Sync + Send + 'static) -> VpnFdProtectorCallback {
+                VpnFdProtectorCallback {
+                    processor: std::sync::Arc::new(Box::new(processor) as Box<dyn VpnFdProtector + Sync + Send>),
+                }
+            }
+        }
+
+        impl std::fmt::Debug for VpnFdProtectorCallback {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("VpnFdProtectorCallback").finish()
+            }
+        }
+
+        #[derive(Clone, Debug)]
+        pub enum VpnProtectPath {
+            Path(std::path::PathBuf),
+            Callback(VpnFdProtectorCallback),
+        }
+    }
+}
+
 /// Options for connecting to remote server
 #[derive(Debug, Clone, Default)]
 pub struct ConnectOpts {
@@ -55,7 +93,7 @@ pub struct ConnectOpts {
     ///
     /// This is an [Android shadowsocks implementation](https://github.com/shadowsocks/shadowsocks-android) specific feature
     #[cfg(target_os = "android")]
-    pub vpn_protect_path: Option<std::path::PathBuf>,
+    pub vpn_protect_path: Option<VpnProtectPath>,
 
     /// Outbound socket binds to this IP address, mostly for choosing network interfaces
     ///

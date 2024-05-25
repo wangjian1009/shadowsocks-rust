@@ -35,6 +35,9 @@ pub use addr_type::AddrType;
 #[cfg(any(unix, windows))]
 pub use util::check_peekable;
 
+#[cfg(target_os = "android")]
+pub use option::{VpnProtectPath, VpnFdProtectorCallback, VpnFdProtector};
+
 /// Address family `AF_INET`, `AF_INET6`
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AddrFamily {

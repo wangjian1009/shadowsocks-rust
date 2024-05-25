@@ -787,7 +787,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         if matches.get_flag("VPN_MODE") {
             // A socket `protect_path` in CWD
             // Same as shadowsocks-libev's android.c
-            config.outbound_vpn_protect_path = Some(From::from("protect_path"));
+            config.outbound_vpn_protect_path = Some(shadowsocks_service::shadowsocks::net::VpnProtectPath::Path(From::from("protect_path")));
         }
 
         if matches.get_raw("LOCAL_ADDR").is_some() || matches.get_raw("PROTOCOL").is_some() {

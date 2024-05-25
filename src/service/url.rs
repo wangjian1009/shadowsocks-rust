@@ -147,7 +147,7 @@ pub async fn main_async(matches: &ArgMatches) -> ExitCode {
     #[cfg(target_os = "android")]
     if let Some(vpn_protect_path) = matches.get_one::<String>("VPN_PROTECT_PATH") {
         let mut connect_opts = service_context.connect_opts_ref().clone();
-        connect_opts.vpn_protect_path = Some(vpn_protect_path.into());
+        connect_opts.vpn_protect_path = Some(shadowsocks_service::shadowsocks::net::VpnProtectPath::Path(vpn_protect_path.into()));
         service_context.set_connect_opts(connect_opts);
     }
 

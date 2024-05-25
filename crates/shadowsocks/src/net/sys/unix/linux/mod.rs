@@ -61,14 +61,25 @@ impl TcpStream {
         if !addr.ip().is_loopback() {
             use std::{io::ErrorKind, time::Duration};
             use tokio::time;
+            use crate::net::VpnProtectPath;
 
             if let Some(ref path) = opts.vpn_protect_path {
                 // RPC calls to `VpnService.protect()`
-                // Timeout in 3 seconds like shadowsocks-libev
-                match time::timeout(Duration::from_secs(3), vpn_protect(path, socket.as_raw_fd())).await {
-                    Ok(Ok(..)) => {}
-                    Ok(Err(err)) => return Err(err),
-                    Err(..) => return Err(io::Error::new(ErrorKind::TimedOut, "protect() timeout")),
+                match path {
+                    VpnProtectPath::Path(path) => {
+                        // Timeout in 3 seconds like shadowsocks-libev
+                        match time::timeout(Duration::from_secs(3), vpn_protect(path, socket.as_raw_fd())).await {
+                            Ok(Ok(..)) => {}
+                            Ok(Err(err)) => return Err(err),
+                            Err(..) => return Err(io::Error::new(ErrorKind::TimedOut, "protect() timeout")),
+                        }
+                    }
+                    VpnProtectPath::Callback(cb) => {
+                        if let Err(err) = cb.protect_fd(socket.as_raw_fd()) {
+                            tracing::error!(err = ?err, "vpn_protect error");
+                            return Err(err);
+                        }
+                    }
                 }
             }
         }
@@ -320,17 +331,28 @@ pub async fn bind_outbound_udp_socket(bind_addr: &SocketAddr, config: &ConnectOp
     {
         use std::{io::ErrorKind, time::Duration};
         use tokio::time;
+        use crate::net::VpnProtectPath;
 
         if let Some(ref path) = config.vpn_protect_path {
             // RPC calls to `VpnService.protect()`
-            // Timeout in 3 seconds like shadowsocks-libev
-            match time::timeout(Duration::from_secs(3), vpn_protect(path, socket.as_raw_fd())).await {
-                Ok(Ok(..)) => {}
-                Ok(Err(err)) => {
-                    tracing::error!(err = ?err, "vpn_protect error, path={:?}", path);
-                    return Err(err);
+            match path {
+                VpnProtectPath::Path(path) => {
+                    // Timeout in 3 seconds like shadowsocks-libev
+                    match time::timeout(Duration::from_secs(3), vpn_protect(path, socket.as_raw_fd())).await {
+                        Ok(Ok(..)) => {}
+                        Ok(Err(err)) => {
+                            tracing::error!(err = ?err, "vpn_protect error, path={:?}", path);
+                            return Err(err);
+                        }
+                        Err(..) => return Err(io::Error::new(ErrorKind::TimedOut, "protect() timeout")),
+                    }
                 }
-                Err(..) => return Err(io::Error::new(ErrorKind::TimedOut, "protect() timeout")),
+                VpnProtectPath::Callback(cb) => {
+                    if let Err(err) = cb.protect_fd(socket.as_raw_fd()) {
+                        tracing::error!(err = ?err, "vpn_protect error");
+                        return Err(err);
+                    }
+                }
             }
         }
     }

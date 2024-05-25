@@ -1266,7 +1266,7 @@ pub struct Config {
     pub outbound_bind_addr: Option<IpAddr>,
     /// Path to protect callback unix address, only for Android
     #[cfg(target_os = "android")]
-    pub outbound_vpn_protect_path: Option<PathBuf>,
+    pub outbound_vpn_protect_path: Option<shadowsocks::net::VpnProtectPath>,
 
     /// Set `SO_SNDBUF` for inbound sockets
     pub inbound_send_buffer_size: Option<u32>,
