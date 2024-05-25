@@ -258,7 +258,7 @@ fn get_sock_type(fd: i32) -> Result<String, String> {
 fn sockaddr_storage_to_socket_addr(storage: &libc::sockaddr_storage, addr_len: libc::socklen_t) -> String {
     if storage.ss_family == libc::AF_INET as libc::sa_family_t {
         let s = unsafe { &*(storage as *const libc::sockaddr_storage as *const libc::sockaddr_in) };
-        let addr = std::net::Ipv4Addr::from(s.sin_addr.s_addr);
+        let addr = std::net::Ipv4Addr::from(u32::from_be(s.sin_addr.s_addr));
         let port = u16::from_be(s.sin_port);
         format!("{}:{}", addr, port)
     } else if storage.ss_family == libc::AF_INET6 as libc::sa_family_t {

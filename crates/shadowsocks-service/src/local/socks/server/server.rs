@@ -139,8 +139,9 @@ impl SocksTcpServer {
                 http_handler: http_handler.clone(),
             };
 
+            let canceler = canceler.clone();
             tokio::spawn(async move {
-                if let Err(err) = handler.handle_tcp_client().await {
+                if let Err(err) = handler.handle_tcp_client(canceler).await {
                     error!("socks5 tcp client handler error: {}", err);
                 }
             }.in_current_span());
@@ -174,7 +175,7 @@ impl SocksTcpHandler {
     }
 
     #[cfg(any(feature = "local-socks4", feature = "local-http"))]
-    async fn handle_tcp_client(self) -> io::Result<()> {
+    async fn handle_tcp_client(self, canceler: Arc<shadowsocks::canceler::Canceler>) -> io::Result<()> {
         use std::io::ErrorKind;
 
         let mut version_buffer = [0u8; 1];
@@ -204,7 +205,7 @@ impl SocksTcpHandler {
             #[cfg(feature = "local-http")]
             b'G' | b'g' | b'H' | b'h' | b'P' | b'p' | b'D' | b'd' | b'C' | b'c' | b'O' | b'o' | b'T' | b't' => {
                 // GET, HEAD, POST, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH
-                match self.http_handler.serve_connection(self.stream, self.peer_addr).await {
+                match self.http_handler.serve_connection(self.stream, self.peer_addr, canceler).await {
                     Ok(..) => Ok(()),
                     Err(err) => {
                         error!("HTTP connection {} handler failed with error: {}", self.peer_addr, err);

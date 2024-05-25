@@ -10,7 +10,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     time,
 };
-use tracing::{error, info, trace, Instrument};
+use tracing::{error, info, info_span, trace, Instrument};
 
 use crate::local::{
     context::ServiceContext, loadbalancing::PingBalancer, net::tcp::listener::create_standard_tcp_listener,
@@ -133,19 +133,25 @@ impl Http {
             trace!("HTTP accepted client from {}", peer_addr);
             let handler = handler.clone();
             let canceler = canceler.clone();
-            tokio::spawn(async move {
-                let mut cancel_waiter = canceler.waiter();
-                tokio::select! {
-                    r = handler.serve_connection(stream, peer_addr) => {
-                        if let Err(err) = r {
-                            error!("HTTP connection {} handler failed with error: {}", peer_addr, err);
+            tokio::spawn(
+                async move {
+                    let mut cancel_waiter = canceler.waiter();
+                    tokio::select! {
+                        r = handler.serve_connection(stream, peer_addr, canceler) => {
+                            if let Err(err) = r {
+                                error!("HTTP connection {} handler failed with error: {}", peer_addr, err);
+                            }
+                            else {
+                                trace!("HTTP connection completed");
+                            }
                         }
+                        _ = cancel_waiter.wait() => {
+                            trace!("HTTP connection canceled");
+                        },
                     }
-                    _ = cancel_waiter.wait() => {
-                        trace!("HTTP connection {} canceled", peer_addr);
-                    },
                 }
-            }.in_current_span());
+                .instrument(info_span!("tcp", local=?peer_addr)),
+            );
         }
     }
 }
@@ -171,7 +177,7 @@ impl HttpConnectionHandler {
     }
 
     /// Handle a TCP HTTP connection
-    pub async fn serve_connection<S>(self, stream: S, peer_addr: SocketAddr) -> hyper::Result<()>
+    pub async fn serve_connection<S>(self, stream: S, peer_addr: SocketAddr, canceler: Arc<Canceler>) -> hyper::Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -193,7 +199,7 @@ impl HttpConnectionHandler {
                 io,
                 service::service_fn(move |req| {
                     HttpService::new(context.clone(), peer_addr, http_client.clone(), balancer.clone())
-                        .serve_connection(req)
+                        .serve_connection(req, canceler.clone())
                 }),
             )
             .with_upgrades()

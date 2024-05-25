@@ -118,7 +118,7 @@ async fn process_incoming(
     match request {
         RequestHeader::TcpConnect(_, addr) => {
             let addr = ServerAddr::from(addr);
-            let span = info_span!("connection", target = addr.to_string());
+            let span = info_span!("tcp", local=?peer_addr);
             stream::serve_tcp(
                 incoming,
                 peer_addr,
@@ -140,7 +140,7 @@ async fn process_incoming(
                 #[cfg(feature = "statistics")]
                 bu_context,
             )
-            .instrument(info_span!("udp-session"))
+            .instrument(info_span!("udp", local=?peer_addr))
             .await
         }
     }

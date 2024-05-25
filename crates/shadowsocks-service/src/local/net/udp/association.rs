@@ -241,7 +241,7 @@ where
         respond_writer: W,
         server_session_expire_duration: Duration,
     ) -> UdpAssociation<W> {
-        let span = info_span!("udp-session", peer.addr = peer_addr.to_string());
+        let span = info_span!("udp", local = ?peer_addr);
         let sender = UdpAssociationContext::create(
             context,
             peer_addr,

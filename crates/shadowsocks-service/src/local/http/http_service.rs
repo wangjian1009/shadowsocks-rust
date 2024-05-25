@@ -10,14 +10,14 @@ use hyper::{
     http::uri::{Authority, Scheme},
     HeaderMap, Method, Request, Response, StatusCode, Uri, Version,
 };
-use shadowsocks::{relay::Address, transport::AsyncPing};
-use tracing::{debug, error, trace, Instrument};
+use shadowsocks::{canceler::Canceler, relay::Address, transport::AsyncPing};
+use tracing::{debug, error, info_span, trace, Instrument};
 
 use crate::local::{
     context::ServiceContext,
     http::{http_client::HttpClientError, tokio_rt::TokioIo},
-    loadbalancing::PingBalancer,
-    net::AutoProxyIo,
+    loadbalancing::{PingBalancer, ServerIdent},
+    net::{AutoProxyClientStream, AutoProxyIo},
     utils::{establish_tcp_tunnel, establish_tcp_tunnel_bypassed},
 };
 
@@ -53,6 +53,7 @@ impl HttpService {
     pub async fn serve_connection(
         self,
         mut req: Request<body::Incoming>,
+        canceler: Arc<Canceler>,
     ) -> hyper::Result<Response<BoxBody<Bytes, hyper::Error>>> {
         trace!("request {} {:?}", self.peer_addr, req);
 
@@ -78,72 +79,10 @@ impl HttpService {
         };
 
         if req.method() == Method::CONNECT {
-            // Establish a TCP tunnel
-            // https://tools.ietf.org/html/draft-luotonen-web-proxy-tunneling-01
-
-            debug!("HTTP CONNECT {}", host);
-
-            // Connect to Shadowsocks' remote
-            //
-            // FIXME: What STATUS should I return for connection error?
-            let (mut stream, server_opt) = match connect_host(&self.context, &host, &self.balancer).await {
-                Ok(s) => s,
-                Err(err) => {
-                    error!("failed to CONNECT host: {}, error: {}", host, err);
-                    return make_internal_server_error();
-                }
-            };
-
-            debug!(
-                "CONNECT relay connected {} <-> {} ({})",
-                self.peer_addr,
-                host,
-                if stream.is_bypassed() { "bypassed" } else { "proxied" }
-            );
-
-            let client_addr = self.peer_addr;
-            let context = self.context.clone();
-            tokio::spawn(
-                async move {
-                    match hyper::upgrade::on(req).await {
-                        Ok(upgraded) => {
-                            trace!("CONNECT tunnel upgrade success, {} <-> {}", client_addr, host);
-
-                            let mut upgraded_io = TokioIo::new(upgraded);
-
-                            let _ = match server_opt {
-                                Some(server) => {
-                                    establish_tcp_tunnel(
-                                        context.as_ref(),
-                                        server.server_config(),
-                                        upgraded_io,
-                                        &mut stream,
-                                        client_addr,
-                                        &host,
-                                    )
-                                    .await
-                                }
-                                None => {
-                                    establish_tcp_tunnel_bypassed(
-                                        &mut upgraded_io,
-                                        &mut stream,
-                                        client_addr,
-                                        &host,
-                                        None,
-                                    )
-                                    .await
-                                }
-                            };
-                        }
-                        Err(err) => {
-                            error!("failed to upgrade CONNECT request, error: {}", err);
-                        }
-                    }
-                }
-                .in_current_span(),
-            );
-
-            return Ok(Response::new(empty_body()));
+            return self
+                .serve_connection_upgrade(req, host, canceler)
+                .instrument(info_span!("tunnel"))
+                .await;
         }
 
         // Traditional HTTP Proxy request
@@ -191,6 +130,102 @@ impl HttpService {
         debug!("HTTP {} relay {} <-> {} finished", method, self.peer_addr, host);
 
         Ok(res.map(|b| b.boxed()))
+    }
+
+    pub async fn serve_connection_upgrade(
+        self,
+        req: Request<body::Incoming>,
+        host: Address,
+        canceler: Arc<Canceler>,
+    ) -> hyper::Result<Response<BoxBody<Bytes, hyper::Error>>> {
+        // Establish a TCP tunnel
+        // https://tools.ietf.org/html/draft-luotonen-web-proxy-tunneling-01
+
+        debug!("HTTP CONNECT {}", host);
+
+        // Connect to Shadowsocks' remote
+        //
+        // FIXME: What STATUS should I return for connection error?
+        let (stream, server_opt) = match connect_host(&self.context, &host, &self.balancer).await {
+            Ok(s) => s,
+            Err(err) => {
+                error!("failed to CONNECT host: {}, error: {}", host, err);
+                return make_internal_server_error();
+            }
+        };
+
+        debug!(
+            "CONNECT relay connected {} <-> {} ({})",
+            self.peer_addr,
+            host,
+            if stream.is_bypassed() { "bypassed" } else { "proxied" }
+        );
+
+        let span = if stream.is_bypassed() {
+            info_span!("bypass")
+        } else {
+            let svr_cfg = server_opt.as_ref().unwrap().server_config();
+            info_span!(
+                "proxied",
+                router = svr_cfg.addr().to_string(),
+                proto = svr_cfg.protocol().name(),
+            )
+        };
+
+        let client_addr = self.peer_addr;
+        let context = self.context.clone();
+        let mut cancel_waiter = canceler.waiter();
+        tokio::spawn(
+            async move {
+                tokio::select! {
+                    _ = Self::serve_connection_upgrade_copy(context, req, client_addr, host, stream, server_opt) => {
+                    }
+                    _ = cancel_waiter.wait() => {
+                        tracing::info!("canceled");
+                    }
+                }
+            }
+            .instrument(span),
+        );
+
+        return Ok(Response::new(empty_body()));
+    }
+
+    pub async fn serve_connection_upgrade_copy(
+        context: Arc<ServiceContext>,
+        req: Request<body::Incoming>,
+        client_addr: SocketAddr,
+        host: Address,
+        mut stream: AutoProxyClientStream,
+        server_opt: Option<Arc<ServerIdent>>,
+    ) {
+        match hyper::upgrade::on(req).await {
+            Ok(upgraded) => {
+                trace!("CONNECT tunnel upgrade success");
+
+                let mut upgraded_io = TokioIo::new(upgraded);
+
+                let _ = match server_opt {
+                    Some(server) => {
+                        establish_tcp_tunnel(
+                            context.as_ref(),
+                            server.server_config(),
+                            upgraded_io,
+                            &mut stream,
+                            client_addr,
+                            &host,
+                        )
+                        .await
+                    }
+                    None => {
+                        establish_tcp_tunnel_bypassed(&mut upgraded_io, &mut stream, client_addr, &host, None).await
+                    }
+                };
+            }
+            Err(err) => {
+                error!("failed to upgrade CONNECT request, error: {}", err);
+            }
+        }
     }
 }
 

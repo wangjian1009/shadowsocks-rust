@@ -620,6 +620,6 @@ async fn handle_redir_client(
     }
     let target_addr = Address::from(daddr);
     establish_client_tcp_redir(context, canceler, balancer, s, peer_addr, &target_addr)
-        .instrument(info_span!("tcp", target = ?target_addr))
+        .instrument(info_span!("tcp", local=?peer_addr))
         .await
 }
