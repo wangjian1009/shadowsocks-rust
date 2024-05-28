@@ -11,12 +11,7 @@ use cfg_if::cfg_if;
 
 use pin_project::pin_project;
 use shadowsocks::{
-    context::SharedContext,
-    create_connector_then,
-    net::{ConnectOpts, FlowStat},
-    relay::{socks5::Address, tcprelay::proxy_stream::ProxyClientStream},
-    transport::{DeviceOrGuard, RateLimitedStream, StreamConnection, AsyncPing},
-    ServerAddr,
+    canceler::Canceler, context::SharedContext, create_connector_then, net::{ConnectOpts, FlowStat}, relay::{socks5::Address, tcprelay::proxy_stream::ProxyClientStream}, transport::{AsyncPing, DeviceOrGuard, RateLimitedStream, StreamConnection}, ServerAddr
 };
 
 #[cfg(feature = "rate-limit")]
@@ -83,16 +78,17 @@ impl AutoProxyClientStream {
         context: &Arc<ServiceContext>,
         server: &ServerIdent,
         addr: &Address,
+        canceler: &Canceler,
     ) -> io::Result<AutoProxyClientStream> {
         #[cfg(feature = "local-fake-mode")]
         if context.fake_mode().is_bypass() {
-            return AutoProxyClientStream::connect_bypassed(context, addr)
+            return AutoProxyClientStream::connect_bypassed(context, addr, canceler)
                 .instrument(info_span!("bypass", reason = "fake"))
                 .await;
         }
 
-        if context.check_target_bypassed(addr).instrument(info_span!("acl")).await {
-            AutoProxyClientStream::connect_bypassed(context, addr)
+        if context.check_target_bypassed(addr, canceler).instrument(info_span!("acl")).await {
+            AutoProxyClientStream::connect_bypassed(context, addr, canceler)
                 .instrument(info_span!("bypass", reason = "acl"))
                 .await
         } else {
@@ -113,19 +109,20 @@ impl AutoProxyClientStream {
                     )
                 }
             };
-            AutoProxyClientStream::connect_proxied(context, server, addr)
+            AutoProxyClientStream::connect_proxied(context, server, addr, canceler)
                 .instrument(span)
                 .await
         }
     }
 
     /// Connect directly to target `addr`
-    pub async fn connect_bypassed(context: &ServiceContext, addr: &Address) -> io::Result<AutoProxyClientStream> {
+    pub async fn connect_bypassed(context: &ServiceContext, addr: &Address, canceler: &Canceler) -> io::Result<AutoProxyClientStream> {
         // Connect directly.
         let stream = shadowsocks::net::TcpStream::connect_remote_with_opts(
             context.context_ref(),
             ServerAddr::from(addr.clone()),
             context.connect_opts_ref(),
+            canceler, 
         )
         .await?;
 
@@ -140,6 +137,7 @@ impl AutoProxyClientStream {
         context: &Arc<ServiceContext>,
         server: &ServerIdent,
         addr: &Address,
+        canceler: &Canceler,
     ) -> io::Result<AutoProxyClientStream> {
         match Self::connect_proxied_no_score(
             context.context(),
@@ -148,6 +146,7 @@ impl AutoProxyClientStream {
             addr,
             Some(context.flow_stat()),
             Some(context.connection_close_notify()),
+            canceler,
             #[cfg(feature = "rate-limit")]
             Some(context.rate_limiter()),
             #[cfg(feature = "local-fake-mode")]
@@ -171,6 +170,7 @@ impl AutoProxyClientStream {
         addr: &Address,
         flow_stat: Option<Arc<FlowStat>>,
         connection_close_notify: Option<Arc<Notify>>,
+        canceler: &Canceler,
         #[cfg(feature = "rate-limit")] rate_limit: Option<Arc<RateLimiter>>,
         #[cfg(feature = "local-fake-mode")] fake_mode: FakeMode,
     ) -> io::Result<AutoProxyClientStream> {
@@ -208,6 +208,7 @@ impl AutoProxyClientStream {
                                 Box::new(stream) as Box<dyn StreamConnection>
                             }
                         },
+                        canceler,
                     )
                     .await?;
                     Ok(AutoProxyClientStream {
@@ -245,6 +246,7 @@ impl AutoProxyClientStream {
                                 Box::new(stream) as Box<dyn StreamConnection>
                             }
                         },
+                        canceler,
                     )
                     .await?;
                     Ok(AutoProxyClientStream {
@@ -283,6 +285,7 @@ impl AutoProxyClientStream {
                                 Box::new(stream) as Box<dyn StreamConnection>
                             }
                         },
+                        canceler,
                     )
                     .await?;
                     Ok(AutoProxyClientStream {

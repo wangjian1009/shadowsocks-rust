@@ -19,7 +19,7 @@ use once_cell::sync::Lazy;
 use regex::bytes::{Regex, RegexBuilder, RegexSet, RegexSetBuilder};
 use tracing::{trace, warn};
 
-use shadowsocks::{context::Context, ServerAddr};
+use shadowsocks::{canceler::Canceler, context::Context, ServerAddr};
 
 use self::sub_domains_tree::SubDomainsTree;
 
@@ -526,7 +526,7 @@ impl AccessControl {
     /// Check if target address should be bypassed (for client)
     ///
     /// This function may perform a DNS resolution
-    pub async fn check_target_bypassed(&self, context: &Context, addr: &ServerAddr) -> bool {
+    pub async fn check_target_bypassed(&self, context: &Context, addr: &ServerAddr, canceler: &Canceler) -> bool {
         match *addr {
             ServerAddr::SocketAddr(ref addr) => !self.check_ip_in_proxy_list(&addr.ip()),
             // Resolve hostname and check the list
@@ -537,7 +537,7 @@ impl AccessControl {
                 if self.is_ip_empty() {
                     return !self.is_default_in_proxy_list();
                 }
-                if let Ok(vaddr) = context.dns_resolve(host, port).await {
+                if let Ok(vaddr) = context.dns_resolve(host, port, canceler).await {
                     for addr in vaddr {
                         if !self.check_ip_in_proxy_list(&addr.ip()) {
                             return true;
@@ -567,7 +567,7 @@ impl AccessControl {
     ///
     /// NOTE: `Address::DomainName` is only validated by regex rules,
     ///       resolved addresses are checked in the `lookup_outbound_then!` macro
-    pub async fn check_outbound_blocked(&self, context: &Context, outbound: &ServerAddr) -> bool {
+    pub async fn check_outbound_blocked(&self, context: &Context, outbound: &ServerAddr, canceler: &Canceler) -> bool {
         match outbound {
             ServerAddr::SocketAddr(saddr) => self.outbound_block.check_ip_matched(&saddr.ip()),
             ServerAddr::DomainName(host, port) => {
@@ -575,7 +575,7 @@ impl AccessControl {
                     return true;
                 }
 
-                if let Ok(vaddr) = context.dns_resolve(host, *port).await {
+                if let Ok(vaddr) = context.dns_resolve(host, *port, canceler).await {
                     for addr in vaddr {
                         if self.outbound_block.check_ip_matched(&addr.ip()) {
                             return true;

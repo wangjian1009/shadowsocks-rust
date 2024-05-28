@@ -9,11 +9,7 @@ use tokio::{
 };
 
 use crate::{
-    config::{ServerAddr, ServerConfig, ServerUserManager, ShadowsocksConfig},
-    context::SharedContext,
-    crypto::CipherKind,
-    net::{AcceptOpts, TcpListener},
-    relay::tcprelay::proxy_stream::server::ProxyServerStream,
+    canceler::Canceler, config::{ServerAddr, ServerConfig, ServerUserManager, ShadowsocksConfig}, context::SharedContext, crypto::CipherKind, net::{AcceptOpts, TcpListener}, relay::tcprelay::proxy_stream::server::ProxyServerStream
 };
 
 /// A TCP listener for accepting shadowsocks' client connection
@@ -33,8 +29,9 @@ impl ProxyListener {
         context: SharedContext,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
+        canceler: &Canceler,
     ) -> io::Result<ProxyListener> {
-        ProxyListener::bind_with_opts(context, svr_cfg, svr_ss_cfg, DEFAULT_ACCEPT_OPTS.clone()).await
+        ProxyListener::bind_with_opts(context, svr_cfg, svr_ss_cfg, DEFAULT_ACCEPT_OPTS.clone(), canceler).await
     }
 
     /// Create a `ProxyListener` binding to a specific address with opts
@@ -43,11 +40,12 @@ impl ProxyListener {
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
         accept_opts: AcceptOpts,
+        canceler: &Canceler,
     ) -> io::Result<ProxyListener> {
         let listener = match svr_cfg.tcp_external_addr() {
             ServerAddr::SocketAddr(sa) => TcpListener::bind_with_opts(sa, accept_opts).await?,
             ServerAddr::DomainName(domain, port) => {
-                lookup_then!(&context, domain, *port, |addr| {
+                lookup_then!(&context, domain, *port, canceler, |addr| {
                     TcpListener::bind_with_opts(&addr, accept_opts.clone()).await
                 })?
                 .1

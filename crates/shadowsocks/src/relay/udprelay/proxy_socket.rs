@@ -16,11 +16,7 @@ use tokio::{io::ReadBuf, net::ToSocketAddrs, time};
 use tracing::{info, trace, warn};
 
 use crate::{
-    config::{ServerAddr, ServerConfig, ServerUserManager, ShadowsocksConfig},
-    context::SharedContext,
-    crypto::CipherKind,
-    net::{AcceptOpts, ConnectOpts, UdpSocket as ShadowUdpSocket},
-    relay::{udprelay::options::UdpSocketControlData, Address},
+    canceler::Canceler, config::{ServerAddr, ServerConfig, ServerUserManager, ShadowsocksConfig}, context::SharedContext, crypto::CipherKind, net::{AcceptOpts, ConnectOpts, UdpSocket as ShadowUdpSocket}, relay::{udprelay::options::UdpSocketControlData, Address}
 };
 
 use super::crypto_io::{
@@ -91,8 +87,9 @@ impl ProxySocket {
         context: SharedContext,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
+        canceler: &Canceler,
     ) -> ProxySocketResult<ProxySocket> {
-        ProxySocket::connect_with_opts(context, svr_cfg, svr_ss_cfg, &DEFAULT_CONNECT_OPTS)
+        ProxySocket::connect_with_opts(context, svr_cfg, svr_ss_cfg, &DEFAULT_CONNECT_OPTS, canceler)
             .await
             .map_err(Into::into)
     }
@@ -103,10 +100,11 @@ impl ProxySocket {
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
         opts: &ConnectOpts,
+        canceler: &Canceler,
     ) -> ProxySocketResult<ProxySocket> {
         // Note: Plugins doesn't support UDP relay
 
-        let socket = ShadowUdpSocket::connect_server_with_opts(&context, svr_cfg.udp_external_addr(), opts).await?;
+        let socket = ShadowUdpSocket::connect_server_with_opts(&context, svr_cfg.udp_external_addr(), opts, canceler).await?;
 
         trace!(
             "connected udp remote {} (outbound: {}) with {:?}",
@@ -162,8 +160,9 @@ impl ProxySocket {
         context: SharedContext,
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
+        canceler: &Canceler,
     ) -> ProxySocketResult<ProxySocket> {
-        ProxySocket::bind_with_opts(context, svr_cfg, svr_ss_cfg, AcceptOpts::default())
+        ProxySocket::bind_with_opts(context, svr_cfg, svr_ss_cfg, AcceptOpts::default(), canceler)
             .await
             .map_err(Into::into)
     }
@@ -174,12 +173,13 @@ impl ProxySocket {
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
         opts: AcceptOpts,
+        canceler: &Canceler,
     ) -> ProxySocketResult<ProxySocket> {
         // Plugins doesn't support UDP
         let socket = match svr_cfg.udp_external_addr() {
             ServerAddr::SocketAddr(sa) => ShadowUdpSocket::listen_with_opts(sa, opts).await?,
             ServerAddr::DomainName(domain, port) => {
-                lookup_then!(&context, domain, *port, |addr| {
+                lookup_then!(&context, domain, *port, canceler, |addr| {
                     ShadowUdpSocket::listen_with_opts(&addr, opts.clone()).await
                 })?
                 .1

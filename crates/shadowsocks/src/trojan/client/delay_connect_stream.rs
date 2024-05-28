@@ -15,6 +15,7 @@ use tracing::error;
 
 use crate::{
     config::ServerConfig,
+    canceler::Canceler,
     net::ConnectOpts,
     transport::{AsyncPing, Connector, DeviceOrGuard, StreamConnection},
     ServerAddr,
@@ -65,12 +66,13 @@ impl<S: StreamConnection> DelayConnectStream<S> {
         addr: ServerAddr,
         opts: &ConnectOpts,
         map_fn: F,
+        canceler: &Canceler,
     ) -> io::Result<DelayConnectStream<S>>
     where
         C: Connector,
         F: FnOnce(C::TS) -> S,
     {
-        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.tcp_external_addr(), opts)).await
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.tcp_external_addr(), opts, canceler)).await
         {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {

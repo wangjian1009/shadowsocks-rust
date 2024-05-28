@@ -16,6 +16,7 @@ use tokio::{
 
 use shadowsocks::{
     lookup_then,
+    canceler::Canceler,
     net::{AddrFamily, FlowStat, TcpStream, UdpSocket},
     policy::{self, StreamAction},
     timeout::TimeoutTicker,
@@ -460,10 +461,10 @@ impl policy::UdpSocket for OutgoingUdpSocket {
         }
     }
 
-    async fn send_to(&self, buf: &[u8], addr: ServerAddr) -> io::Result<()> {
+    async fn send_to(&self, buf: &[u8], addr: ServerAddr, canceler: &Canceler) -> io::Result<()> {
         match addr {
             ServerAddr::SocketAddr(sa) => self.send_to_sock_addr(sa, buf).await,
-            ServerAddr::DomainName(ref dname, port) => lookup_then!(self.context.context_ref(), dname, port, |sa| {
+            ServerAddr::DomainName(ref dname, port) => lookup_then!(self.context.context_ref(), dname, port, canceler, |sa| {
                 self.send_to_sock_addr(sa, buf).await
             })
             .map(|_| ()),

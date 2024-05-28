@@ -10,7 +10,7 @@ mod resolver;
 /// Helper macro for resolving host and then process each addresses
 #[macro_export]
 macro_rules! lookup_then {
-    ($context:expr, $addr:expr, $port:expr, |$resolved_addr:ident| $body:block) => {{
+    ($context:expr, $addr:expr, $port:expr, $canceler:expr, |$resolved_addr:ident| $body:block) => {{
         use std::net::SocketAddr;
 
         let ipv6_first = $context.ipv6_first();
@@ -18,7 +18,7 @@ macro_rules! lookup_then {
         let mut v4_addrs = Vec::new();
         let mut v6_addrs = Vec::new();
 
-        for addr in $context.dns_resolve($addr, $port).await? {
+        for addr in $context.dns_resolve($addr, $port, $canceler).await? {
             match addr {
                 SocketAddr::V4(..) => v4_addrs.push(addr),
                 SocketAddr::V6(..) => v6_addrs.push(addr),
@@ -70,7 +70,7 @@ macro_rules! lookup_then {
 
 #[macro_export]
 macro_rules! lookup_then_connect {
-    ($context:expr, $addr:expr, $port:expr, |$resolved_addr:ident| $body:block) => {{
+    ($context:expr, $addr:expr, $port:expr, $canceler:expr, |$resolved_addr:ident| $body:block) => {{
         use futures::future::{self, Either};
         use std::{net::SocketAddr, time::Duration};
         use tokio::time;
@@ -81,7 +81,7 @@ macro_rules! lookup_then_connect {
         let mut v4_addrs = Vec::new();
         let mut v6_addrs = Vec::new();
 
-        for addr in $context.dns_resolve($addr, $port).await? {
+        for addr in $context.dns_resolve($addr, $port, $canceler).await? {
             match addr {
                 SocketAddr::V4(..) => v4_addrs.push(addr),
                 SocketAddr::V6(..) => v6_addrs.push(addr),

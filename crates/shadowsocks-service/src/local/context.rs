@@ -9,11 +9,7 @@ use std::{net::IpAddr, time::Duration};
 #[cfg(feature = "local-dns")]
 use lru_time_cache::LruCache;
 use shadowsocks::{
-    config::ServerType,
-    context::{Context, SharedContext},
-    dns_resolver::DnsResolver,
-    net::{AcceptOpts, ConnectOpts, FlowStat},
-    relay::Address,
+    canceler::Canceler, config::ServerType, context::{Context, SharedContext}, dns_resolver::DnsResolver, net::{AcceptOpts, ConnectOpts, FlowStat}, relay::Address
 };
 #[cfg(feature = "local-dns")]
 use tokio::sync::Mutex;
@@ -174,7 +170,7 @@ impl ServiceContext {
     }
 
     /// Check if target should be bypassed
-    pub async fn check_target_bypassed(&self, addr: &Address) -> bool {
+    pub async fn check_target_bypassed(&self, addr: &Address, canceler: &Canceler) -> bool {
         match self.acl {
             None => false,
             Some(ref acl) => {
@@ -190,7 +186,7 @@ impl ServiceContext {
                     }
                 }
 
-                acl.check_target_bypassed(&self.context, &ServerAddr::from(addr.clone()))
+                acl.check_target_bypassed(&self.context, &ServerAddr::from(addr.clone()), canceler)
                     .await
             }
         }

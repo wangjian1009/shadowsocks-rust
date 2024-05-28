@@ -582,7 +582,7 @@ async fn establish_client_tcp_redir<'a>(
     addr: &Address,
 ) -> io::Result<()> {
     if balancer.is_empty() {
-        let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), addr).await?;
+        let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), addr, canceler.as_ref()).await?;
         return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, addr, None).await;
     }
 
@@ -590,7 +590,7 @@ async fn establish_client_tcp_redir<'a>(
     let svr_cfg = server.server_config();
     let mut waiter = canceler.waiter();
 
-    let mut remote = AutoProxyClientStream::connect(&context, server.as_ref(), addr).await?;
+    let mut remote = AutoProxyClientStream::connect(&context, server.as_ref(), addr, canceler.as_ref()).await?;
     tracing::info!("connect successed");
 
     tokio::select! {

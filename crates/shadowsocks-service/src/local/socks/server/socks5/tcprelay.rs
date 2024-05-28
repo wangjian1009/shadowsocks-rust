@@ -8,13 +8,10 @@ use std::{
 };
 
 use shadowsocks::{
-    config::Mode,
-    relay::socks5::{
+    canceler::Canceler, config::Mode, relay::socks5::{
         self, Address, Command, Error as Socks5Error, HandshakeRequest, HandshakeResponse, PasswdAuthRequest,
         PasswdAuthResponse, Reply, TcpRequestHeader, TcpResponseHeader,
-    },
-    transport::StreamConnection,
-    ServerAddr,
+    }, transport::StreamConnection, ServerAddr
 };
 use tokio::net::TcpStream;
 use tracing::{error, info_span, trace, warn, Instrument};
@@ -170,7 +167,7 @@ impl Socks5TcpHandler {
         }
     }
 
-    pub async fn handle_socks5_client(self, mut stream: TcpStream, peer_addr: SocketAddr) -> io::Result<()> {
+    pub async fn handle_socks5_client(self, mut stream: TcpStream, peer_addr: SocketAddr, canceler: &Canceler) -> io::Result<()> {
         // 1. Handshake
 
         let handshake_req = match HandshakeRequest::read_from(&mut stream).await {
@@ -207,7 +204,7 @@ impl Socks5TcpHandler {
         match header.command {
             Command::TcpConnect => {
                 let span = info_span!("tcp", target = addr.to_string());
-                self.handle_tcp_connect(stream, peer_addr, addr).instrument(span).await
+                self.handle_tcp_connect(stream, peer_addr, addr, canceler).instrument(span).await
             }
             Command::UdpAssociate => self.handle_udp_associate(stream, addr).await,
             Command::TcpBind => {
@@ -225,6 +222,7 @@ impl Socks5TcpHandler {
         #[allow(unused_mut)] mut stream: TcpStream,
         peer_addr: SocketAddr,
         target_addr: Address,
+        canceler: &Canceler,
     ) -> io::Result<()> {
         if !self.mode.enable_tcp() {
             warn!("TCP CONNECT is disabled");
@@ -239,7 +237,7 @@ impl Socks5TcpHandler {
             if self.balancer.is_empty() {
                 let span = info_span!("bypass");
                 (
-                    AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &target_addr)
+                    AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &target_addr, canceler)
                         .instrument(span.clone())
                         .await,
                     None,
@@ -255,7 +253,7 @@ impl Socks5TcpHandler {
                 );
 
                 (
-                    AutoProxyClientStream::connect(&self.context, &server, &target_addr)
+                    AutoProxyClientStream::connect(&self.context, &server, &target_addr, canceler)
                         .instrument(span.clone())
                         .await,
                     Some(server),

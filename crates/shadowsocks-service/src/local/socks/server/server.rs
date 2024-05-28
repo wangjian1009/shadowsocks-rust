@@ -53,7 +53,7 @@ impl SocksTcpServerBuilder {
         self.launchd_socket_name = Some(n);
     }
 
-    pub async fn build(self) -> io::Result<SocksTcpServer> {
+    pub async fn build(self, canceler: &Canceler) -> io::Result<SocksTcpServer> {
         cfg_if::cfg_if! {
             if #[cfg(target_os = "macos")] {
                 let listener = if let Some(launchd_socket_name) = self.launchd_socket_name {
@@ -64,10 +64,10 @@ impl SocksTcpServerBuilder {
                     let tokio_listener = TokioTcpListener::from_std(std_listener)?;
                     ShadowTcpListener::from_listener(tokio_listener, self.context.accept_opts())?
                 } else {
-                    create_standard_tcp_listener(&self.context, &self.client_config).await?
+                    create_standard_tcp_listener(&self.context, &self.client_config, canceler).await?
                 };
             } else {
-                let listener = create_standard_tcp_listener(&self.context, &self.client_config).await?;
+                let listener = create_standard_tcp_listener(&self.context, &self.client_config, canceler).await?;
             }
         }
 
@@ -188,7 +188,7 @@ impl SocksTcpHandler {
             #[cfg(feature = "local-socks4")]
             0x04 => {
                 let handler = Socks4TcpHandler::new(self.context, self.balancer, self.mode);
-                handler.handle_socks4_client(self.stream, self.peer_addr).await
+                handler.handle_socks4_client(self.stream, self.peer_addr, canceler.as_ref()).await
             }
 
             0x05 => {
@@ -199,7 +199,7 @@ impl SocksTcpHandler {
                     self.mode,
                     self.socks5_auth,
                 );
-                handler.handle_socks5_client(self.stream, self.peer_addr).await
+                handler.handle_socks5_client(self.stream, self.peer_addr, canceler.as_ref()).await
             }
 
             #[cfg(feature = "local-http")]

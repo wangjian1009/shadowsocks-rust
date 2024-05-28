@@ -307,6 +307,7 @@ impl UdpServer {
         context: &ServiceContext,
         l: &MonProxySocket,
         buffer: &mut [u8],
+        cancceler: &Canceler,
         #[cfg(feature = "statistics")] bu_context: &shadowsocks::statistics::BuContext,
     ) -> Option<(usize, SocketAddr, ServerAddr, Option<UdpSocketControlData>)> {
         let (n, peer_addr, target_addr, control) = match l.recv_from_with_ctrl(buffer).await {
@@ -344,7 +345,7 @@ impl UdpServer {
             return None;
         }
 
-        if context.check_outbound_blocked(&target_addr).await {
+        if context.check_outbound_blocked(&target_addr, cancceler).await {
             warn!("udp client {} outbound {} blocked by ACL rules", peer_addr, target_addr);
             return None;
         }
@@ -722,10 +723,10 @@ impl UdpAssociationContext {
         }
     }
 
-    async fn dispatch_received_outbound_packet(&mut self, target_addr: &ServerAddr, data: &[u8]) -> io::Result<()> {
+    async fn dispatch_received_outbound_packet(&mut self, target_addr: &ServerAddr, data: &[u8], canceler: &Canceler) -> io::Result<()> {
         match *target_addr {
             ServerAddr::SocketAddr(sa) => self.send_received_outbound_packet(sa, data).await,
-            ServerAddr::DomainName(ref dname, port) => lookup_then!(self.context.context_ref(), dname, port, |sa| {
+            ServerAddr::DomainName(ref dname, port) => lookup_then!(self.context.context_ref(), dname, port, canceler, |sa| {
                 self.send_received_outbound_packet(sa, data).await
             })
             .map(|_| ()),

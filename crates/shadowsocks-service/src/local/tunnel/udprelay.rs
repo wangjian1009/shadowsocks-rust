@@ -54,7 +54,7 @@ impl TunnelUdpServerBuilder {
         self.launchd_socket_name = Some(n);
     }
 
-    pub async fn build(self) -> io::Result<TunnelUdpServer> {
+    pub async fn build(self, canceler: &Canceler) -> io::Result<TunnelUdpServer> {
         cfg_if::cfg_if! {
             if #[cfg(target_os = "macos")] {
                 let socket = if let Some(launchd_socket_name) = self.launchd_socket_name {
@@ -64,10 +64,10 @@ impl TunnelUdpServerBuilder {
                     let std_socket = get_launch_activate_udp_socket(&launchd_socket_name, true)?;
                     TokioUdpSocket::from_std(std_socket)?
                 } else {
-                    create_standard_udp_listener(&self.context, &self.client_config).await?.into()
+                    create_standard_udp_listener(&self.context, &self.client_config, canceler).await?.into()
                 };
             } else {
-                let socket = create_standard_udp_listener(&self.context, &self.client_config).await?.into();
+                let socket = create_standard_udp_listener(&self.context, &self.client_config, canceler).await?.into();
             }
         }
 

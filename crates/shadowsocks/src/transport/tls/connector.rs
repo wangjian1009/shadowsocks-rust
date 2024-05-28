@@ -5,7 +5,7 @@ use tokio_rustls::{
     rustls::{pki_types::ServerName, ClientConfig},
 };
 
-use crate::{net::ConnectOpts, rustls_util, ServerAddr};
+use crate::{canceler::Canceler, net::ConnectOpts, rustls_util, ServerAddr};
 
 use super::super::{AsyncPing, Connector, DeviceOrGuard, StreamConnection};
 
@@ -58,8 +58,13 @@ where
 {
     type TS = TlsStream<S>;
 
-    async fn connect(&self, destination: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
-        let stream = self.inner.connect(destination, connect_opts).await?;
+    async fn connect(
+        &self,
+        destination: &ServerAddr,
+        connect_opts: &ConnectOpts,
+        canceler: &Canceler,
+    ) -> io::Result<Self::TS> {
+        let stream = self.inner.connect(destination, connect_opts, canceler).await?;
 
         let server_name = if let Some(sni) = self.sni.as_ref() {
             ServerName::try_from(sni.as_str()).map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?
@@ -73,11 +78,17 @@ where
 
         let tls_connector: tokio_rustls::TlsConnector = self.client_config.clone().into();
 
-        let tls_stream = tls_connector
-            .connect_with(server_name.to_owned(), stream, |client_conn| {
+        let mut waiter = canceler.waiter();
+        let tls_stream = tokio::select! {
+            r = tls_connector.connect_with(server_name.to_owned(), stream, |client_conn| {
                 client_conn.set_buffer_limit(Some(32768));
-            })
-            .await?;
+            }) => {
+                r?
+            }
+            _ = waiter.wait() => {
+                return Err(io::Error::new(io::ErrorKind::Other, "canceled"));
+            }
+        };
 
         Ok(tls_stream)
     }

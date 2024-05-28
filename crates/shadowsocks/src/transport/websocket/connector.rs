@@ -5,7 +5,7 @@ use std::io;
 use tokio::io::AsyncWriteExt;
 use url::Url;
 
-use crate::{net::ConnectOpts, ServerAddr};
+use crate::{canceler::Canceler, net::ConnectOpts, ServerAddr};
 
 use super::{
     super::Connector, config::WebsocketPingType, create_websocket_key_response, parsed_http_data::ParsedHttpData,
@@ -44,8 +44,13 @@ impl<'a, T: Connector> WebSocketConnector<T> {
 impl<T: Connector> Connector for WebSocketConnector<T> {
     type TS = WebsocketStream<T::TS>;
 
-    async fn connect(&self, destination: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
-        let mut client_stream = self.inner.connect(destination, connect_opts).await?;
+    async fn connect(
+        &self,
+        destination: &ServerAddr,
+        connect_opts: &ConnectOpts,
+        canceler: &Canceler,
+    ) -> io::Result<Self::TS> {
+        let mut client_stream = self.inner.connect(destination, connect_opts, canceler).await?;
 
         let authority = self.config.uri.authority();
         let host = authority
@@ -78,14 +83,23 @@ impl<T: Connector> Connector for WebSocketConnector<T> {
 
         http_request.push_str("\r\n\r\n");
 
-        client_stream.write_all(&http_request.into_bytes()).await?;
-        client_stream.flush().await?;
+        let process = async {
+            client_stream.write_all(&http_request.into_bytes()).await?;
+            client_stream.flush().await?;
+            ParsedHttpData::parse(&mut client_stream).await
+        };
 
+        let mut waiter = canceler.waiter();
         let ParsedHttpData {
             first_line,
             headers: response_headers,
             line_reader,
-        } = ParsedHttpData::parse(&mut client_stream).await?;
+        } = tokio::select! {
+            r = process => r?,
+            _ = waiter.wait() => {
+                return Err(std::io::Error::new(std::io::ErrorKind::Other, "canceled"));
+            }
+        };
 
         tracing::trace!(
             "websocket handshake response\n{}{}",

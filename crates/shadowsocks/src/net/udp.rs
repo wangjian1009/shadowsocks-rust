@@ -35,7 +35,7 @@ use pin_project::pin_project;
 use tokio::io::Interest;
 use tokio::{io::ReadBuf, net::ToSocketAddrs};
 
-use crate::{context::Context, relay::socks5::Address, ServerAddr};
+use crate::{canceler::Canceler, context::Context, relay::socks5::Address, ServerAddr};
 
 use super::{
     sys::{bind_outbound_udp_socket, create_inbound_udp_socket, create_outbound_udp_socket},
@@ -92,6 +92,7 @@ impl UdpSocket {
         context: &Context,
         addr: &ServerAddr,
         opts: &ConnectOpts,
+        canceler: &Canceler,
     ) -> io::Result<UdpSocket> {
         let socket = match *addr {
             ServerAddr::SocketAddr(ref remote_addr) => {
@@ -100,7 +101,7 @@ impl UdpSocket {
                 socket
             }
             ServerAddr::DomainName(ref dname, port) => {
-                lookup_then!(context, dname, port, |remote_addr| {
+                lookup_then!(context, dname, port, canceler, |remote_addr| {
                     let s = create_outbound_udp_socket(From::from(&remote_addr), opts).await?;
                     s.connect(remote_addr).await.map(|_| s)
                 })?
@@ -119,13 +120,14 @@ impl UdpSocket {
         context: &Context,
         addr: &ServerAddr,
         opts: &ConnectOpts,
+        canceler: &Canceler,
     ) -> io::Result<(SocketAddr, UdpSocket)> {
         let (remote_addr, socket) = match *addr {
             ServerAddr::SocketAddr(ref remote_addr) => {
                 let socket = create_outbound_udp_socket(From::from(remote_addr), opts).await?;
                 (*remote_addr, socket)
             }
-            ServerAddr::DomainName(ref dname, port) => lookup_then!(context, dname, port, |remote_addr| {
+            ServerAddr::DomainName(ref dname, port) => lookup_then!(context, dname, port, canceler, |remote_addr| {
                 create_outbound_udp_socket(From::from(&remote_addr), opts).await
             })?,
         };
@@ -144,6 +146,7 @@ impl UdpSocket {
         context: &Context,
         addr: &Address,
         opts: &ConnectOpts,
+        canceler: &Canceler,
     ) -> io::Result<UdpSocket> {
         let socket = match *addr {
             Address::SocketAddress(ref remote_addr) => {
@@ -152,7 +155,7 @@ impl UdpSocket {
                 socket
             }
             Address::DomainNameAddress(ref dname, port) => {
-                lookup_then!(context, dname, port, |remote_addr| {
+                lookup_then!(context, dname, port, canceler, |remote_addr| {
                     let s = create_outbound_udp_socket(From::from(&remote_addr), opts).await?;
                     s.connect(remote_addr).await.map(|_| s)
                 })?
@@ -319,10 +322,11 @@ impl UdpSocket {
         context: &Context,
         addr: &ServerAddr,
         accept_opts: AcceptOpts,
+        canceler: &Canceler,
     ) -> io::Result<UdpSocket> {
         match addr {
             ServerAddr::SocketAddr(addr) => Self::listen_with_opts(addr, accept_opts).await,
-            ServerAddr::DomainName(domain, port) => Ok(lookup_then!(context, domain, *port, |addr| {
+            ServerAddr::DomainName(domain, port) => Ok(lookup_then!(context, domain, *port, canceler, |addr| {
                 Self::listen_with_opts(&addr, accept_opts.clone()).await
             })?
             .1),

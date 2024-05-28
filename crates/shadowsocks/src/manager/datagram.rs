@@ -9,9 +9,7 @@ use tokio::net::UdpSocket;
 use tokio::net::{unix::SocketAddr as UnixSocketAddr, UnixDatagram};
 
 use crate::{
-    config::ManagerAddr,
-    context::Context,
-    net::{ConnectOpts, UdpSocket as ShadowUdpSocket},
+    canceler::Canceler, config::ManagerAddr, context::Context, net::{ConnectOpts, UdpSocket as ShadowUdpSocket}
 };
 
 /// Address accepted from Manager
@@ -54,14 +52,14 @@ pub enum ManagerDatagram {
 
 impl ManagerDatagram {
     /// Create a `ManagerDatagram` binding to requested `bind_addr`
-    pub async fn bind(context: &Context, bind_addr: &ManagerAddr) -> io::Result<ManagerDatagram> {
+    pub async fn bind(context: &Context, bind_addr: &ManagerAddr, canceler: &Canceler) -> io::Result<ManagerDatagram> {
         match *bind_addr {
             ManagerAddr::SocketAddr(ref saddr) => Ok(ManagerDatagram::UdpDatagram(
                 ShadowUdpSocket::listen(saddr).await?.into(),
             )),
             ManagerAddr::DomainName(ref dname, port) => {
                 let (_, socket) =
-                    lookup_then!(context, dname, port, |saddr| { ShadowUdpSocket::listen(&saddr).await })?;
+                    lookup_then!(context, dname, port, canceler, |saddr| { ShadowUdpSocket::listen(&saddr).await })?;
 
                 Ok(ManagerDatagram::UdpDatagram(socket.into()))
             }
@@ -82,13 +80,14 @@ impl ManagerDatagram {
         context: &Context,
         bind_addr: &ManagerAddr,
         connect_opts: &ConnectOpts,
+        canceler: &Canceler,
     ) -> io::Result<ManagerDatagram> {
         match *bind_addr {
             ManagerAddr::SocketAddr(sa) => ManagerDatagram::connect_socket_addr(sa, connect_opts).await,
 
             ManagerAddr::DomainName(ref dname, port) => {
                 // Try connect to all socket addresses
-                lookup_then!(context, dname, port, |addr| {
+                lookup_then!(context, dname, port, canceler, |addr| {
                     ManagerDatagram::connect_socket_addr(addr, connect_opts).await
                 })
                 .map(|(_, d)| d)
@@ -172,12 +171,12 @@ impl ManagerDatagram {
     }
 
     /// Sends data on the socket to the specified manager address
-    pub async fn send_to_manager(&mut self, buf: &[u8], context: &Context, target: &ManagerAddr) -> io::Result<usize> {
+    pub async fn send_to_manager(&mut self, buf: &[u8], context: &Context, target: &ManagerAddr, canceler: &Canceler) -> io::Result<usize> {
         match *self {
             ManagerDatagram::UdpDatagram(ref mut udp) => match *target {
                 ManagerAddr::SocketAddr(ref saddr) => udp.send_to(buf, saddr).await,
                 ManagerAddr::DomainName(ref dname, port) => {
-                    let (_, n) = lookup_then!(context, dname, port, |saddr| { udp.send_to(buf, saddr).await })?;
+                    let (_, n) = lookup_then!(context, dname, port, canceler, |saddr| { udp.send_to(buf, saddr).await })?;
                     Ok(n)
                 }
                 #[cfg(unix)]

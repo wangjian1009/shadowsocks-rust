@@ -3,7 +3,7 @@ use cfg_if::cfg_if;
 use std::{io, net::SocketAddr, pin::Pin, task};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::{net::ConnectOpts, ServerAddr};
+use crate::{net::ConnectOpts, ServerAddr, canceler::Canceler};
 
 mod common;
 
@@ -104,7 +104,7 @@ pub trait PacketWrite: PacketMutWrite {
 pub trait Connector: Send + Sync + Unpin + 'static {
     type TS: StreamConnection + 'static;
 
-    async fn connect(&self, addr: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS>;
+    async fn connect(&self, addr: &ServerAddr, connect_opts: &ConnectOpts, canceler: &Canceler) -> io::Result<Self::TS>;
 }
 
 /// Acceptor

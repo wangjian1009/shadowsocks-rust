@@ -396,6 +396,7 @@ impl TcpServer {
                     );
                     let method = ss_cfg.method();
                     let bu_context = bu_context.clone();
+                    let canceler = canceler.clone();
                     tokio::spawn(
                         async move {
                             #[cfg(feature = "statistics")]
@@ -406,6 +407,7 @@ impl TcpServer {
                                     method,
                                     local_stream,
                                     connection_stat.clone(),
+                                    canceler.as_ref(),
                                     #[cfg(feature = "statistics")]
                                     bu_context,
                                 )
@@ -475,6 +477,7 @@ impl TcpServerClient {
         method: CipherKind,
         mut stream: ProxyServerStream<IS>,
         connection_stat: Arc<ConnectionStat>,
+        canceler: &Canceler,
         #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<()>
     where
@@ -596,7 +599,7 @@ impl TcpServerClient {
 
         let mut remote_stream = match timeout_fut(
             self.timeout,
-            self.connector.connect(&target_addr, self.context.connect_opts_ref()),
+            self.connector.connect(&target_addr, self.context.connect_opts_ref(), canceler),
         )
         .await
         {

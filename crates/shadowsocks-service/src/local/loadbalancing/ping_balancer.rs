@@ -17,13 +17,10 @@ use arc_swap::ArcSwap;
 use byte_string::ByteStr;
 use futures::future;
 use shadowsocks::{
-    config::{Mode, ServerProtocol, ShadowsocksConfig},
-    plugin::{Plugin, PluginMode},
-    relay::{
+    canceler::Canceler, config::{Mode, ServerProtocol, ShadowsocksConfig}, plugin::{Plugin, PluginMode}, relay::{
         socks5::Address,
         udprelay::{options::UdpSocketControlData, proxy_socket::ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
-    },
-    ServerAddr, ServerConfig,
+    }, ServerAddr, ServerConfig
 };
 use spin::Mutex as SpinMutex;
 use tokio::{
@@ -162,7 +159,7 @@ impl PingBalancerBuilder {
         (best_tcp_idx, best_udp_idx)
     }
 
-    pub async fn build(self) -> io::Result<PingBalancer> {
+    pub async fn build(self, canceler: &Arc<Canceler>) -> io::Result<PingBalancer> {
         if let Some(intv) = self.check_best_interval {
             if intv > self.check_interval {
                 return Err(io::Error::new(
@@ -179,6 +176,7 @@ impl PingBalancerBuilder {
             self.max_server_rtt,
             self.check_interval,
             self.check_best_interval,
+            canceler,
         )
         .await?;
 
@@ -242,6 +240,7 @@ impl PingBalancerContext {
         max_server_rtt: Duration,
         check_interval: Duration,
         check_best_interval: Option<Duration>,
+        canceler: &Arc<Canceler>,
     ) -> io::Result<(Arc<PingBalancerContext>, PingBalancerContextTask)> {
         let plugin_abortable = {
             // Start plugins for TCP proxies
@@ -323,13 +322,14 @@ impl PingBalancerContext {
             best_task_notify: Notify::new(),
         };
 
-        balancer_context.init_score().await;
+        balancer_context.init_score(canceler).await;
 
         let shared_context = Arc::new(balancer_context);
 
         let checker_abortable = {
             let shared_context = shared_context.clone();
-            tokio::spawn(async move { shared_context.checker_task().await }.in_current_span())
+            let canceler = canceler.clone();
+            tokio::spawn(async move { shared_context.checker_task(canceler.as_ref()).await }.in_current_span())
         };
 
         Ok((
@@ -341,11 +341,11 @@ impl PingBalancerContext {
         ))
     }
 
-    async fn init_score(&self) {
+    async fn init_score(&self, canceler: &Canceler) {
         if self.servers.is_empty() {
             return;
         }
-        self.check_once(true).await;
+        self.check_once(true, canceler).await;
     }
 
     fn check_server_tcp_enabled(svr_cfg: &ServerConfig) -> bool {
@@ -377,11 +377,11 @@ impl PingBalancerContext {
         tcp_count > 1 || udp_count > 1
     }
 
-    async fn checker_task(self: Arc<Self>) {
+    async fn checker_task(self: Arc<Self>, canceler: &Canceler) {
         if !self.probing_required() {
             self.checker_task_dummy().await
         } else {
-            self.checker_task_real().await
+            self.checker_task_real(canceler).await
         }
     }
 
@@ -391,7 +391,7 @@ impl PingBalancerContext {
     }
 
     /// Check each servers' score and update the best server's index
-    async fn check_once(&self, first_run: bool) {
+    async fn check_once(&self, first_run: bool, canceler: &Canceler) {
         let servers = &self.servers;
         if servers.is_empty() {
             return;
@@ -410,7 +410,7 @@ impl PingBalancerContext {
                     context: self.context.clone(),
                     max_server_rtt: self.max_server_rtt,
                 };
-                vfut_tcp.push(checker.check_update_score());
+                vfut_tcp.push(checker.check_update_score(canceler));
             }
 
             if self.mode.enable_udp() && PingBalancerContext::check_server_udp_enabled(svr_cfg) {
@@ -420,7 +420,7 @@ impl PingBalancerContext {
                     context: self.context.clone(),
                     max_server_rtt: self.max_server_rtt,
                 };
-                vfut_udp.push(checker.check_update_score());
+                vfut_udp.push(checker.check_update_score(canceler));
             }
         }
 
@@ -510,7 +510,7 @@ impl PingBalancerContext {
     }
 
     /// Check the best server only
-    async fn check_best_server(&self) {
+    async fn check_best_server(&self, canceler: &Canceler) {
         let servers = &self.servers;
         if servers.is_empty() {
             return;
@@ -536,7 +536,7 @@ impl PingBalancerContext {
                 context: self.context.clone(),
                 max_server_rtt: self.max_server_rtt,
             };
-            vfut.push(checker.check_update_score());
+            vfut.push(checker.check_update_score(canceler));
             check_tcp = true;
         }
 
@@ -547,7 +547,7 @@ impl PingBalancerContext {
                 context: self.context.clone(),
                 max_server_rtt: self.max_server_rtt,
             };
-            vfut.push(checker.check_update_score());
+            vfut.push(checker.check_update_score(canceler));
             check_udp = true;
         }
 
@@ -614,17 +614,17 @@ impl PingBalancerContext {
         }
     }
 
-    async fn checker_task_real(&self) {
+    async fn checker_task_real(&self, canceler: &Canceler) {
         if self.check_best_interval.is_none() {
-            return self.checker_task_all_servers().await;
+            return self.checker_task_all_servers(canceler).await;
         }
 
-        let best = self.checker_task_best_server();
-        let all = self.checker_task_all_servers();
+        let best = self.checker_task_best_server(canceler);
+        let all = self.checker_task_all_servers(canceler);
         futures::join!(best, all);
     }
 
-    async fn checker_task_all_servers(&self) {
+    async fn checker_task_all_servers(&self, canceler: &Canceler) {
         if let Some(check_best_interval) = self.check_best_interval {
             // Get at least 10 points to get the precise scores
 
@@ -636,7 +636,7 @@ impl PingBalancerContext {
 
                 // Sleep before check.
                 // PingBalancer already checked once when constructing
-                self.check_once(false).await;
+                self.check_once(false, canceler).await;
 
                 count += 1;
             }
@@ -651,11 +651,11 @@ impl PingBalancerContext {
 
             // Sleep before check.
             // PingBalancer already checked once when constructing
-            self.check_once(false).await;
+            self.check_once(false, canceler).await;
         }
     }
 
-    async fn checker_task_best_server(&self) {
+    async fn checker_task_best_server(&self, canceler: &Canceler) {
         // Wait until checker_task_all_servers notify.
         // Because when server starts, the scores are unstable, so we have to run check_all for multiple times
         self.best_task_notify.notified().await;
@@ -667,7 +667,7 @@ impl PingBalancerContext {
 
             // Sleep before check.
             // PingBalancer already checked once when constructing
-            self.check_best_server().await;
+            self.check_best_server(canceler).await;
         }
     }
 }
@@ -726,7 +726,7 @@ impl PingBalancer {
     }
 
     /// Reset servers in load balancer. Designed for auto-reloading configuration file.
-    pub async fn reset_servers(&self, servers: Vec<ServerConfig>) -> io::Result<()> {
+    pub async fn reset_servers(&self, servers: Vec<ServerConfig>, canceler: &Arc<Canceler>) -> io::Result<()> {
         let old_context = self.inner.context.load();
 
         let mut server_idents: Vec<Arc<ServerIdent>> = Vec::new();
@@ -746,6 +746,7 @@ impl PingBalancer {
             old_context.max_server_rtt,
             old_context.check_interval,
             old_context.check_best_interval,
+            canceler,
         )
         .await?;
 
@@ -783,8 +784,8 @@ struct PingChecker {
 
 impl PingChecker {
     /// Checks server's score and update into `ServerScore<E>`
-    async fn check_update_score(self) {
-        let score = match self.check_delay().await {
+    async fn check_update_score(self, canceler: &Canceler) {
+        let score = match self.check_delay(canceler).await {
             Ok(d) => match self.server_type {
                 ServerType::Tcp => self.server.tcp_score().push_score(Score::Latency(d)).await,
                 ServerType::Udp => self.server.udp_score().push_score(Score::Latency(d)).await,
@@ -806,13 +807,13 @@ impl PingChecker {
 
     /// Detect TCP connectivity with Chromium [Network Portal Detection](https://www.chromium.org/chromium-os/chromiumos-design-docs/network-portal-detection)
     #[allow(dead_code)]
-    async fn check_request_tcp_chromium(&self) -> io::Result<()> {
+    async fn check_request_tcp_chromium(&self, canceler: &Canceler) -> io::Result<()> {
         static GET_BODY: &[u8] =
             b"GET /generate_204 HTTP/1.1\r\nHost: clients3.google.com\r\nConnection: close\r\nAccept: */*\r\n\r\n";
 
         let addr = Address::DomainNameAddress("clients3.google.com".to_owned(), 80);
 
-        let stream = AutoProxyClientStream::connect_proxied(&self.context, &self.server, &addr).await?;
+        let stream = AutoProxyClientStream::connect_proxied(&self.context, &self.server, &addr, canceler).await?;
 
         let mut reader = BufReader::new(stream);
 
@@ -839,13 +840,13 @@ impl PingChecker {
     }
 
     /// Detect TCP connectivity with Firefox's http://detectportal.firefox.com/success.txt
-    async fn check_request_tcp_firefox(&self) -> io::Result<()> {
+    async fn check_request_tcp_firefox(&self, canceler: &Canceler) -> io::Result<()> {
         static GET_BODY: &[u8] =
             b"GET /success.txt HTTP/1.1\r\nHost: detectportal.firefox.com\r\nConnection: close\r\nAccept: */*\r\n\r\n";
 
         let addr = Address::DomainNameAddress("detectportal.firefox.com".to_owned(), 80);
 
-        let mut stream = AutoProxyClientStream::connect_proxied(&self.context, &self.server, &addr).await?;
+        let mut stream = AutoProxyClientStream::connect_proxied(&self.context, &self.server, &addr, canceler).await?;
         stream.write_all(GET_BODY).await?;
 
         let mut reader = BufReader::new(stream);
@@ -872,7 +873,7 @@ impl PingChecker {
         Ok(())
     }
 
-    async fn check_request_udp(&self, cfg: &ShadowsocksConfig) -> io::Result<()> {
+    async fn check_request_udp(&self, cfg: &ShadowsocksConfig, canceler: &Canceler) -> io::Result<()> {
         // TransactionID: 0x1234
         // Flags: 0x0100 RD
         // Questions: 0x0001
@@ -891,7 +892,7 @@ impl PingChecker {
         let svr_cfg = self.server.server_config();
 
         let client =
-            ProxySocket::connect_with_opts(self.context.context(), svr_cfg, cfg, self.context.connect_opts_ref())
+            ProxySocket::connect_with_opts(self.context.context(), svr_cfg, cfg, self.context.connect_opts_ref(), canceler)
                 .await?;
 
         let mut control = UdpSocketControlData::default();
@@ -917,11 +918,11 @@ impl PingChecker {
         Ok(())
     }
 
-    async fn check_request(&self) -> io::Result<()> {
+    async fn check_request(&self, canceler: &Canceler) -> io::Result<()> {
         match self.server_type {
-            ServerType::Tcp => self.check_request_tcp_firefox().await,
+            ServerType::Tcp => self.check_request_tcp_firefox(canceler).await,
             ServerType::Udp => match self.server.server_config().protocol() {
-                ServerProtocol::SS(cfg) => self.check_request_udp(cfg).await,
+                ServerProtocol::SS(cfg) => self.check_request_udp(cfg, canceler).await,
                 #[cfg(feature = "trojan")]
                 ServerProtocol::Trojan(_cfg) => Ok(()),
                 #[cfg(feature = "vless")]
@@ -934,11 +935,11 @@ impl PingChecker {
         }
     }
 
-    async fn check_delay(&self) -> io::Result<u32> {
+    async fn check_delay(&self, canceler: &Canceler) -> io::Result<u32> {
         let start = Instant::now();
 
         // Send HTTP GET and read the first byte
-        let res = time::timeout(self.max_server_rtt, self.check_request()).await;
+        let res = time::timeout(self.max_server_rtt, self.check_request(canceler)).await;
 
         let elapsed = Instant::now() - start;
         let elapsed = elapsed.as_secs() as u32 * 1000 + elapsed.subsec_millis(); // Converted to ms

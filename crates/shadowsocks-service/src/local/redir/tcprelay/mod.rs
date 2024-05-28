@@ -38,16 +38,17 @@ async fn establish_client_tcp_redir<'a>(
     #[allow(unused_mut)] mut stream: TcpStream,
     peer_addr: SocketAddr,
     addr: &Address,
+    canceler: &Canceler,
 ) -> io::Result<()> {
     if balancer.is_empty() {
-        let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), addr).await?;
+        let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), addr, canceler).await?;
         return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, addr, None).await;
     }
 
     let server = balancer.best_tcp_server();
     let svr_cfg = server.server_config();
 
-    let mut remote = AutoProxyClientStream::connect(context, &server, addr).await?;
+    let mut remote = AutoProxyClientStream::connect(context, &server, addr, canceler).await?;
 
     establish_tcp_tunnel(context.as_ref(), svr_cfg, stream, &mut remote, peer_addr, addr).await
 }
@@ -58,6 +59,7 @@ async fn handle_redir_client(
     s: TcpStream,
     peer_addr: SocketAddr,
     mut daddr: SocketAddr,
+    canceler: &Canceler,
 ) -> io::Result<()> {
     // Get forward address from socket
     //
@@ -68,7 +70,7 @@ async fn handle_redir_client(
         }
     }
     let target_addr = Address::from(daddr);
-    establish_client_tcp_redir(context, balancer, s, peer_addr, &target_addr).await
+    establish_client_tcp_redir(context, balancer, s, peer_addr, &target_addr, canceler).await
 }
 
 /// Redir TCP server instance
@@ -85,13 +87,14 @@ impl RedirTcpServer {
         client_config: &ServerAddr,
         balancer: PingBalancer,
         redir_ty: RedirType,
+        canceler: &Canceler,
     ) -> io::Result<RedirTcpServer> {
         let listener = match *client_config {
             ServerAddr::SocketAddr(ref saddr) => {
                 TcpListener::bind_redir(redir_ty, *saddr, context.accept_opts()).await?
             }
             ServerAddr::DomainName(ref dname, port) => {
-                lookup_then!(context.context_ref(), dname, port, |addr| {
+                lookup_then!(context.context_ref(), dname, port, canceler, |addr| {
                     TcpListener::bind_redir(redir_ty, addr, context.accept_opts()).await
                 })?
                 .1
@@ -146,6 +149,7 @@ impl RedirTcpServer {
             let context = self.context.clone();
             let balancer = self.balancer.clone();
             let redir_ty = self.redir_ty;
+            let canceler = canceler.clone();
             tokio::spawn(async move {
                 let dst_addr = match socket.destination_addr(redir_ty) {
                     Ok(d) => d,
@@ -158,7 +162,7 @@ impl RedirTcpServer {
                     }
                 };
 
-                if let Err(err) = handle_redir_client(&context, balancer, socket, peer_addr, dst_addr).await {
+                if let Err(err) = handle_redir_client(&context, balancer, socket, peer_addr, dst_addr, canceler.as_ref()).await {
                     debug!("TCP redirect client, error: {:?}", err);
                 }
             }.into_future());

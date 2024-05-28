@@ -2,7 +2,7 @@
 
 use tracing::warn;
 
-use crate::{config::ManagerAddr, context::Context, net::ConnectOpts, relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE};
+use crate::{canceler::Canceler, config::ManagerAddr, context::Context, net::ConnectOpts, relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE};
 
 use super::{
     datagram::ManagerDatagram,
@@ -41,8 +41,9 @@ impl ManagerClient {
         context: &Context,
         bind_addr: &ManagerAddr,
         connect_opts: &ConnectOpts,
+        canceler: &Canceler
     ) -> Result<ManagerClient, Error> {
-        ManagerDatagram::connect(context, bind_addr, connect_opts)
+        ManagerDatagram::connect(context, bind_addr, connect_opts, canceler)
             .await
             .map(|socket| ManagerClient { socket })
             .map_err(Into::into)

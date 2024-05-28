@@ -64,7 +64,7 @@ impl Socks5UdpServerBuilder {
         self.launchd_socket_name = Some(n);
     }
 
-    pub async fn build(self) -> io::Result<Socks5UdpServer> {
+    pub async fn build(self, canceler: &Canceler) -> io::Result<Socks5UdpServer> {
         cfg_if::cfg_if! {
             if #[cfg(target_os = "macos")] {
                 let socket = if let Some(launchd_socket_name) = self.launchd_socket_name {
@@ -74,10 +74,10 @@ impl Socks5UdpServerBuilder {
                     let std_socket = get_launch_activate_udp_socket(&launchd_socket_name, true)?;
                     TokioUdpSocket::from_std(std_socket)?
                 } else {
-                    create_standard_udp_listener(&self.context, &self.client_config).await?.into()
+                    create_standard_udp_listener(&self.context, &self.client_config, canceler).await?.into()
                 };
             } else {
-                let socket = create_standard_udp_listener(&self.context, &self.client_config).await?.into();
+                let socket = create_standard_udp_listener(&self.context, &self.client_config, canceler).await?.into();
             }
         }
 
@@ -98,7 +98,7 @@ struct Socks5UdpInboundWriter {
 
 #[async_trait]
 impl UdpInboundWrite for Socks5UdpInboundWriter {
-    async fn send_to(&self, peer_addr: SocketAddr, remote_addr: &Address, data: &[u8]) -> io::Result<()> {
+    async fn send_to(&self, peer_addr: SocketAddr, remote_addr: &Address, data: &[u8], _canceler: &Canceler) -> io::Result<()> {
         let remote_addr = match remote_addr {
             Address::SocketAddress(sa) => {
                 // Try to convert IPv4 mapped IPv6 address if server is running on dual-stack mode
@@ -201,7 +201,7 @@ impl Socks5UdpServer {
                     let pos = cur.position() as usize;
                     let payload = &data[pos..];
 
-                    if let Err(err) = manager.send_to(peer_addr, header.address, payload).await {
+                    if let Err(err) = manager.send_to(peer_addr, header.address, payload, &canceler).await {
                         debug!(
                             "udp packet from {} relay {} bytes failed, error: {}",
                             peer_addr,

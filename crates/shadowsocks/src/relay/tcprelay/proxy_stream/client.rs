@@ -20,16 +20,10 @@ use tracing::trace;
 #[cfg(feature = "aead-cipher-2022")]
 use crate::relay::get_aead_2022_padding_size;
 use crate::{
-    config::{ServerConfig, ShadowsocksConfig},
-    context::SharedContext,
-    crypto::CipherKind,
-    net::ConnectOpts,
-    relay::{
+    canceler::Canceler, config::{ServerConfig, ShadowsocksConfig}, context::SharedContext, crypto::CipherKind, net::ConnectOpts, relay::{
         socks5,
         tcprelay::crypto_io::{CryptoRead, CryptoStream, CryptoWrite, StreamType},
-    },
-    transport::{AsyncPing, Connector, DeviceOrGuard, StreamConnection},
-    ServerAddr,
+    }, transport::{AsyncPing, Connector, DeviceOrGuard, StreamConnection}, ServerAddr
 };
 
 enum ProxyClientStreamWriteState {
@@ -81,11 +75,12 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         svr_cfg: &ServerConfig,
         svr_ss_cfg: &ShadowsocksConfig,
         addr: ServerAddr,
+        canceler: &Canceler,
     ) -> io::Result<ProxyClientStream<S>>
     where
         C: Connector + Connector<TS = S>,
     {
-        ProxyClientStream::connect_with_opts(context, connector, svr_cfg, svr_ss_cfg, addr, &DEFAULT_CONNECT_OPTS).await
+        ProxyClientStream::connect_with_opts(context, connector, svr_cfg, svr_ss_cfg, addr, &DEFAULT_CONNECT_OPTS, canceler).await
     }
 
     /// Connect to target `addr` via shadowsocks' server configured by `svr_cfg`
@@ -96,11 +91,12 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         svr_ss_cfg: &ShadowsocksConfig,
         addr: ServerAddr,
         opts: &ConnectOpts,
+        canceler: &Canceler,
     ) -> io::Result<ProxyClientStream<S>>
     where
         C: Connector + Connector<TS = S>,
     {
-        ProxyClientStream::connect_with_opts_map(context, connector, svr_cfg, svr_ss_cfg, addr, opts, |s| s).await
+        ProxyClientStream::connect_with_opts_map(context, connector, svr_cfg, svr_ss_cfg, addr, opts, |s| s, canceler).await
     }
 
     /// Connect to target `addr` via shadowsocks' server configured by `svr_cfg`, maps `TcpStream` to customized stream with `map_fn`
@@ -111,6 +107,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         svr_ss_cfg: &ShadowsocksConfig,
         addr: ServerAddr,
         map_fn: F,
+        canceler: &Canceler,
     ) -> io::Result<ProxyClientStream<S>>
     where
         C: Connector + Connector<TS = S>,
@@ -124,6 +121,7 @@ impl<S: StreamConnection> ProxyClientStream<S> {
             addr,
             &DEFAULT_CONNECT_OPTS,
             map_fn,
+            canceler,
         )
         .await
     }
@@ -137,12 +135,13 @@ impl<S: StreamConnection> ProxyClientStream<S> {
         addr: ServerAddr,
         opts: &ConnectOpts,
         map_fn: F,
+        canceler: &Canceler
     ) -> io::Result<ProxyClientStream<S>>
     where
         C: Connector,
         F: FnOnce(C::TS) -> S,
     {
-        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.tcp_external_addr(), opts)).await
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.tcp_external_addr(), opts, canceler)).await
         {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => return Err(e),

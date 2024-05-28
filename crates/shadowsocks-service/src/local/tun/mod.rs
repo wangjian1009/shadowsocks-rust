@@ -437,7 +437,7 @@ impl Tun {
                     }
                 }
 
-                if let Err(err) = self.udp.handle_packet(src_addr, dst_addr, payload).await {
+                if let Err(err) = self.udp.handle_packet(src_addr, dst_addr, payload, canceler).await {
                     error!("handle UDP packet failed, err: {}, packet: {:?}", err, udp_packet);
                 }
             }

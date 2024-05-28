@@ -8,7 +8,7 @@ use tokio::{fs::File, io::AsyncWriteExt, runtime::Builder, time::Duration};
 
 use shadowsocks_service::{
     local::{api, context::ServiceContext, loadbalancing::ServerIdent},
-    shadowsocks::{config::ServerType, context::Context, ServerConfig},
+    shadowsocks::{canceler::Canceler, config::ServerType, context::Context, ServerConfig},
 };
 
 use hyper::{
@@ -140,7 +140,8 @@ pub async fn main_async(matches: &ArgMatches) -> ExitCode {
     tracing::debug!(svr =? &svr_addr, request = ?request);
 
     let context = Context::new_shared(ServerType::Local);
-
+    let canceler = Arc::new(Canceler::new());
+    
     #[allow(unused_mut)]
     let mut service_context = ServiceContext::new(context);
 
@@ -166,7 +167,7 @@ pub async fn main_async(matches: &ArgMatches) -> ExitCode {
                 tracing::debug!("timeout");
                 write_output(output_path, Err(UrlTestError::Timeout("GlobalTimeout".to_string()))).await
             }
-            r = api::request(request, service_context, server) => {
+            r = api::request(request, service_context, server, canceler.as_ref()) => {
                 tracing::debug!(response = ?r);
                 let response = r.map_err(|e| UrlTestError::Api(e));
 

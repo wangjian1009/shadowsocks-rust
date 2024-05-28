@@ -95,7 +95,7 @@ impl TunnelBuilder {
         self.launchd_udp_socket_name = Some(n);
     }
 
-    pub async fn build(self) -> io::Result<Tunnel> {
+    pub async fn build(self, canceler: &Canceler) -> io::Result<Tunnel> {
         let mut tcp_server = None;
         if self.mode.enable_tcp() {
             #[allow(unused_mut)]
@@ -111,7 +111,7 @@ impl TunnelBuilder {
                 builder.set_launchd_socket_name(s);
             }
 
-            let server = builder.build().await?;
+            let server = builder.build(canceler).await?;
             tcp_server = Some(server);
         }
 
@@ -134,7 +134,7 @@ impl TunnelBuilder {
                 builder.set_launchd_socket_name(s);
             }
 
-            let server = builder.build().await?;
+            let server = builder.build(canceler).await?;
             udp_server = Some(server);
         }
 

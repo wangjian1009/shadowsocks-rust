@@ -14,7 +14,7 @@ use hyper::{
     Request, Response,
 };
 use lru_time_cache::LruCache;
-use shadowsocks::relay::Address;
+use shadowsocks::{relay::Address, canceler::Canceler};
 use tokio::sync::Mutex;
 use tracing::{error, trace, Instrument};
 
@@ -55,6 +55,7 @@ impl HttpClient {
         context: &Arc<ServiceContext>,
         req: Request<body::Incoming>,
         balancer: &PingBalancer,
+        canceler: &Canceler,
     ) -> Result<Response<body::Incoming>, HttpClientError> {
         let host = match host_addr(req.uri()) {
             Some(h) => h,
@@ -84,7 +85,7 @@ impl HttpClient {
             .unwrap()
             .trim_start_matches('[')
             .trim_start_matches(']');
-        let c = match HttpConnection::connect(context, scheme, host.clone(), domain, balancer).await {
+        let c = match HttpConnection::connect(context, scheme, host.clone(), domain, balancer, canceler).await {
             Ok(c) => c,
             Err(err) => {
                 error!("failed to connect to host: {}, error: {}", host, err);
@@ -152,12 +153,13 @@ impl HttpConnection {
         host: Address,
         domain: &str,
         balancer: &PingBalancer,
+        canceler: &Canceler,
     ) -> io::Result<HttpConnection> {
         if *scheme != Scheme::HTTP && *scheme != Scheme::HTTPS {
             return Err(io::Error::new(ErrorKind::InvalidInput, "invalid scheme"));
         }
 
-        let (stream, _) = connect_host(context, &host, balancer).await?;
+        let (stream, _) = connect_host(context, &host, balancer, canceler).await?;
 
         if *scheme == Scheme::HTTP {
             HttpConnection::connect_http_http1(scheme, host, stream).await

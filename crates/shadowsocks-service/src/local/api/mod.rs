@@ -5,7 +5,7 @@ use hyper_util::rt::TokioIo;
 use std::sync::Arc;
 use tracing::{error, trace, Instrument};
 
-use shadowsocks::relay::socks5::Address;
+use shadowsocks::{canceler::Canceler, relay::socks5::Address};
 
 use super::{http::ProxyHttpStream, loadbalancing::ServerIdent, net::AutoProxyClientStream, ServiceContext};
 
@@ -18,6 +18,7 @@ pub async fn request(
     request: Request<Full<Bytes>>,
     service_context: Arc<ServiceContext>,
     server: Arc<ServerIdent>,
+    canceler: &Canceler,
 ) -> Result<Response<Incoming>, ApiError> {
     // 从URL获取目标地址
     let port = match request.uri().port() {
@@ -41,7 +42,7 @@ pub async fn request(
     };
     trace!(target_addr = ?target_addr);
 
-    let stream = AutoProxyClientStream::connect_proxied(&service_context, &server, &target_addr)
+    let stream = AutoProxyClientStream::connect_proxied(&service_context, &server, &target_addr, canceler)
         .await
         .map_err(|e| ApiError::Other(Some(format!("{:?}", e))))?;
 

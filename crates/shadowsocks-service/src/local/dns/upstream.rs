@@ -12,6 +12,7 @@ use hickory_resolver::proto::{
 };
 use rand::{thread_rng, Rng};
 use shadowsocks::{
+    canceler::Canceler,
     config::ServerProtocol,
     context::SharedContext,
     net::{ConnectOpts, FlowStat, TcpStream as ShadowTcpStream, UdpSocket as ShadowUdpSocket},
@@ -61,22 +62,57 @@ pub enum DnsClient {
 
 impl DnsClient {
     /// Connect to local provided TCP DNS server
-    pub async fn connect_tcp_local(ns: SocketAddr, connect_opts: &ConnectOpts) -> io::Result<DnsClient> {
-        let stream = ShadowTcpStream::connect_with_opts(&ns, connect_opts).await?;
-        Ok(DnsClient::TcpLocal { stream })
+    pub async fn connect_tcp_local(
+        ns: SocketAddr,
+        connect_opts: &ConnectOpts,
+        canceler: &Canceler,
+    ) -> io::Result<DnsClient> {
+        let mut waiter = canceler.waiter();
+        tokio::select! {
+            r = ShadowTcpStream::connect_with_opts(&ns, connect_opts) => {
+                let stream = r?;
+                Ok(DnsClient::TcpLocal { stream })
+            }
+            _ = waiter.wait() => {
+                tracing::info!("connect_tcp_local canceled");
+                Err(io::Error::new(io::ErrorKind::Other, "canceled"))
+            }
+        }
     }
 
     /// Connect to local provided UDP DNS server
-    pub async fn connect_udp_local(ns: SocketAddr, connect_opts: &ConnectOpts) -> io::Result<DnsClient> {
-        let socket = ShadowUdpSocket::connect_with_opts(&ns, connect_opts).await?.into();
-        Ok(DnsClient::UdpLocal { socket })
+    pub async fn connect_udp_local(
+        ns: SocketAddr,
+        connect_opts: &ConnectOpts,
+        canceler: &Canceler,
+    ) -> io::Result<DnsClient> {
+        let mut waiter = canceler.waiter();
+        tokio::select! {
+            r = ShadowUdpSocket::connect_with_opts(&ns, connect_opts) => {
+                let socket = r?.into();
+                Ok(DnsClient::UdpLocal { socket })
+            }
+            _ = waiter.wait() => {
+                tracing::info!("connect_tcp_local canceled");
+                Err(io::Error::new(io::ErrorKind::Other, "canceled"))
+            }
+        }
     }
 
     #[cfg(unix)]
     /// Connect to local provided Unix Domain Socket DNS server, in TCP-like protocol
-    pub async fn connect_unix_stream<P: AsRef<Path>>(path: &P) -> io::Result<DnsClient> {
-        let stream = UnixStream::connect(path).await?;
-        Ok(DnsClient::UnixStream { stream })
+    pub async fn connect_unix_stream<P: AsRef<Path>>(path: &P, canceler: &Canceler) -> io::Result<DnsClient> {
+        let mut waiter = canceler.waiter();
+        tokio::select! {
+            r = UnixStream::connect(path) => {
+                let stream = r?;
+                Ok(DnsClient::UnixStream { stream })
+            }
+            _ = waiter.wait() => {
+                tracing::info!("connect_unix_stream canceled");
+                Err(io::Error::new(io::ErrorKind::Other, "canceled"))
+            }
+        }
     }
 
     /// Connect to remote DNS server through proxy in TCP
@@ -87,21 +123,31 @@ impl DnsClient {
         connect_opts: &ConnectOpts,
         flow_stat: Arc<FlowStat>,
         connection_close_notify: Arc<Notify>,
+        canceler: &Canceler,
     ) -> io::Result<DnsClient> {
-        let stream = AutoProxyClientStream::connect_proxied_no_score(
-            context.clone(),
-            connect_opts,
-            svr,
-            ns,
-            Some(flow_stat),
-            Some(connection_close_notify),
-            #[cfg(feature = "rate-limit")]
-            None,
-            #[cfg(feature = "local-fake-mode")]
-            crate::local::context::FakeMode::None,
-        )
-        .await?;
-        Ok(DnsClient::TcpRemote { stream })
+        let mut waiter = canceler.waiter();
+        tokio::select! {
+            r = AutoProxyClientStream::connect_proxied_no_score(
+                context.clone(),
+                connect_opts,
+                svr,
+                ns,
+                Some(flow_stat),
+                Some(connection_close_notify),
+                canceler,
+                #[cfg(feature = "rate-limit")]
+                None,
+                #[cfg(feature = "local-fake-mode")]
+                crate::local::context::FakeMode::None,
+            ) => {
+                let stream = r?;
+                Ok(DnsClient::TcpRemote { stream })
+            }
+            _ = waiter.wait() => {
+                tracing::info!("connect_tcp_remote canceled");
+                Err(io::Error::new(io::ErrorKind::Other, "canceled"))
+            }
+        }
     }
 
     /// Connect to remote DNS server through proxy in UDP
@@ -111,13 +157,23 @@ impl DnsClient {
         ns: Address,
         connect_opts: &ConnectOpts,
         flow_stat: Arc<FlowStat>,
+        canceler: &Canceler,
     ) -> io::Result<DnsClient> {
         let svr_cfg = svr.server_config();
+        let mut waiter = canceler.waiter();
         match svr_cfg.protocol() {
             ServerProtocol::SS(ss_cfg) => {
-                let socket = ProxySocket::connect_with_opts(context, svr_cfg, ss_cfg, connect_opts).await?;
-                let socket = MonProxySocket::from_socket(socket, flow_stat);
-                Ok(DnsClient::UdpRemote { socket, ns })
+                tokio::select! {
+                    r = ProxySocket::connect_with_opts(context, svr_cfg, ss_cfg, connect_opts, canceler) => {
+                        let socket = r?;
+                        let socket = MonProxySocket::from_socket(socket, flow_stat);
+                        Ok(DnsClient::UdpRemote { socket, ns })
+                    }
+                    _ = waiter.wait() => {
+                        tracing::info!("connect_udp_remote canceled");
+                        Err(io::Error::new(io::ErrorKind::Other, "canceled"))
+                    }
+                }
             }
             #[cfg(feature = "trojan")]
             ServerProtocol::Trojan(_cfg) => {

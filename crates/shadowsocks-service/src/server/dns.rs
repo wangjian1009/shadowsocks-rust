@@ -11,7 +11,7 @@ use trust_dns_resolver::proto::{
     rr::{rdata, RData, Record, RecordType},
 };
 
-use shadowsocks::{dns_resolver::DnsResolver, timeout::TimeoutTicker};
+use shadowsocks::{canceler::Canceler, dns_resolver::DnsResolver, timeout::TimeoutTicker};
 
 pub async fn run_dns_tcp_stream<'a, I: AsyncRead + Unpin, O: AsyncWrite + Unpin>(
     dns_resolver: &'a DnsResolver,
@@ -100,7 +100,7 @@ pub async fn process_dns_udp_request(dns_resolver: &DnsResolver, input: &[u8]) -
 
 const DEFAULT_TTL: u32 = 300u32;
 
-async fn resolve(dns_resolver: &DnsResolver, request: Message) -> Message {
+async fn resolve(dns_resolver: &DnsResolver, request: Message, canceler: &Canceler) -> Message {
     let mut response = Message::new();
 
     response
@@ -124,7 +124,7 @@ async fn resolve(dns_resolver: &DnsResolver, request: Message) -> Message {
 
             let span = info_span!("dns.query", query = query.to_string());
             response = async move {
-                match dns_resolver.resolve(query.name().to_string().as_str(), 0).await {
+                match dns_resolver.resolve(query.name().to_string().as_str(), 0, canceler).await {
                     Ok(response_record_it) => {
                         let mut count = 0;
                         for addr in response_record_it {

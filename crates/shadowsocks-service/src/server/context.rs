@@ -3,11 +3,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use shadowsocks::{
-    config::ServerType,
-    context::{Context, SharedContext},
-    dns_resolver::DnsResolver,
-    net::{ConnectOpts, FlowStat},
-    ServerAddr,
+    canceler::Canceler, config::ServerType, context::{Context, SharedContext}, dns_resolver::DnsResolver, net::{ConnectOpts, FlowStat}, ServerAddr
 };
 
 use crate::{acl::AccessControl, config::SecurityConfig};
@@ -227,10 +223,10 @@ impl ServiceContext {
     }
 
     /// Check if target should be bypassed
-    pub async fn check_outbound_blocked(&self, addr: &ServerAddr) -> bool {
+    pub async fn check_outbound_blocked(&self, addr: &ServerAddr, canceler: &Canceler) -> bool {
         match self.acl {
             None => false,
-            Some(ref acl) => acl.check_outbound_blocked(&self.context, addr).await,
+            Some(ref acl) => acl.check_outbound_blocked(&self.context, addr, canceler).await,
         }
     }
 

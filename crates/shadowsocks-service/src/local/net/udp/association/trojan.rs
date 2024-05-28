@@ -190,6 +190,7 @@ where
         svr_trojan_cfg: &TrojanConfig,
         peer_addr: SocketAddr,
         close_tx: UdpAssociationCloseSender,
+        canceler: &Canceler,
     ) -> io::Result<MultiProtocolProxySocket> {
         let (r, w) = create_connector_then!(
             Some(self.context.context()),
@@ -201,6 +202,7 @@ where
                     svr_trojan_cfg,
                     self.context.connect_opts_ref(),
                     |s| Box::new(s) as Box<dyn StreamConnection>,
+                    canceler,
                 )
                 .await
             }

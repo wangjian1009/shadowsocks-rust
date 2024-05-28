@@ -13,6 +13,12 @@ pub struct DnsProcessor {
     client: Arc<DnsClient>,
 }
 
+impl Drop for DnsProcessor {
+    fn drop(&mut self) {
+        tracing::info!("DnsProcessor is dropped");
+    }
+}
+
 impl DnsProcessor {
     pub fn new(
         mock_dns_addr: SocketAddr,
@@ -38,7 +44,7 @@ impl DnsProcessor {
         dst_addr: SocketAddr,
         data: &[u8],
         response_writer: super::udp::UdpTunInboundWriter,
-        canceler: &Canceler,
+        canceler: &Arc<Canceler>,
     ) -> smoltcp::wire::Result<()> {
         let message = match Message::from_vec(data) {
             Ok(m) => m,
@@ -51,40 +57,33 @@ impl DnsProcessor {
         let client = self.client.clone();
         let local_addr = self.local_addr.clone();
         let remote_addr = self.remote_addr.clone();
-
-        let mut waiter = canceler.waiter();
+        let canceler = canceler.clone();
         tokio::spawn(
             async move {
-                tokio::select! {
-                    r = client.resolve(message, local_addr.as_ref().map(|e| e.as_ref()), &remote_addr) => {
-                        match r {
-                            Ok(response) => {
-                                let response = match response.to_vec() {
-                                    Ok(v) => v,
-                                    Err(err) => {
-                                        tracing::error!(error = ?err, "response message serialize error");
-                                        return;
-                                    }
-                                };
-
-                                if let Err(err) = response_writer
-                                    .send_to(
-                                        src_addr,
-                                        &shadowsocks::relay::Address::SocketAddress(dst_addr),
-                                        response.as_slice(),
-                                    )
-                                    .await
-                                {
-                                    tracing::error!(error = ?err,  "failed to set packet information, error");
-                                }
-                            }
+                match client.resolve(message, local_addr.as_ref().map(|e| e.as_ref()), &remote_addr, canceler.as_ref()).await {
+                    Ok(response) => {
+                        let response = match response.to_vec() {
+                            Ok(v) => v,
                             Err(err) => {
-                                tracing::error!(err=?err, "resolve error");
+                                tracing::error!(error = ?err, "response message serialize error");
+                                return;
                             }
+                        };
+
+                        if let Err(err) = response_writer
+                            .send_to(
+                                src_addr,
+                                &shadowsocks::relay::Address::SocketAddress(dst_addr),
+                                response.as_slice(),
+                                canceler.as_ref(),
+                            )
+                            .await
+                        {
+                            tracing::error!(error = ?err,  "failed to set packet information, error");
                         }
                     }
-                    _ = waiter.wait() => {
-                        tracing::error!("dns query canceled");
+                    Err(err) => {
+                        tracing::error!(err=?err, "resolve error");
                     }
                 }
             }

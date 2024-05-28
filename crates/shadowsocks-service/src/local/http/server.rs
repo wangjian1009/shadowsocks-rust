@@ -56,7 +56,7 @@ impl HttpBuilder {
     }
 
     /// Build HTTP server instance
-    pub async fn build(self) -> io::Result<Http> {
+    pub async fn build(self, canceler: &Canceler) -> io::Result<Http> {
         cfg_if::cfg_if! {
             if #[cfg(target_os = "macos")] {
                 let listener = if let Some(launchd_socket_name) = self.launchd_tcp_socket_name {
@@ -67,10 +67,10 @@ impl HttpBuilder {
                     let tokio_listener = TokioTcpListener::from_std(std_listener)?;
                     TcpListener::from_listener(tokio_listener, self.context.accept_opts())?
                 } else {
-                    create_standard_tcp_listener(&self.context, &self.client_config).await?
+                    create_standard_tcp_listener(&self.context, &self.client_config, canceler).await?
                 };
             } else {
-                let listener = create_standard_tcp_listener(&self.context, &self.client_config).await?;
+                let listener = create_standard_tcp_listener(&self.context, &self.client_config, canceler).await?;
             }
         }
 

@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use shadowsocks::config::Mode;
+use shadowsocks::{canceler::Canceler, config::Mode};
 use tokio::{
     io::{AsyncWriteExt, BufReader},
     net::TcpStream,
@@ -39,7 +39,7 @@ impl Socks4TcpHandler {
         }
     }
 
-    pub async fn handle_socks4_client(self, stream: TcpStream, peer_addr: SocketAddr) -> io::Result<()> {
+    pub async fn handle_socks4_client(self, stream: TcpStream, peer_addr: SocketAddr, canceler: &Canceler) -> io::Result<()> {
         // 1. Handshake
 
         // NOTE: Wraps it with BufReader for reading NULL terminated information in HandshakeRequest
@@ -62,7 +62,7 @@ impl Socks4TcpHandler {
             Command::Connect => {
                 debug!("CONNECT {}", handshake_req.dst);
 
-                self.handle_socks4_connect(s, peer_addr, handshake_req.dst).await
+                self.handle_socks4_connect(s, peer_addr, handshake_req.dst, canceler).await
             }
             Command::Bind => {
                 warn!("BIND is not supported");
@@ -80,6 +80,7 @@ impl Socks4TcpHandler {
         mut stream: BufReader<TcpStream>,
         peer_addr: SocketAddr,
         target_addr: Address,
+        canceler: &Canceler,
     ) -> io::Result<()> {
         if !self.mode.enable_tcp() {
             warn!("TCP CONNECT is disabled");
@@ -93,11 +94,11 @@ impl Socks4TcpHandler {
         let target_addr = target_addr.into();
         let mut server_opt = None;
         let server_result = if self.balancer.is_empty() {
-            AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &target_addr).await
+            AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &target_addr, canceler).await
         } else {
             let server = self.balancer.best_tcp_server();
 
-            let r = AutoProxyClientStream::connect(&self.context, &server, &target_addr).await;
+            let r = AutoProxyClientStream::connect(&self.context, &server, &target_addr, canceler).await;
             server_opt = Some(server);
 
             r

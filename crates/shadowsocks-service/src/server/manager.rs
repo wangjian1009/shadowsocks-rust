@@ -2,7 +2,7 @@
 use std::{collections::HashMap, io::Error};
 
 use serde::{ser::SerializeMap, Serialize, Serializer};
-use shadowsocks::{context::Context, manager::datagram::ManagerDatagram, net::ConnectOpts, ManagerAddr};
+use shadowsocks::{canceler::Canceler, context::Context, manager::datagram::ManagerDatagram, net::ConnectOpts, ManagerAddr};
 pub(crate) use tracing::warn;
 
 #[derive(Serialize, Debug)]
@@ -49,8 +49,9 @@ impl ManagerClient {
         context: &Context,
         bind_addr: &ManagerAddr,
         connect_opts: &ConnectOpts,
+        canceler: &Canceler,
     ) -> Result<ManagerClient, Error> {
-        ManagerDatagram::connect(context, bind_addr, connect_opts)
+        ManagerDatagram::connect(context, bind_addr, connect_opts, canceler)
             .await
             .map(|socket| ManagerClient { socket })
             .map_err(Into::into)

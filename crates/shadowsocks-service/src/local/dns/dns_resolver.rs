@@ -13,7 +13,7 @@ use hickory_resolver::proto::{
 };
 use tracing::{debug_span, trace, Instrument};
 
-use shadowsocks::{config::Mode, dns_resolver::DnsResolve, net::ConnectOpts};
+use shadowsocks::{canceler::Canceler, config::Mode, dns_resolver::DnsResolve, net::ConnectOpts};
 
 use super::{client_cache::DnsClientCache, config::NameServerAddr};
 
@@ -50,11 +50,15 @@ impl DnsResolver {
         self.connect_opts = connect_opts;
     }
 
-    async fn lookup(&self, msg: Message) -> io::Result<Message> {
+    async fn lookup(&self, msg: Message, canceler: &Canceler) -> io::Result<Message> {
         let mut last_err = io::Error::new(ErrorKind::InvalidData, "resolve empty");
 
         for _ in 0..self.attempts {
-            match self.lookup_inner(msg.clone()).await {
+            if canceler.is_canceled() {
+                return Err(io::Error::new(ErrorKind::Other, "canceled"));
+            }
+
+            match self.lookup_inner(msg.clone(), canceler).await {
                 Ok(m) => return Ok(m),
                 Err(err) => last_err = err,
             }
@@ -64,7 +68,7 @@ impl DnsResolver {
         Err(last_err)
     }
 
-    async fn lookup_inner(&self, msg: Message) -> io::Result<Message> {
+    async fn lookup_inner(&self, msg: Message, canceler: &Canceler) -> io::Result<Message> {
         match self.ns {
             NameServerAddr::SocketAddr(ns) => {
                 let mut last_err = io::Error::new(ErrorKind::InvalidData, "resolve empty");
@@ -73,7 +77,7 @@ impl DnsResolver {
                 if self.mode.enable_udp() {
                     match self
                         .client_cache
-                        .lookup_local(ns, msg.clone(), &self.connect_opts, true)
+                        .lookup_local(ns, msg.clone(), &self.connect_opts, true, canceler)
                         .await
                     {
                         Ok(msg) => return Ok(msg),
@@ -84,7 +88,7 @@ impl DnsResolver {
                 }
 
                 if self.mode.enable_tcp() {
-                    match self.client_cache.lookup_local(ns, msg, &self.connect_opts, false).await {
+                    match self.client_cache.lookup_local(ns, msg, &self.connect_opts, false, canceler).await {
                         Ok(msg) => return Ok(msg),
                         Err(err) => {
                             last_err = err.into();
@@ -98,7 +102,7 @@ impl DnsResolver {
             #[cfg(unix)]
             NameServerAddr::UnixSocketAddr(ref path) => self
                 .client_cache
-                .lookup_unix_stream(path, msg)
+                .lookup_unix_stream(path, msg, canceler)
                 .await
                 .map_err(From::from),
         }
@@ -107,7 +111,7 @@ impl DnsResolver {
 
 #[async_trait]
 impl DnsResolve for DnsResolver {
-    async fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+    async fn resolve(&self, host: &str, port: u16, canceler: &Canceler) -> io::Result<Vec<SocketAddr>> {
         let mut name = Name::from_utf8(host)?;
         name.set_fqdn(true);
 
@@ -128,8 +132,8 @@ impl DnsResolve for DnsResolver {
         msgv6.add_query(queryv6);
 
         match future::join(
-            self.lookup(msgv4).instrument(debug_span!("V4")),
-            self.lookup(msgv6).instrument(debug_span!("V6")),
+            self.lookup(msgv4, canceler).instrument(debug_span!("V4")),
+            self.lookup(msgv6, canceler).instrument(debug_span!("V6")),
         )
         .await
         {

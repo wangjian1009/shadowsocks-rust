@@ -787,7 +787,9 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         if matches.get_flag("VPN_MODE") {
             // A socket `protect_path` in CWD
             // Same as shadowsocks-libev's android.c
-            config.outbound_vpn_protect_path = Some(shadowsocks_service::shadowsocks::net::VpnProtectPath::Path(From::from("protect_path")));
+            config.outbound_vpn_protect_path = Some(shadowsocks_service::shadowsocks::net::VpnProtectPath::Path(
+                From::from("protect_path"),
+            ));
         }
 
         if matches.get_raw("LOCAL_ADDR").is_some() || matches.get_raw("PROTOCOL").is_some() {
@@ -1116,13 +1118,13 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         let config_path = config.config_path.clone();
         let canceler = Arc::new(Canceler::new());
 
-        let instance = create_local(config).await.expect("create local");
+        let instance = create_local(config, &canceler).await.expect("create local");
 
         if let Some(config_path) = config_path {
             launch_reload_server_task(
                 config_path,
                 instance.server_balancer().clone().cloned(),
-                canceler.waiter(),
+                canceler.clone(),
             );
         }
 
@@ -1163,13 +1165,11 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
 }
 
 #[cfg(unix)]
-use shadowsocks_service::shadowsocks::canceler::CancelWaiter;
-
-#[cfg(unix)]
-fn launch_reload_server_task(config_path: PathBuf, mut balancer: Option<PingBalancer>, mut cancel_waiter: CancelWaiter) {
+fn launch_reload_server_task(config_path: PathBuf, mut balancer: Option<PingBalancer>, canceler: Arc<Canceler>) {
     use tokio::signal::unix::{signal, SignalKind};
     use tracing::{info_span, Instrument};
 
+    let mut cancel_waiter = canceler.waiter();
     tokio::spawn(
         async move {
             let mut sigusr1 = signal(SignalKind::user_defined1()).expect("signal");
@@ -1193,7 +1193,7 @@ fn launch_reload_server_task(config_path: PathBuf, mut balancer: Option<PingBala
                 info!("auto-reload {} with {} servers", config_path.display(), servers.len());
 
                 if let Some(balancer) = balancer.as_mut() {
-                    let r = balancer.reset_servers(servers).await;
+                    let r = balancer.reset_servers(servers, &canceler).await;
 
                     if let Err(err) = r {
                         error!("auto-reload {} but found error: {}", config_path.display(), err);

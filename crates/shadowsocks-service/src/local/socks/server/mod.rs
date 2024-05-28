@@ -103,7 +103,7 @@ impl SocksBuilder {
         self.launchd_udp_socket_name = Some(n);
     }
 
-    pub async fn build(self) -> io::Result<Socks> {
+    pub async fn build(self, canceler: &Canceler) -> io::Result<Socks> {
         let udp_bind_addr = self.udp_bind_addr.unwrap_or_else(|| self.client_config.clone());
 
         let mut udp_server = None;
@@ -122,7 +122,7 @@ impl SocksBuilder {
                 builder.set_launchd_socket_name(s);
             }
 
-            let server = builder.build().await?;
+            let server = builder.build(canceler).await?;
             udp_server = Some(server);
         }
 
@@ -143,7 +143,7 @@ impl SocksBuilder {
                 builder.set_launchd_socket_name(s);
             }
 
-            let server = builder.build().await?;
+            let server = builder.build(canceler).await?;
             tcp_server = Some(server);
         }
 

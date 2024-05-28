@@ -241,11 +241,12 @@ impl RedirUdpServer {
         time_to_live: Option<Duration>,
         capacity: Option<usize>,
         balancer: PingBalancer,
+        canceler: &Canceler,
     ) -> io::Result<RedirUdpServer> {
         let listener = match *client_config {
             ServerAddr::SocketAddr(ref saddr) => UdpRedirSocket::listen(redir_ty, *saddr)?,
             ServerAddr::DomainName(ref dname, port) => {
-                lookup_then!(context.context_ref(), dname, port, |addr| {
+                lookup_then!(context.context_ref(), dname, port, canceler, |addr| {
                     UdpRedirSocket::listen(redir_ty, addr)
                 })?
                 .1

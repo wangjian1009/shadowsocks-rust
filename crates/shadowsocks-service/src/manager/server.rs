@@ -160,8 +160,8 @@ impl ManagerBuilder {
     }
 
     /// Build the manager server instance
-    pub async fn build(self) -> io::Result<Manager> {
-        let listener = ManagerListener::bind(&self.context, &self.svr_cfg.addr).await?;
+    pub async fn build(self, canceler: &Canceler) -> io::Result<Manager> {
+        let listener = ManagerListener::bind(&self.context, &self.svr_cfg.addr, canceler).await?;
         Ok(Manager {
             context: self.context,
             servers: Mutex::new(HashMap::new()),

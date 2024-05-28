@@ -91,7 +91,7 @@ pub async fn run(config: Config, canceler: Arc<Canceler>) -> io::Result<()> {
         manager_builder.set_acl(Arc::new(acl));
     }
 
-    let manager = manager_builder.build().await?;
+    let manager = manager_builder.build(canceler.as_ref()).await?;
 
     for svr_inst in config.server {
         manager.add_server(canceler.clone(), svr_inst.config).await;

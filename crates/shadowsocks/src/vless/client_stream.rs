@@ -14,9 +14,7 @@ use tokio::{
 };
 
 use crate::{
-    config::ServerConfig,
-    net::ConnectOpts,
-    transport::{AsyncPing, Connector, DeviceOrGuard, StreamConnection},
+    canceler::Canceler, config::ServerConfig, net::ConnectOpts, transport::{AsyncPing, Connector, DeviceOrGuard, StreamConnection}
 };
 
 use super::{encoding, new_error, protocol, Address, UUID};
@@ -87,12 +85,13 @@ impl<S: StreamConnection> ClientStream<S> {
         target_address: Address,
         opts: &ConnectOpts,
         map_fn: F,
+        canceler: &Canceler
     ) -> io::Result<ClientStream<S>>
     where
         C: Connector,
         F: FnOnce(C::TS) -> S,
     {
-        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.tcp_external_addr(), opts)).await
+        let stream = match time::timeout(svr_cfg.timeout(), connector.connect(svr_cfg.tcp_external_addr(), opts, canceler)).await
         {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => return Err(e),

@@ -19,6 +19,7 @@ use tokio::{sync::mpsc, task::JoinHandle, time};
 use tracing::{debug, error, info_span, trace, warn, Instrument, Span};
 
 use shadowsocks::{
+    canceler::Canceler,
     config::ServerProtocol,
     lookup_then,
     net::{AddrFamily, UdpSocket as ShadowUdpSocket},
@@ -64,7 +65,7 @@ cfg_if! {
 #[async_trait]
 pub trait UdpInboundWrite {
     /// Sends packet `data` received from `remote_addr` back to `peer_addr`
-    async fn send_to(&self, peer_addr: SocketAddr, remote_addr: &Address, data: &[u8]) -> io::Result<()>;
+    async fn send_to(&self, peer_addr: SocketAddr, remote_addr: &Address, data: &[u8], canceler: &Canceler) -> io::Result<()>;
 }
 
 #[derive(Debug)]
@@ -139,7 +140,7 @@ where
     }
 
     /// Sends `data` from `peer_addr` to `target_addr`
-    pub async fn send_to(&mut self, peer_addr: SocketAddr, target_addr: Address, data: &[u8]) -> io::Result<()> {
+    pub async fn send_to(&mut self, peer_addr: SocketAddr, target_addr: Address, data: &[u8], canceler: &Arc<Canceler>) -> io::Result<()> {
         // Check or (re)create an association
 
         let mut assoc = self.assoc_map.get(&peer_addr);
@@ -153,6 +154,7 @@ where
                 self.balancer.clone(),
                 self.respond_writer.clone(),
                 self.server_session_expire_duration,
+                canceler,
             );
             self.assoc_map.insert(peer_addr, new_assoc);
 
@@ -244,6 +246,7 @@ where
         balancer: PingBalancer,
         respond_writer: W,
         server_session_expire_duration: Duration,
+        canceler: &Arc<Canceler>,
     ) -> UdpAssociation<W> {
         let span = info_span!("udp", local = ?peer_addr);
         let sender = UdpAssociationContext::create(
@@ -254,6 +257,7 @@ where
             respond_writer,
             server_session_expire_duration,
             span.clone(),
+            canceler,
         );
         UdpAssociation {
             sender,
@@ -330,6 +334,7 @@ where
         respond_writer: W,
         server_session_expire_duration: Duration,
         span: Span,
+        canceler: &Arc<Canceler>,
     ) -> mpsc::Sender<(Address, Bytes, Span)> {
         // Pending packets UDP_ASSOCIATION_SEND_CHANNEL_SIZE for each association should be good enough for a server.
         // If there are plenty of packets stuck in the channel, dropping excessive packets is a good way to protect the server from
@@ -353,9 +358,10 @@ where
             server_session_expire_duration,
         };
 
+        let canceler = canceler.clone();
         tokio::spawn(
             async move {
-                assoc.dispatch_packet(receiver).await;
+                assoc.dispatch_packet(receiver, canceler.as_ref()).await;
             }
             .instrument(span),
         );
@@ -437,7 +443,7 @@ where
         }
     }
 
-    async fn dispatch_packet(mut self, mut receiver: mpsc::Receiver<(Address, Bytes, Span)>) {
+    async fn dispatch_packet(mut self, mut receiver: mpsc::Receiver<(Address, Bytes, Span)>, canceler: &Canceler) {
         let mut bypassed_ipv4_buffer = Vec::new();
         let mut bypassed_ipv6_buffer = Vec::new();
         let mut proxied_buffer = Vec::new();
@@ -469,7 +475,7 @@ where
                         }
                     };
 
-                    if let Err(close_reason) = self.dispatch_received_packet(&target_addr, &data, &mut check_rate_limit_size).instrument(span).await {
+                    if let Err(close_reason) = self.dispatch_received_packet(&target_addr, &data, &mut check_rate_limit_size, canceler).instrument(span).await {
                         break Some(close_reason);
                     }
                 }
@@ -487,7 +493,7 @@ where
 
                     let span = info_span!("udp.remote", target = addr.to_string(), source = "bypass");
                     let addr = Address::from(addr);
-                    if let Err(close_reason) = self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true, &mut check_rate_limit_size).instrument(span).await {
+                    if let Err(close_reason) = self.send_received_respond_packet(&addr, &bypassed_ipv4_buffer[..n], true, &mut check_rate_limit_size, canceler).instrument(span).await {
                         break Some(close_reason);
                     }
                 }
@@ -505,7 +511,7 @@ where
 
                     let span = info_span!("udp.remote", target = addr.to_string(), source = "bypass");
                     let addr = Address::from(addr);
-                    if let Err(close_reason) = self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut check_rate_limit_size).instrument(span).await {
+                    if let Err(close_reason) = self.send_received_respond_packet(&addr, &bypassed_ipv6_buffer[..n], true, &mut check_rate_limit_size, canceler).instrument(span).await {
                         break Some(close_reason);
                     }
                 }
@@ -555,7 +561,7 @@ where
                     }
 
                     idle_timeout.tick();
-                    if let Err(close_reason) = self.send_received_respond_packet(&addr, &proxied_buffer[..n], false, &mut check_rate_limit_size).instrument(span.clone()).await {
+                    if let Err(close_reason) = self.send_received_respond_packet(&addr, &proxied_buffer[..n], false, &mut check_rate_limit_size, canceler).instrument(span.clone()).await {
                         break Some(close_reason);
                     }
                 }
@@ -631,10 +637,11 @@ where
         target_addr: &Address,
         data: &[u8],
         check_rate_limit_size: &mut usize,
+        canceler: &Canceler,
     ) -> Result<(), UdpAssociationCloseReason> {
         // Check if target should be bypassed. If so, send packets directly.
         #[allow(unused_mut)]
-        let mut bypassed = self.balancer.is_empty() || self.context.check_target_bypassed(target_addr).await;
+        let mut bypassed = self.balancer.is_empty() || self.context.check_target_bypassed(target_addr, canceler).await;
 
         #[cfg(feature = "local-fake-mode")]
         if !bypassed {
@@ -642,7 +649,9 @@ where
         }
 
         if bypassed {
-            let _sended = self.dispatch_received_bypassed_packet(target_addr, data).await;
+            let _sended = self
+                .dispatch_received_bypassed_packet(target_addr, data, canceler)
+                .await;
         } else if *check_rate_limit_size > 0 {
             debug!(
                 target = target_addr.to_string(),
@@ -650,7 +659,9 @@ where
                 "==> discard for rate-limited"
             );
         } else {
-            let sended = self.dispatch_received_proxied_packet(target_addr, data).await?;
+            let sended = self
+                .dispatch_received_proxied_packet(target_addr, data, canceler)
+                .await?;
             if sended {
                 *check_rate_limit_size += data.len();
             }
@@ -658,12 +669,17 @@ where
         Ok(())
     }
 
-    async fn dispatch_received_bypassed_packet(&mut self, target_addr: &Address, data: &[u8]) -> bool {
+    async fn dispatch_received_bypassed_packet(
+        &mut self,
+        target_addr: &Address,
+        data: &[u8],
+        canceler: &Canceler,
+    ) -> bool {
         match *target_addr {
             Address::SocketAddress(sa) => self.send_received_bypassed_packet(sa, data).await,
             Address::DomainNameAddress(ref dname, port) => {
                 match self
-                    .dispatch_received_bypassed_packet_domain_name(dname, port, data)
+                    .dispatch_received_bypassed_packet_domain_name(dname, port, data, canceler)
                     .await
                 {
                     Ok(result) => result,
@@ -682,8 +698,9 @@ where
         target_dname: &str,
         target_port: u16,
         data: &[u8],
+        canceler: &Canceler,
     ) -> io::Result<bool> {
-        lookup_then!(self.context.context_ref(), target_dname, target_port, |sa| {
+        lookup_then!(self.context.context_ref(), target_dname, target_port, canceler, |sa| {
             io::Result::Ok(self.send_received_bypassed_packet(sa, data).await)
         })
         .map(|(_, r)| r)
@@ -788,6 +805,7 @@ where
         &mut self,
         target_addr: &Address,
         data: &[u8],
+        canceler: &Canceler,
     ) -> Result<bool, UdpAssociationCloseReason> {
         // Increase Packet ID before send
         self.client_packet_id = match self.client_packet_id.checked_add(1) {
@@ -844,6 +862,7 @@ where
                             svr_cfg,
                             effect_ss_cfg,
                             self.context.connect_opts_ref(),
+                            canceler,
                         )
                         .await
                         {
@@ -874,7 +893,13 @@ where
                         }
 
                         let context = match self
-                            .trojan_create_context(svr_cfg, effect_trojan_cfg, self.peer_addr, self.close_tx.clone())
+                            .trojan_create_context(
+                                svr_cfg,
+                                effect_trojan_cfg,
+                                self.peer_addr,
+                                self.close_tx.clone(),
+                                canceler,
+                            )
                             .await
                         {
                             Ok(context) => context,
@@ -940,7 +965,10 @@ where
             }
             #[cfg(feature = "vless")]
             MultiProtocolProxySocket::Vless(ref mut context) => {
-                match context.vless_send_to(&self.peer_addr, target_addr, data).await {
+                match context
+                    .vless_send_to(&self.peer_addr, target_addr, data, canceler)
+                    .await
+                {
                     Ok(()) => {
                         self.context.flow_stat().incr_tx(data.len() as u64);
                         return Ok(true);
@@ -1001,9 +1029,10 @@ where
         data: &[u8],
         bypassed: bool,
         check_rate_limit_size: &mut usize,
+        canceler: &Canceler,
     ) -> Result<(), UdpAssociationCloseReason> {
         // Send back to client
-        if let Err(err) = self.respond_writer.send_to(self.peer_addr, addr, data).await {
+        if let Err(err) = self.respond_writer.send_to(self.peer_addr, addr, data, canceler).await {
             warn!(error = ?err, target = addr.to_string(), pkt.len = data.len(), "<== send error");
             Err(UdpAssociationCloseReason::LocalSocketError)
         } else {

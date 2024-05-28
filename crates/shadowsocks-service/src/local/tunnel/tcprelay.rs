@@ -46,7 +46,7 @@ impl TunnelTcpServerBuilder {
         self.launchd_socket_name = Some(n);
     }
 
-    pub async fn build(self) -> io::Result<TunnelTcpServer> {
+    pub async fn build(self, canceler: &Canceler) -> io::Result<TunnelTcpServer> {
         cfg_if::cfg_if! {
             if #[cfg(target_os = "macos")] {
                 let listener = if let Some(launchd_socket_name) = self.launchd_socket_name {
@@ -57,10 +57,10 @@ impl TunnelTcpServerBuilder {
                     let tokio_listener = TokioTcpListener::from_std(std_listener)?;
                     ShadowTcpListener::from_listener(tokio_listener, self.context.accept_opts())?
                 } else {
-                    create_standard_tcp_listener(&self.context, &self.client_config).await?
+                    create_standard_tcp_listener(&self.context, &self.client_config, canceler).await?
                 };
             } else {
-                let listener = create_standard_tcp_listener(&self.context, &self.client_config).await?;
+                let listener = create_standard_tcp_listener(&self.context, &self.client_config, canceler).await?;
             }
         }
 
@@ -111,13 +111,16 @@ impl TunnelTcpServer {
                 }
             };
 
-            tokio::spawn(handle_tcp_client(
-                self.context.clone(),
-                stream,
-                self.balancer.clone(),
-                peer_addr,
-                forward_addr.clone(),
-            ).in_current_span());
+            let context = self.context.clone();
+            let balancer = self.balancer.clone();
+            let forward_addr = forward_addr.clone();
+            let canceler = canceler.clone();
+            tokio::spawn(
+                async move {
+                    handle_tcp_client(context, stream, balancer, peer_addr, forward_addr, canceler.as_ref()).await
+                }
+                .in_current_span(),
+            );
         }
     }
 }
@@ -128,13 +131,14 @@ async fn handle_tcp_client(
     balancer: PingBalancer,
     peer_addr: SocketAddr,
     forward_addr: Arc<Address>,
+    canceler: &Canceler,
 ) -> io::Result<()> {
     let forward_addr: &Address = &forward_addr;
 
     if balancer.is_empty() {
         trace!("establishing tcp tunnel {} <-> {} direct", peer_addr, forward_addr);
 
-        let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), &forward_addr).await?;
+        let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), &forward_addr, canceler).await?;
         return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, &forward_addr, None).await;
     }
 
@@ -151,14 +155,6 @@ async fn handle_tcp_client(
     #[cfg(feature = "rate-limit")]
     let stream = shadowsocks::transport::RateLimitedStream::from_stream(stream, Some(context.rate_limiter()));
 
-    let mut remote = AutoProxyClientStream::connect_proxied(&context, &server, &forward_addr).await?;
-    establish_tcp_tunnel(
-        context.as_ref(),
-        svr_cfg,
-        stream,
-        &mut remote,
-        peer_addr,
-        &forward_addr,
-    )
-    .await
+    let mut remote = AutoProxyClientStream::connect_proxied(&context, &server, &forward_addr, canceler).await?;
+    establish_tcp_tunnel(context.as_ref(), svr_cfg, stream, &mut remote, peer_addr, &forward_addr).await
 }

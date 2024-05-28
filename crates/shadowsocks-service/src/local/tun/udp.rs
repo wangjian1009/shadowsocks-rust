@@ -8,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use etherparse::PacketBuilder;
-use shadowsocks::relay::socks5::Address;
+use shadowsocks::{relay::socks5::Address, canceler::Canceler};
 use tokio::sync::mpsc;
 use tracing::debug;
 
@@ -48,7 +48,7 @@ impl UdpTun {
     pub fn manager(&self) -> &UdpAssociationManager<UdpTunInboundWriter> {
         &self.manager
     }
-    
+
     pub fn close_association(&mut self, peer_addr: &SocketAddr, reason: UdpAssociationCloseReason) {
         self.manager.close_association(peer_addr, reason)
     }
@@ -58,9 +58,10 @@ impl UdpTun {
         src_addr: SocketAddr,
         dst_addr: SocketAddr,
         payload: &[u8],
+        canceler: &Arc<Canceler>,
     ) -> io::Result<()> {
         debug!("UDP {} -> {} payload.size: {} bytes", src_addr, dst_addr, payload.len());
-        if let Err(err) = self.manager.send_to(src_addr, dst_addr.into(), payload).await {
+        if let Err(err) = self.manager.send_to(src_addr, dst_addr.into(), payload, canceler).await {
             debug!(
                 "UDP {} -> {} payload.size: {} bytes failed, error: {}",
                 src_addr,
@@ -103,7 +104,13 @@ impl UdpTunInboundWriter {
 
 #[async_trait]
 impl UdpInboundWrite for UdpTunInboundWriter {
-    async fn send_to(&self, peer_addr: SocketAddr, remote_addr: &Address, data: &[u8]) -> io::Result<()> {
+    async fn send_to(
+        &self,
+        peer_addr: SocketAddr,
+        remote_addr: &Address,
+        data: &[u8],
+        canceler: &Canceler,
+    ) -> io::Result<()> {
         let addr = match *remote_addr {
             Address::SocketAddress(sa) => {
                 // Try to convert IPv4 mapped IPv6 address if server is running on dual-stack mode
@@ -177,10 +184,15 @@ impl UdpInboundWrite for UdpTunInboundWriter {
             }
         };
 
-        self.tun_tx
-            .send(packet)
-            .await
-            .map_err(|e| io::Error::new(ErrorKind::Other, format!("failed to send packet to tun: {}", e)))?;
+        let mut waiter = canceler.waiter();
+        tokio::select! {
+            r =  self.tun_tx.send(packet) => {
+                r.map_err(|e| io::Error::new(ErrorKind::Other, format!("failed to send packet to tun: {}", e)))?;
+            }
+            _ = waiter.wait() => {
+                return Err(io::Error::new(io::ErrorKind::Other, "send_to canceled"));
+            }
+        }
 
         Ok(())
     }

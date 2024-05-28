@@ -145,7 +145,7 @@ pub struct Server {
 
 impl Server {
     /// Create a shadowsocks local server
-    pub async fn new(context: Arc<Context>, config: Config) -> io::Result<Server> {
+    pub async fn new(context: Arc<Context>, config: Config, canceler: &Arc<Canceler>) -> io::Result<Server> {
         assert!(config.config_type == ConfigType::Local && !config.local.is_empty());
 
         trace!("{:?}", config);
@@ -293,7 +293,7 @@ impl Server {
                 }
             }
 
-            balancer_builder.build().await?
+            balancer_builder.build(canceler).await?
         };
 
         let mut local_server = Server {
@@ -363,7 +363,7 @@ impl Server {
                         server_builder.set_launchd_udp_socket_name(n);
                     }
 
-                    let server = server_builder.build().await?;
+                    let server = server_builder.build(canceler).await?;
                     local_server.socks_servers.push(server);
                 }
                 #[cfg(feature = "local-tunnel")]
@@ -403,7 +403,7 @@ impl Server {
                         server_builder.set_launchd_udp_socket_name(n);
                     }
 
-                    let server = server_builder.build().await?;
+                    let server = server_builder.build(canceler).await?;
                     local_server.tunnel_servers.push(server);
                 }
                 #[cfg(feature = "local-http")]
@@ -421,7 +421,7 @@ impl Server {
                         builder.set_launchd_tcp_socket_name(n);
                     }
 
-                    let server = builder.build().await?;
+                    let server = builder.build(canceler).await?;
                     local_server.http_servers.push(server);
                 }
                 #[cfg(feature = "local-redir")]
@@ -445,7 +445,7 @@ impl Server {
                         server_builder.set_udp_bind_addr(udp_addr);
                     }
 
-                    let server = server_builder.build().await?;
+                    let server = server_builder.build(canceler).await?;
                     local_server.redir_servers.push(server);
                 }
                 #[cfg(feature = "local-dns")]
@@ -483,7 +483,7 @@ impl Server {
                         server_builder.set_launchd_udp_socket_name(n);
                     }
 
-                    let server = server_builder.build().await?;
+                    let server = server_builder.build(canceler).await?;
                     local_server.dns_servers.push(server);
                 }
                 #[cfg(any(feature = "local-tun", feature = "wireguard"))]
@@ -843,13 +843,13 @@ where
     first_res.unwrap_or_else(|| Ok(()))
 }
 
-pub async fn create(config: Config) -> io::Result<Server> {
+pub async fn create(config: Config, canceler: &Arc<Canceler>) -> io::Result<Server> {
     let context = Context::new(ServerType::Server);
-    let server = Server::new(Arc::new(context), config).await?;
+    let server = Server::new(Arc::new(context), config, canceler).await?;
     Ok(server)
 }
 
 /// Create then run a Local Server
 pub async fn run(config: Config, canceler: Arc<Canceler>) -> io::Result<()> {
-    create(config).await?.run(canceler).await
+    create(config, &canceler).await?.run(canceler).await
 }

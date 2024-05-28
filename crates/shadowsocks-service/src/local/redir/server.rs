@@ -82,7 +82,7 @@ impl RedirBuilder {
         self.udp_bind_addr = Some(addr);
     }
 
-    pub async fn build(self) -> io::Result<Redir> {
+    pub async fn build(self, canceler: &Canceler) -> io::Result<Redir> {
         let mut tcp_server = None;
         if self.mode.enable_tcp() {
             let server = RedirTcpServer::new(
@@ -90,6 +90,7 @@ impl RedirBuilder {
                 &self.client_addr,
                 self.balancer.clone(),
                 self.tcp_redir,
+                canceler,
             )
             .await?;
             tcp_server = Some(server);
@@ -106,6 +107,7 @@ impl RedirBuilder {
                 self.udp_expiry_duration,
                 self.udp_capacity,
                 self.balancer,
+                canceler,
             )
             .await?;
             udp_server = Some(server);

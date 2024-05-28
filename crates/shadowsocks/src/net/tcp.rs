@@ -19,7 +19,7 @@ use tokio::{
     net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream},
 };
 
-use crate::{context::Context, ServerAddr};
+use crate::{canceler::Canceler, context::Context, ServerAddr};
 
 use super::{
     is_dual_stack_addr,
@@ -54,11 +54,12 @@ impl TcpStream {
         context: &Context,
         addr: &ServerAddr,
         opts: &ConnectOpts,
+        canceler: &Canceler,
     ) -> io::Result<TcpStream> {
         let stream = match *addr {
             ServerAddr::SocketAddr(ref addr) => SysTcpStream::connect(*addr, opts).await?,
             ServerAddr::DomainName(ref domain, port) => {
-                lookup_then_connect!(context, domain, port, |addr| {
+                lookup_then_connect!(context, domain, port, canceler, |addr| {
                     SysTcpStream::connect(addr, opts).await
                 })?
                 .1
@@ -73,11 +74,12 @@ impl TcpStream {
         context: &Context,
         addr: ServerAddr,
         opts: &ConnectOpts,
+        canceler: &Canceler,
     ) -> io::Result<TcpStream> {
         let stream = match addr {
             ServerAddr::SocketAddr(addr) => SysTcpStream::connect(addr, opts).await?,
             ServerAddr::DomainName(domain, port) => {
-                lookup_then_connect!(context, &domain, port, |addr| {
+                lookup_then_connect!(context, &domain, port, canceler, |addr| {
                     SysTcpStream::connect(addr, opts).await
                 })?
                 .1

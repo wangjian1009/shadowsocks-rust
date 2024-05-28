@@ -1,8 +1,6 @@
 use super::super::Acceptor;
 use crate::{
-    context::Context,
-    net::{AcceptOpts, TcpListener},
-    ServerAddr,
+    canceler::Canceler, context::Context, net::{AcceptOpts, TcpListener}, ServerAddr
 };
 use std::{io, net::SocketAddr};
 
@@ -51,18 +49,19 @@ impl TcpAcceptor {
         Ok(TcpAcceptor { inner })
     }
 
-    pub async fn bind_server(context: &Context, addr: &ServerAddr) -> io::Result<TcpAcceptor> {
-        Self::bind_server_with_opts(context, addr, DEFAULT_ACCEPT_OPTS.clone()).await
+    pub async fn bind_server(context: &Context, addr: &ServerAddr, canceler: &Canceler) -> io::Result<TcpAcceptor> {
+        Self::bind_server_with_opts(context, addr, DEFAULT_ACCEPT_OPTS.clone(), canceler).await
     }
 
     pub async fn bind_server_with_opts(
         context: &Context,
         addr: &ServerAddr,
         accept_opts: AcceptOpts,
+        canceler: &Canceler,
     ) -> io::Result<TcpAcceptor> {
         match addr {
             ServerAddr::SocketAddr(addr) => Self::bind_with_opts(addr, accept_opts).await,
-            ServerAddr::DomainName(domain, port) => Ok(lookup_then!(context, domain, *port, |addr| {
+            ServerAddr::DomainName(domain, port) => Ok(lookup_then!(context, domain, *port, canceler, |addr| {
                 Self::bind_with_opts(&addr, accept_opts.clone()).await
             })?
             .1),

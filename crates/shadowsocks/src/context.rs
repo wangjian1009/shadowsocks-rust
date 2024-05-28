@@ -6,10 +6,7 @@ use byte_string::ByteStr;
 use tracing::warn;
 
 use crate::{
-    config::{ReplayAttackPolicy, ServerType},
-    crypto::{v1::random_iv_or_salt, CipherKind},
-    dns_resolver::DnsResolver,
-    security::replay::ReplayProtector,
+    canceler::Canceler, config::{ReplayAttackPolicy, ServerType}, crypto::{v1::random_iv_or_salt, CipherKind}, dns_resolver::DnsResolver, security::replay::ReplayProtector
 };
 
 /// Service context
@@ -123,8 +120,8 @@ impl Context {
 
     /// Resolves DNS address to `SocketAddr`s
     #[allow(clippy::needless_lifetimes)]
-    pub async fn dns_resolve<'a>(&self, addr: &'a str, port: u16) -> io::Result<impl Iterator<Item = SocketAddr> + 'a> {
-        self.dns_resolver.resolve(addr, port).await
+    pub async fn dns_resolve<'a>(&self, addr: &'a str, port: u16, canceler: &Canceler) -> io::Result<impl Iterator<Item = SocketAddr> + 'a> {
+        self.dns_resolver.resolve(addr, port, canceler).await
     }
 
     /// Try to connect IPv6 addresses first if hostname could be resolved to both IPv4 and IPv6

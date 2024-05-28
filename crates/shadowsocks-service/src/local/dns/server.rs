@@ -129,7 +129,7 @@ impl DnsBuilder {
     }
 
     /// Build DNS server
-    pub async fn build(self) -> io::Result<Dns> {
+    pub async fn build(self, canceler: &Canceler) -> io::Result<Dns> {
         let client = Arc::new(DnsClient::new(
             self.context.clone(),
             self.balancer,
@@ -156,7 +156,7 @@ impl DnsBuilder {
                 builder.set_launchd_socket_name(s);
             }
 
-            let server = builder.build().await?;
+            let server = builder.build(canceler).await?;
             tcp_server = Some(server);
         }
 
@@ -170,7 +170,7 @@ impl DnsBuilder {
                 builder.set_launchd_socket_name(s);
             }
 
-            let server = builder.build().await?;
+            let server = builder.build(canceler).await?;
             udp_server = Some(server);
         }
 
@@ -213,7 +213,7 @@ impl DnsTcpServerBuilder {
         self.launchd_socket_name = Some(n);
     }
 
-    async fn build(self) -> io::Result<DnsTcpServer> {
+    async fn build(self, canceler: &Canceler) -> io::Result<DnsTcpServer> {
         cfg_if::cfg_if! {
             if #[cfg(target_os = "macos")] {
                 let listener = if let Some(launchd_socket_name) = self.launchd_socket_name {
@@ -224,10 +224,10 @@ impl DnsTcpServerBuilder {
                     let tokio_listener = TokioTcpListener::from_std(std_listener)?;
                     TcpListener::from_listener(tokio_listener, self.context.accept_opts())?
                 } else {
-                    create_standard_tcp_listener(&self.context, &self.bind_addr).await?
+                    create_standard_tcp_listener(&self.context, &self.bind_addr, canceler).await?
                 };
             } else {
-                let listener = create_standard_tcp_listener(&self.context, &self.bind_addr).await?;
+                let listener = create_standard_tcp_listener(&self.context, &self.bind_addr, canceler).await?;
             }
         }
 
@@ -284,13 +284,14 @@ impl DnsTcpServer {
             };
 
             let span = info_span!("dns.client", net = "tcp", peer.addr = peer_addr.to_string());
+            let canceler = canceler.clone();
+            let client = self.client.clone();
+            let local_addr = self.local_addr.clone();
+            let remote_addr = self.remote_addr.clone();
             tokio::spawn(
-                DnsTcpServer::handle_tcp_stream(
-                    self.client.clone(),
-                    stream,
-                    self.local_addr.clone(),
-                    self.remote_addr.clone(),
-                )
+                async move {
+                    DnsTcpServer::handle_tcp_stream(client, stream, local_addr, remote_addr, canceler.as_ref()).await
+                }
                 .instrument(span),
             );
         }
@@ -303,6 +304,7 @@ impl DnsTcpServer {
         mut stream: TcpStream,
         local_addr: Option<Arc<NameServerAddr>>,
         remote_addr: Arc<Address>,
+        canceler: &Canceler,
     ) -> io::Result<()> {
         let mut length_buf = [0u8; 2];
         let mut message_buf = BytesMut::new();
@@ -343,7 +345,7 @@ impl DnsTcpServer {
             };
 
             let respond_message = match client
-                .resolve(message, local_addr.as_ref().map(|e| e.as_ref()), &remote_addr)
+                .resolve(message, local_addr.as_ref().map(|e| e.as_ref()), &remote_addr, canceler)
                 .await
             {
                 Ok(m) => m,
@@ -403,7 +405,7 @@ impl DnsUdpServerBuilder {
         self.launchd_socket_name = Some(n);
     }
 
-    async fn build(self) -> io::Result<DnsUdpServer> {
+    async fn build(self, canceler: &Canceler) -> io::Result<DnsUdpServer> {
         cfg_if::cfg_if! {
             if #[cfg(target_os = "macos")] {
                 let socket = if let Some(launchd_socket_name) = self.launchd_socket_name {
@@ -413,10 +415,10 @@ impl DnsUdpServerBuilder {
                     let std_socket = get_launch_activate_udp_socket(&launchd_socket_name, true)?;
                     TokioUdpSocket::from_std(std_socket)?
                 } else {
-                    create_standard_udp_listener(&self.context, &self.bind_addr).await?.into()
+                    create_standard_udp_listener(&self.context, &self.bind_addr, canceler).await?.into()
                 };
             } else {
-                let socket = create_standard_udp_listener(&self.context, &self.bind_addr).await?.into();
+                let socket = create_standard_udp_listener(&self.context, &self.bind_addr, canceler).await?.into();
             }
         }
 
@@ -486,15 +488,24 @@ impl DnsUdpServer {
                 }
             };
 
+            let client = self.client.clone();
+            let listener = self.listener.clone();
+            let local_addr = self.local_addr.clone();
+            let remote_addr = self.remote_addr.clone();
+            let canceler = canceler.clone();
             tokio::spawn(
-                DnsUdpServer::handle_udp_packet(
-                    self.client.clone(),
-                    self.listener.clone(),
-                    peer_addr,
-                    message,
-                    self.local_addr.clone(),
-                    self.remote_addr.clone(),
-                )
+                async move {
+                    DnsUdpServer::handle_udp_packet(
+                        client,
+                        listener,
+                        peer_addr,
+                        message,
+                        local_addr,
+                        remote_addr,
+                        canceler.as_ref(),
+                    )
+                    .await
+                }
                 .instrument(span),
             );
         }
@@ -507,9 +518,10 @@ impl DnsUdpServer {
         message: Message,
         local_addr: Option<Arc<NameServerAddr>>,
         remote_addr: Arc<Address>,
+        canceler: &Canceler,
     ) -> io::Result<()> {
         let respond_message = match client
-            .resolve(message, local_addr.as_ref().map(|e| e.as_ref()), &remote_addr)
+            .resolve(message, local_addr.as_ref().map(|e| e.as_ref()), &remote_addr, canceler)
             .await
         {
             Ok(m) => m,
@@ -753,6 +765,12 @@ pub struct DnsClient {
     attempts: usize,
 }
 
+impl Drop for DnsClient {
+    fn drop(&mut self) {
+        tracing::error!("DnsClient dropped");
+    }
+}
+
 impl DnsClient {
     pub fn new(
         context: Arc<ServiceContext>,
@@ -774,6 +792,7 @@ impl DnsClient {
         request: Message,
         local_addr: Option<&NameServerAddr>,
         remote_addr: &Address,
+        canceler: &Canceler,
     ) -> io::Result<Message> {
         let mut message = Message::new();
         message.set_id(request.id());
@@ -795,7 +814,10 @@ impl DnsClient {
 
             let query = &request.queries()[0];
             let span = info_span!("dns.query", query = query.to_string());
-            let (r, forward) = self.acl_lookup(query, local_addr, remote_addr).instrument(span).await;
+            let (r, forward) = self
+                .acl_lookup(query, local_addr, remote_addr, canceler)
+                .instrument(span)
+                .await;
             if let Ok(result) = r {
                 for rec in result.answers() {
                     trace!("dns answer: {:?}", rec);
@@ -827,6 +849,7 @@ impl DnsClient {
         query: &Query,
         local_addr: Option<&NameServerAddr>,
         remote_addr: &Address,
+        canceler: &Canceler,
     ) -> (io::Result<Message>, bool) {
         // 原版的检查对于域名没有在acl配置中的，交由默认处理
         // 此处将默认处理改为根据acl的黑、白名单配置确定
@@ -839,12 +862,12 @@ impl DnsClient {
 
         match acl_check_result {
             Some(true) => {
-                let remote_response = self.lookup_remote(query, remote_addr).await;
+                let remote_response = self.lookup_remote(query, remote_addr, canceler).await;
                 trace!("pick remote response (query): {:?}", remote_response);
                 return (remote_response, true);
             }
             Some(false) => {
-                let local_response = self.lookup_local(query, local_addr).await;
+                let local_response = self.lookup_local(query, local_addr, canceler).await;
                 trace!("pick local response (query): {:?}", local_response);
                 return (local_response, false);
             }
@@ -852,7 +875,7 @@ impl DnsClient {
         }
 
         let decider = async {
-            let local_response = self.lookup_local(query, local_addr).await;
+            let local_response = self.lookup_local(query, local_addr, canceler).await;
             if should_forward_by_response(self.context.acl(), &local_response, query) {
                 info!("local response blocked");
                 None
@@ -863,7 +886,7 @@ impl DnsClient {
         .instrument(info_span!("dns.local"));
 
         let remote_response_fut = self
-            .lookup_remote(query, remote_addr)
+            .lookup_remote(query, remote_addr, canceler)
             .instrument(info_span!("dns.remote"));
         tokio::pin!(remote_response_fut, decider);
 
@@ -895,11 +918,15 @@ impl DnsClient {
         }
     }
 
-    async fn lookup_remote(&self, query: &Query, remote_addr: &Address) -> io::Result<Message> {
+    async fn lookup_remote(&self, query: &Query, remote_addr: &Address, canceler: &Canceler) -> io::Result<Message> {
         let mut last_err = io::Error::new(ErrorKind::InvalidData, "resolve empty");
 
         for _ in 0..self.attempts {
-            match self.lookup_remote_inner(query, remote_addr).await {
+            if canceler.is_canceled() {
+                return Err(io::Error::new(ErrorKind::Other, "canceled"));
+            }
+
+            match self.lookup_remote_inner(query, remote_addr, canceler).await {
                 Ok(m) => {
                     return Ok(m);
                 }
@@ -910,7 +937,12 @@ impl DnsClient {
         Err(last_err)
     }
 
-    async fn lookup_remote_inner(&self, query: &Query, remote_addr: &Address) -> io::Result<Message> {
+    async fn lookup_remote_inner(
+        &self,
+        query: &Query,
+        remote_addr: &Address,
+        canceler: &Canceler,
+    ) -> io::Result<Message> {
         let mut message = Message::new();
         message.set_id(thread_rng().gen());
         message.set_recursion_desired(true);
@@ -921,17 +953,17 @@ impl DnsClient {
         match self.mode {
             Mode::TcpOnly => {
                 let server = self.balancer.best_tcp_server();
-                self.lookup_remote_via_miner(message, remote_addr, server.as_ref(), false, false)
+                self.lookup_remote_via_miner(message, remote_addr, server.as_ref(), false, false, canceler)
                     .await
             }
             Mode::UdpOnly => {
                 let server = self.balancer.best_udp_server();
 
                 if Self::support_udp_lookup(server.server_config()) {
-                    self.lookup_remote_via_miner(message, remote_addr, server.as_ref(), true, false)
+                    self.lookup_remote_via_miner(message, remote_addr, server.as_ref(), true, false, canceler)
                         .await
                 } else {
-                    self.lookup_remote_via_miner(message, remote_addr, server.as_ref(), false, false)
+                    self.lookup_remote_via_miner(message, remote_addr, server.as_ref(), false, false, canceler)
                         .await
                 }
             }
@@ -940,7 +972,7 @@ impl DnsClient {
                 if !Self::support_udp_lookup(udp_server.server_config()) {
                     let server = self.balancer.best_tcp_server();
                     return self
-                        .lookup_remote_via_miner(message, remote_addr, server.as_ref(), false, false)
+                        .lookup_remote_via_miner(message, remote_addr, server.as_ref(), false, false, canceler)
                         .await;
                 }
 
@@ -955,10 +987,11 @@ impl DnsClient {
                     time::sleep(Duration::from_millis(sleep_time)).await;
 
                     let server = self.balancer.best_tcp_server();
-                    self.lookup_remote_via_miner(message2, remote_addr, server.as_ref(), false, true)
+                    self.lookup_remote_via_miner(message2, remote_addr, server.as_ref(), false, true, canceler)
                         .await
                 };
-                let udp_fut = self.lookup_remote_via_miner(message, remote_addr, udp_server.as_ref(), true, false);
+                let udp_fut =
+                    self.lookup_remote_via_miner(message, remote_addr, udp_server.as_ref(), true, false, canceler);
 
                 tokio::pin!(tcp_fut);
                 tokio::pin!(udp_fut);
@@ -984,6 +1017,7 @@ impl DnsClient {
         server: &super::super::loadbalancing::ServerIdent,
         is_udp: bool,
         is_second: bool,
+        canceler: &Canceler,
     ) -> io::Result<Message> {
         let span = info_span!(
             "miner",
@@ -995,7 +1029,7 @@ impl DnsClient {
         );
 
         self.client_cache
-            .lookup_remote(&self.context, server, remote_addr, message, is_udp)
+            .lookup_remote(&self.context, server, remote_addr, message, is_udp, canceler)
             .instrument(span)
             .await
             .map_err(From::from)
@@ -1012,11 +1046,16 @@ impl DnsClient {
             .unwrap_or(true)
     }
 
-    async fn lookup_local(&self, query: &Query, local_addr: Option<&NameServerAddr>) -> io::Result<Message> {
+    async fn lookup_local(
+        &self,
+        query: &Query,
+        local_addr: Option<&NameServerAddr>,
+        canceler: &Canceler,
+    ) -> io::Result<Message> {
         let mut last_err = io::Error::new(ErrorKind::InvalidData, "resolve empty");
 
         for _ in 0..self.attempts {
-            match self.lookup_local_inner(query, local_addr).await {
+            match self.lookup_local_inner(query, local_addr, canceler).await {
                 Ok(m) => {
                     return Ok(m);
                 }
@@ -1027,7 +1066,12 @@ impl DnsClient {
         Err(last_err)
     }
 
-    async fn lookup_local_inner(&self, query: &Query, local_addr: Option<&NameServerAddr>) -> io::Result<Message> {
+    async fn lookup_local_inner(
+        &self,
+        query: &Query,
+        local_addr: Option<&NameServerAddr>,
+        canceler: &Canceler,
+    ) -> io::Result<Message> {
         let local_addr = match local_addr {
             Some(local_addr) => local_addr,
             None => {
@@ -1048,15 +1092,19 @@ impl DnsClient {
             NameServerAddr::SocketAddr(ns) => {
                 // Query UDP then TCP
 
-                let udp_query =
-                    self.client_cache
-                        .lookup_local(ns, message.clone(), self.context.connect_opts_ref(), true);
+                let udp_query = self.client_cache.lookup_local(
+                    ns,
+                    message.clone(),
+                    self.context.connect_opts_ref(),
+                    true,
+                    canceler,
+                );
                 let tcp_query = async move {
                     // Send TCP query after 500ms, because UDP will always return faster than TCP, there is no need to send queries simutaneously
                     time::sleep(Duration::from_millis(500)).await;
 
                     self.client_cache
-                        .lookup_local(ns, message, self.context.connect_opts_ref(), false)
+                        .lookup_local(ns, message, self.context.connect_opts_ref(), false, canceler)
                         .await
                 };
 
@@ -1073,7 +1121,7 @@ impl DnsClient {
             #[cfg(unix)]
             NameServerAddr::UnixSocketAddr(ref path) => self
                 .client_cache
-                .lookup_unix_stream(path, message)
+                .lookup_unix_stream(path, message, canceler)
                 .await
                 .map_err(From::from),
         }

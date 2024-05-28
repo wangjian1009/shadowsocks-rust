@@ -4,7 +4,7 @@ use std::io;
 
 use tracing::warn;
 
-use crate::{config::ManagerAddr, context::Context, relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE};
+use crate::{canceler::Canceler, config::ManagerAddr, context::Context, relay::udprelay::MAXIMUM_UDP_PAYLOAD_SIZE};
 
 use super::{
     datagram::{ManagerDatagram, ManagerSocketAddr},
@@ -19,8 +19,8 @@ pub struct ManagerListener {
 
 impl ManagerListener {
     /// Create a `ManagerDatagram` binding to requested `bind_addr`
-    pub async fn bind(context: &Context, bind_addr: &ManagerAddr) -> io::Result<ManagerListener> {
-        ManagerDatagram::bind(context, bind_addr)
+    pub async fn bind(context: &Context, bind_addr: &ManagerAddr, canceler: &Canceler) -> io::Result<ManagerListener> {
+        ManagerDatagram::bind(context, bind_addr, canceler)
             .await
             .map(|socket| ManagerListener { socket })
     }

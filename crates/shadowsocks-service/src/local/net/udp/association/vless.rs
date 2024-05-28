@@ -62,6 +62,7 @@ impl VlessUdpContext {
         peer_addr: &SocketAddr,
         target_addr: &Address,
         data: &[u8],
+        canceler: &Canceler,
     ) -> io::Result<()> {
         if let Some(assoc) = self.assoc_map.get_mut(target_addr) {
             match assoc.w.write_to_mut(data).await {
@@ -104,6 +105,7 @@ impl VlessUdpContext {
                     ServerAddr::from(target_addr.clone()).into(),
                     self.context.connect_opts_ref(),
                     |f| f,
+                    canceler,
                 )
                 .await?;
 

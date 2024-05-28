@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use super::super::Connector;
 
-use crate::context::Context;
+use crate::{context::Context, canceler::Canceler};
 
 pub struct TcpConnector {
     context: Option<Arc<Context>>,
@@ -25,9 +25,9 @@ impl Connector for TcpConnector {
     #[cfg(not(feature = "rate-limit"))]
     type TS = crate::net::TcpStream;
 
-    async fn connect(&self, addr: &ServerAddr, connect_opts: &ConnectOpts) -> io::Result<Self::TS> {
+    async fn connect(&self, addr: &ServerAddr, connect_opts: &ConnectOpts, canceler: &Canceler) -> io::Result<Self::TS> {
         if let Some(context) = self.context.as_ref() {
-            let stream = crate::net::TcpStream::connect_server_with_opts(context, addr, connect_opts).await?;
+            let stream = crate::net::TcpStream::connect_server_with_opts(context, addr, connect_opts, canceler).await?;
 
             #[cfg(feature = "rate-limit")]
             let stream = Self::TS::from_stream(stream, None);

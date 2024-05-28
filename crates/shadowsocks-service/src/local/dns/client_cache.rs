@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::{
     collections::{hash_map::Entry, HashMap, VecDeque},
+    io,
     net::SocketAddr,
     time::Duration,
 };
@@ -12,7 +13,7 @@ use hickory_resolver::proto::{error::ProtoError, op::Message};
 use tokio::sync::Mutex;
 use tracing::{debug, trace};
 
-use shadowsocks::{net::ConnectOpts, relay::socks5::Address};
+use shadowsocks::{canceler::Canceler, net::ConnectOpts, relay::socks5::Address};
 
 use crate::local::{context::ServiceContext, loadbalancing::ServerIdent};
 
@@ -49,12 +50,13 @@ impl DnsClientCache {
         msg: Message,
         connect_opts: &ConnectOpts,
         is_udp: bool,
+        canceler: &Canceler,
     ) -> Result<Message, ProtoError> {
         let key = match is_udp {
             true => DnsClientKey::UdpLocal(ns),
             false => DnsClientKey::TcpLocal(ns),
         };
-        self.lookup_dns(&key, msg, connect_opts, None, None).await
+        self.lookup_dns(&key, msg, connect_opts, None, None, canceler).await
     }
 
     pub async fn lookup_remote(
@@ -64,18 +66,31 @@ impl DnsClientCache {
         ns: &Address,
         msg: Message,
         is_udp: bool,
+        canceler: &Canceler,
     ) -> Result<Message, ProtoError> {
         let key = match is_udp {
             true => DnsClientKey::UdpRemote(ns.clone()),
             false => DnsClientKey::TcpRemote(ns.clone()),
         };
 
-        self.lookup_dns(&key, msg, context.connect_opts_ref(), Some(context), Some(svr))
-            .await
+        self.lookup_dns(
+            &key,
+            msg,
+            context.connect_opts_ref(),
+            Some(context),
+            Some(svr),
+            canceler,
+        )
+        .await
     }
 
     #[cfg(unix)]
-    pub async fn lookup_unix_stream<P: AsRef<Path>>(&self, ns: &P, msg: Message) -> Result<Message, ProtoError> {
+    pub async fn lookup_unix_stream<P: AsRef<Path>>(
+        &self,
+        ns: &P,
+        msg: Message,
+        canceler: &Canceler,
+    ) -> Result<Message, ProtoError> {
         let mut last_err = None;
 
         for _ in 0..self.retry_count {
@@ -85,8 +100,11 @@ impl DnsClientCache {
             //
             // 1. The cost of recreating UNIX stream sockets are very low
             // 2. This feature is only used by shadowsocks-android, and it doesn't support connection reuse
+            if canceler.is_canceled() {
+                return Err(io::Error::new(io::ErrorKind::Other, "canceled").into());
+            }
 
-            let mut client = match DnsClient::connect_unix_stream(ns).await {
+            let mut client = match DnsClient::connect_unix_stream(ns, canceler).await {
                 Ok(client) => client,
                 Err(err) => {
                     last_err = Some(From::from(err));
@@ -113,16 +131,21 @@ impl DnsClientCache {
         connect_opts: &ConnectOpts,
         context: Option<&ServiceContext>,
         svr: Option<&ServerIdent>,
+        canceler: &Canceler,
     ) -> Result<Message, ProtoError> {
         let mut last_err = None;
         for _ in 0..self.retry_count {
+            if canceler.is_canceled() {
+                return Err(io::Error::new(io::ErrorKind::Other, "canceled").into());
+            }
+            
             let mut client = self.get_client(dck).await;
             if client.is_none() {
                 trace!("creating connection to DNS server {:?}", dck);
 
                 let create_result = match dck {
-                    DnsClientKey::TcpLocal(tcp_l) => DnsClient::connect_tcp_local(*tcp_l, connect_opts).await,
-                    DnsClientKey::UdpLocal(udp_l) => DnsClient::connect_udp_local(*udp_l, connect_opts).await,
+                    DnsClientKey::TcpLocal(tcp_l) => DnsClient::connect_tcp_local(*tcp_l, connect_opts, canceler).await,
+                    DnsClientKey::UdpLocal(udp_l) => DnsClient::connect_udp_local(*udp_l, connect_opts, canceler).await,
                     DnsClientKey::TcpRemote(tcp_l) => {
                         DnsClient::connect_tcp_remote(
                             &context.unwrap().context(),
@@ -131,6 +154,7 @@ impl DnsClientCache {
                             context.unwrap().connect_opts_ref(),
                             context.unwrap().flow_stat(),
                             context.unwrap().connection_close_notify(),
+                            canceler,
                         )
                         .await
                     }
@@ -141,6 +165,7 @@ impl DnsClientCache {
                             udp_l.clone(),
                             context.unwrap().connect_opts_ref(),
                             context.unwrap().flow_stat(),
+                            canceler,
                         )
                         .await
                     }
@@ -153,21 +178,29 @@ impl DnsClientCache {
                         continue;
                     }
                 }
-            }
-            else {
+            } else {
                 trace!("reuse connection to DNS server {:?}", dck);
             }
-            
+
             let mut client = client.unwrap();
 
-            match client.lookup_timeout(msg.clone(), self.timeout).await {
-                Ok(msg) => {
-                    self.save_client(dck.clone(), client).await;
-                    return Ok(msg);
+            let mut waiter = canceler.waiter();
+            tokio::select! {
+                r = client.lookup_timeout(msg.clone(), self.timeout) => {
+                    match r {
+                        Ok(msg) => {
+                            self.save_client(dck.clone(), client).await;
+                            return Ok(msg);
+                        }
+                        Err(err) => {
+                            last_err = Some(err);
+                            continue;
+                        }
+                    }
                 }
-                Err(err) => {
-                    last_err = Some(err);
-                    continue;
+                _ = waiter.wait() => {
+                    trace!("lookup canceled");
+                    return Err(io::Error::new(io::ErrorKind::Other, "canceled").into());
                 }
             }
         }

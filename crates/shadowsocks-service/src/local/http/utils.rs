@@ -11,7 +11,7 @@ use hyper::{
     http::uri::Authority,
     HeaderMap, Uri, Version,
 };
-use shadowsocks::relay::socks5::Address;
+use shadowsocks::{canceler::Canceler, relay::socks5::Address};
 use tracing::error;
 
 use crate::local::{
@@ -117,9 +117,10 @@ pub async fn connect_host(
     context: &Arc<ServiceContext>,
     host: &Address,
     balancer: &PingBalancer,
+    canceler: &Canceler,
 ) -> io::Result<(AutoProxyClientStream, Option<Arc<ServerIdent>>)> {
     if balancer.is_empty() {
-        match AutoProxyClientStream::connect_bypassed(context, host).await {
+        match AutoProxyClientStream::connect_bypassed(context, host, canceler).await {
             Ok(s) => Ok((s, None)),
             Err(err) => {
                 error!("failed to connect host {} bypassed, err: {}", host, err);
@@ -129,7 +130,7 @@ pub async fn connect_host(
     } else {
         let server = balancer.best_tcp_server();
 
-        match AutoProxyClientStream::connect(context, server.as_ref(), host).await {
+        match AutoProxyClientStream::connect(context, server.as_ref(), host, canceler).await {
             Ok(s) => Ok((s, Some(server))),
             Err(err) => {
                 error!(

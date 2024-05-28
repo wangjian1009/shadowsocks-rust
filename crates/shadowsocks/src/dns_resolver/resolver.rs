@@ -24,6 +24,8 @@ use tokio::task::JoinHandle;
 #[cfg(feature = "hickory-dns")]
 use crate::net::ConnectOpts;
 
+use crate::canceler::Canceler;
+
 #[cfg(feature = "hickory-dns")]
 use super::hickory_dns_resolver::DnsResolver as HickoryDnsResolver;
 
@@ -31,7 +33,7 @@ use super::hickory_dns_resolver::DnsResolver as HickoryDnsResolver;
 #[async_trait]
 pub trait DnsResolve {
     /// Resolves `addr:port` to a list of `SocketAddr`
-    async fn resolve(&self, addr: &str, port: u16) -> io::Result<Vec<SocketAddr>>;
+    async fn resolve(&self, addr: &str, port: u16, canceler: &Canceler) -> io::Result<Vec<SocketAddr>>;
 }
 
 #[cfg(feature = "hickory-dns")]
@@ -285,7 +287,7 @@ impl DnsResolver {
 
     /// Resolve address into `SocketAddr`s
     #[allow(clippy::needless_lifetimes)]
-    pub async fn resolve<'a>(&self, addr: &'a str, port: u16) -> io::Result<impl Iterator<Item = SocketAddr> + 'a> {
+    pub async fn resolve<'a>(&self, addr: &'a str, port: u16, canceler: &Canceler) -> io::Result<impl Iterator<Item = SocketAddr> + 'a> {
         struct ResolverLogger<'x, 'y> {
             resolver: &'x DnsResolver,
             addr: &'y str,
@@ -391,7 +393,7 @@ impl DnsResolver {
                     Err(err)
                 }
             },
-            DnsResolver::Custom(ref resolver) => match resolver.resolve(addr, port).await {
+            DnsResolver::Custom(ref resolver) => match resolver.resolve(addr, port, canceler).await {
                 Ok(v) => Ok(EitherResolved::Custom(v.into_iter())),
                 Err(err) => {
                     let err = Error::new(ErrorKind::Other, format!("dns resolve {addr}:{port} error: {err}"));
