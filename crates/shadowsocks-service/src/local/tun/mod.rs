@@ -18,8 +18,17 @@ use tracing::{debug, error, info, trace, warn};
 use tun::{AsyncDevice, Configuration as TunConfiguration, Device as TunDevice, Error as TunError, Layer};
 
 use crate::local::{
-    context::ServiceContext, loadbalancing::PingBalancer, net::UdpAssociationCloseReceiver, start_stat::StartStat,
+    context::ServiceContext,
+    loadbalancing::PingBalancer,
+    net::UdpAssociationCloseReceiver,
+    start_stat::StartStat,
 };
+
+#[cfg(feature = "local-dns")]
+mod dns;
+
+#[cfg(feature = "local-dns")]
+pub use dns::DnsProcessor;
 
 use self::{
     ip_packet::IpPacket,
@@ -129,6 +138,8 @@ impl TunBuilder {
             udp,
             udp_close_rx,
             mode: self.mode,
+            #[cfg(feature = "local-dns")]
+            dns_processor: None,
         })
     }
 }
@@ -141,6 +152,9 @@ pub struct Tun {
     udp: UdpTun,
     udp_close_rx: UdpAssociationCloseReceiver,
     mode: Mode,
+
+    #[cfg(feature = "local-dns")]
+    dns_processor: Option<dns::DnsProcessor>,
 }
 
 impl Drop for Tun {
@@ -150,6 +164,11 @@ impl Drop for Tun {
 }
 
 impl Tun {
+    #[cfg(feature = "local-dns")]
+    pub fn set_dns_processor(&mut self, dns_processor: Option<DnsProcessor>) {
+        self.dns_processor = dns_processor;
+    }
+
     /// Start serving
     pub async fn run(mut self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
         if let Ok(mtu) = self.device.get_ref().mtu() {
@@ -408,6 +427,15 @@ impl Tun {
                     !dst_non_unicast,
                     udp_packet
                 );
+
+                #[cfg(feature = "local-dns")]
+                if let Some(dns_processor) = self.dns_processor.as_ref() {
+                    if &dst_addr == dns_processor.mock_dns_addr() {
+                        return dns_processor
+                            .handle_udp_frame(src_addr, dst_addr, payload, self.udp.manager().respond_writer(), canceler)
+                            .await;
+                    }
+                }
 
                 if let Err(err) = self.udp.handle_packet(src_addr, dst_addr, payload).await {
                     error!("handle UDP packet failed, err: {}, packet: {:?}", err, udp_packet);

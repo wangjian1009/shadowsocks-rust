@@ -745,7 +745,7 @@ fn should_forward_by_response(
     }
 }
 
-struct DnsClient {
+pub struct DnsClient {
     context: Arc<ServiceContext>,
     client_cache: DnsClientCache,
     mode: Mode,
@@ -754,7 +754,12 @@ struct DnsClient {
 }
 
 impl DnsClient {
-    fn new(context: Arc<ServiceContext>, balancer: PingBalancer, mode: Mode, client_cache_size: usize) -> DnsClient {
+    pub fn new(
+        context: Arc<ServiceContext>,
+        balancer: PingBalancer,
+        mode: Mode,
+        client_cache_size: usize,
+    ) -> DnsClient {
         DnsClient {
             context,
             client_cache: DnsClientCache::new(client_cache_size),
@@ -764,7 +769,7 @@ impl DnsClient {
         }
     }
 
-    async fn resolve(
+    pub async fn resolve(
         &self,
         request: Message,
         local_addr: Option<&NameServerAddr>,
@@ -921,8 +926,14 @@ impl DnsClient {
             }
             Mode::UdpOnly => {
                 let server = self.balancer.best_udp_server();
-                self.lookup_remote_via_miner(message, remote_addr, server.as_ref(), true, false)
-                    .await
+
+                if Self::support_udp_lookup(server.server_config()) {
+                    self.lookup_remote_via_miner(message, remote_addr, server.as_ref(), true, false)
+                        .await
+                } else {
+                    self.lookup_remote_via_miner(message, remote_addr, server.as_ref(), false, false)
+                        .await
+                }
             }
             Mode::TcpAndUdp => {
                 let udp_server = self.balancer.best_udp_server();
@@ -984,7 +995,7 @@ impl DnsClient {
         );
 
         self.client_cache
-            .lookup_remote(&self.context, server, remote_addr, message, false)
+            .lookup_remote(&self.context, server, remote_addr, message, is_udp)
             .instrument(span)
             .await
             .map_err(From::from)

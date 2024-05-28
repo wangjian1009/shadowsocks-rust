@@ -45,6 +45,10 @@ impl UdpTun {
         (UdpTun { tun_rx, manager }, close_rx)
     }
 
+    pub fn manager(&self) -> &UdpAssociationManager<UdpTunInboundWriter> {
+        &self.manager
+    }
+    
     pub fn close_association(&mut self, peer_addr: &SocketAddr, reason: UdpAssociationCloseReason) {
         self.manager.close_association(peer_addr, reason)
     }
@@ -87,7 +91,7 @@ impl UdpTun {
 }
 
 #[derive(Clone)]
-struct UdpTunInboundWriter {
+pub struct UdpTunInboundWriter {
     tun_tx: mpsc::Sender<BytesMut>,
 }
 

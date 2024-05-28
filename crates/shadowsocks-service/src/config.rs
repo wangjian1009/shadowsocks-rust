@@ -306,6 +306,9 @@ struct SSLocalExtConfig {
     #[cfg(any(feature = "local-tun", feature = "wireguard"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_interface_destination: Option<String>,
+    #[cfg(all(feature = "local-tun", feature = "local-dns"))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tun_dns_addr: Option<String>,
     #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
     #[serde(skip_serializing_if = "Option::is_none")]
     tun_device_fd: Option<i32>,
@@ -894,6 +897,8 @@ pub struct LocalConfig {
     /// Tun interface's destination address and netmask
     #[cfg(any(feature = "local-tun", feature = "wireguard"))]
     pub tun_interface_destination: Option<IpNet>,
+    #[cfg(all(feature = "local-tun", feature = "local-dns"))]
+    pub tun_dns_addr: Option<SocketAddr>,
     /// Tun interface's file descriptor
     #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
     pub tun_device_fd: Option<std::os::unix::io::RawFd>,
@@ -989,6 +994,8 @@ impl LocalConfig {
             tun_interface_address: None,
             #[cfg(any(feature = "local-tun", feature = "wireguard"))]
             tun_interface_destination: None,
+            #[cfg(all(feature = "local-tun", feature = "local-dns"))]
+            tun_dns_addr: None,
             #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
             tun_device_fd: None,
             #[cfg(all(any(feature = "local-tun", feature = "wireguard"), any(unix, target_os = "android")))]
@@ -1740,6 +1747,30 @@ impl Config {
                                     let err =
                                         Error::new(ErrorKind::Malformed, "`tun_interface_destination` invalid", None);
                                     return Err(err);
+                                }
+                            }
+                        }
+
+                        #[cfg(all(feature = "local-tun", feature = "local-dns"))]
+                        if let Some(tun_dns_addr) = local.tun_dns_addr {
+                            match tun_dns_addr.parse::<SocketAddr>() {
+                                Ok(addr) => {
+                                    local_config.tun_dns_addr = Some(addr)
+                                }
+                                Err(..) => {
+                                    match tun_dns_addr.parse::<IpAddr>() {
+                                        Ok(ip) => {
+                                            local_config.tun_dns_addr = Some(SocketAddr::new(ip, 53))
+                                        }
+                                        Err(..) => {
+                                            let err = Error::new(
+                                                ErrorKind::Malformed,
+                                                "`tun_dns_addr` invalid",
+                                                Some(format!("tun_dns_addr {} error", tun_dns_addr)),
+                                            );
+                                            return Err(err);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2766,6 +2797,8 @@ impl fmt::Display for Config {
                         tun_interface_address: local.tun_interface_address.as_ref().map(ToString::to_string),
                         #[cfg(any(feature = "local-tun", feature = "wireguard"))]
                         tun_interface_destination: local.tun_interface_destination.as_ref().map(ToString::to_string),
+                        #[cfg(all(feature = "local-tun", feature = "local-dns"))]
+                        tun_dns_addr: local.tun_dns_addr.as_ref().map(ToString::to_string),
                         #[cfg(all(
                             any(feature = "local-tun", feature = "wireguard"),
                             any(unix, target_os = "android")

@@ -2,7 +2,7 @@
 
 pub use self::{
     config::NameServerAddr,
-    server::{Dns, DnsBuilder},
+    server::{Dns, DnsBuilder, DnsClient},
 };
 
 mod client_cache;

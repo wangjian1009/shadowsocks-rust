@@ -56,6 +56,7 @@ pub mod api;
 pub mod context;
 #[cfg(feature = "local-dns")]
 pub mod dns;
+
 #[cfg(any(feature = "local-http", feature = "local-api"))]
 pub mod http;
 pub mod loadbalancing;
@@ -454,8 +455,12 @@ impl Server {
                         None => return Err(io::Error::new(ErrorKind::Other, "dns requires local address")),
                     };
 
+                    let remote_addr = match local_config.remote_dns_addr.as_ref() {
+                        Some(a) => a,
+                        None => return Err(io::Error::new(ErrorKind::Other, "dns requires remote address")),
+                    };
+
                     let mut server_builder = {
-                        let remote_addr = local_config.remote_dns_addr.expect("missing remote_dns_addr");
                         let client_cache_size = local_config.client_cache_size.unwrap_or(5);
 
                         DnsBuilder::with_context(
@@ -514,7 +519,8 @@ impl Server {
 
                     #[cfg(feature = "local-tun")]
                     {
-                        let mut builder = TunBuilder::new(Arc::new(context), balancer);
+                        let context = Arc::new(context);
+                        let mut builder = TunBuilder::new(context.clone(), balancer.clone());
                         if let Some(address) = local_config.tun_interface_address {
                             builder.address(address);
                         }
@@ -539,7 +545,29 @@ impl Server {
                             builder.effect_address_net(address_net);
                         }
 
-                        let server = builder.build().instrument(info_span!("tun")).await?;
+                        #[allow(unused_mut)]
+                        let mut server = builder.build().instrument(info_span!("tun")).await?;
+
+                        #[cfg(feature = "local-dns")]
+                        if let Some(tun_dns_addr) = local_config.tun_dns_addr.as_ref() {
+                            use dns::server::DnsClient;
+                            use tun::DnsProcessor;
+
+                            let remote_addr = match local_config.remote_dns_addr.as_ref() {
+                                Some(a) => a,
+                                None => return Err(io::Error::new(ErrorKind::Other, "dns requires remote address")),
+                            };
+
+                            let client_cache_size = local_config.client_cache_size.unwrap_or(5);
+                            let dns_processor = DnsProcessor::new(
+                                tun_dns_addr.clone(),
+                                None,
+                                Arc::new(shadowsocks::relay::Address::from(remote_addr)),
+                                Arc::new(DnsClient::new(context, balancer, Mode::UdpOnly, client_cache_size)),
+                            );
+                            server.set_dns_processor(Some(dns_processor));
+                        }
+
                         local_server.tun_servers.push(server);
                     }
                 }
@@ -641,7 +669,9 @@ impl Server {
 
         #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
         if let Some(svr) = self.fake_check_server {
-            vfut.push(ServerHandle(tokio::spawn(svr.run(canceler.clone()).instrument(info_span!("fake")))));
+            vfut.push(ServerHandle(tokio::spawn(
+                svr.run(canceler.clone()).instrument(info_span!("fake")),
+            )));
         }
 
         #[cfg(feature = "local-flow-stat")]

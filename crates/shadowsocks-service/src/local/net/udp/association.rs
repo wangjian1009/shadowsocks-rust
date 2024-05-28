@@ -218,6 +218,10 @@ where
             debug!(reason = reason.to_string(), "closed");
         }
     }
+
+    pub fn respond_writer(&self) -> W {
+        self.respond_writer.clone()
+    }
 }
 
 struct UdpAssociation<W>
