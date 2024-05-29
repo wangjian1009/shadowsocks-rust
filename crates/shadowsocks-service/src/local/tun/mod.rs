@@ -18,10 +18,7 @@ use tracing::{debug, error, info, trace, warn};
 use tun::{AsyncDevice, Configuration as TunConfiguration, Device as TunDevice, Error as TunError, Layer};
 
 use crate::local::{
-    context::ServiceContext,
-    loadbalancing::PingBalancer,
-    net::UdpAssociationCloseReceiver,
-    start_stat::StartStat,
+    context::ServiceContext, loadbalancing::PingBalancer, net::UdpAssociationCloseReceiver, start_stat::StartStat,
 };
 
 #[cfg(feature = "local-dns")]
@@ -267,17 +264,34 @@ impl Tun {
                     let packet = &mut packet_buffer[IFF_PI_PREFIX_LEN..n];
                     trace!("[TUN] received IP packet {:?}", ByteStr::new(packet));
 
-                    if let Err(err) = self.handle_tun_frame(&canceler, &address_broadcast, packet).await {
-                        error!("[TUN] handle IP frame failed, error: {}", err);
+                    tokio::select! {
+                        // handle IP packet
+                        r = self.handle_tun_frame(&canceler, &address_broadcast, packet) => {
+                            if let Err(err) = r {
+                                error!("[TUN] handle IP frame failed, error: {}", err);
+                            }
+                        }
+                        _ = cancel_waiter.wait() => {
+                            info!("[TUN] tun device canceled (handle tun frame)");
+                            return Ok(());
+                        }
                     }
                 }
 
                 // UDP channel sent back
                 packet = self.udp.recv_packet() => {
-                    if let Err(err) = write_packet_with_pi(&mut self.device, &packet).await {
-                        error!("[TUN] failed to set packet information, error: {}, {:?}", err, ByteStr::new(&packet));
-                    } else {
-                        trace!("[TUN] sent IP packet (UDP) {:?}", ByteStr::new(&packet));
+                    tokio::select! {
+                        r = write_packet_with_pi(&mut self.device, &packet) => {
+                            if let Err(err) = r {
+                                error!("[TUN] failed to set packet information, error: {}, {:?}", err, ByteStr::new(&packet));
+                            } else {
+                                trace!("[TUN] sent IP packet (UDP) {:?}", ByteStr::new(&packet));
+                            }
+                        }
+                        _ = cancel_waiter.wait() => {
+                            info!("[TUN] tun device canceled (write udp packet)");
+                            return Ok(());
+                        }
                     }
                 }
 
@@ -296,10 +310,18 @@ impl Tun {
 
                 // TCP channel sent back
                 packet = self.tcp.recv_packet() => {
-                    if let Err(err) = write_packet_with_pi(&mut self.device, &packet).await {
-                        error!("[TUN] failed to set packet information, error: {}, {:?}", err, ByteStr::new(&packet));
-                    } else {
-                        trace!("[TUN] sent IP packet (TCP) {:?}", ByteStr::new(&packet));
+                    tokio::select! {
+                        r = write_packet_with_pi(&mut self.device, &packet) => {
+                            if let Err(err) = r {
+                                error!("[TUN] failed to set packet information, error: {}, {:?}", err, ByteStr::new(&packet));
+                            } else {
+                                trace!("[TUN] sent IP packet (TCP) {:?}", ByteStr::new(&packet));
+                            }
+                        }
+                        _ = cancel_waiter.wait() => {
+                            info!("[TUN] tun device canceled (write tcp packet)");
+                            return Ok(());
+                        }
                     }
                 }
             }
@@ -432,7 +454,13 @@ impl Tun {
                 if let Some(dns_processor) = self.dns_processor.as_ref() {
                     if &dst_addr == dns_processor.mock_dns_addr() {
                         return dns_processor
-                            .handle_udp_frame(src_addr, dst_addr, payload, self.udp.manager().respond_writer(), canceler)
+                            .handle_udp_frame(
+                                src_addr,
+                                dst_addr,
+                                payload,
+                                self.udp.manager().respond_writer(),
+                                canceler,
+                            )
                             .await;
                     }
                 }
