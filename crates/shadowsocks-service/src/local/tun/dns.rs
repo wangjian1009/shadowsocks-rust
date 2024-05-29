@@ -65,7 +65,7 @@ impl DnsProcessor {
                         let response = match response.to_vec() {
                             Ok(v) => v,
                             Err(err) => {
-                                tracing::error!(error = ?err, "response message serialize error");
+                                tracing::error!(err = ?err, "response message serialize error");
                                 return;
                             }
                         };
@@ -79,7 +79,7 @@ impl DnsProcessor {
                             )
                             .await
                         {
-                            tracing::error!(error = ?err,  "failed to set packet information, error");
+                            tracing::error!(err = ?err,  "failed to set packet information, error");
                         }
                     }
                     Err(err) => {

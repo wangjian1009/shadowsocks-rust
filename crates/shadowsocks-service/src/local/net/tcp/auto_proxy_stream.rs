@@ -134,7 +134,7 @@ impl AutoProxyClientStream {
 
     /// Connect via server to target `addr`
     pub async fn connect_proxied(
-        context: &Arc<ServiceContext>,
+        context: &ServiceContext,
         server: &ServerIdent,
         addr: &Address,
         canceler: &Canceler,
@@ -163,7 +163,7 @@ impl AutoProxyClientStream {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn connect_proxied_no_score(
+    async fn connect_proxied_no_score(
         context: SharedContext,
         connect_opts: &ConnectOpts,
         svr: &ServerIdent,

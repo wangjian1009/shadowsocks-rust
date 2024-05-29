@@ -138,7 +138,7 @@ impl DnsClientCache {
             if canceler.is_canceled() {
                 return Err(io::Error::new(io::ErrorKind::Other, "canceled").into());
             }
-            
+
             let mut client = self.get_client(dck).await;
             if client.is_none() {
                 trace!("creating connection to DNS server {:?}", dck);
@@ -147,24 +147,43 @@ impl DnsClientCache {
                     DnsClientKey::TcpLocal(tcp_l) => DnsClient::connect_tcp_local(*tcp_l, connect_opts, canceler).await,
                     DnsClientKey::UdpLocal(udp_l) => DnsClient::connect_udp_local(*udp_l, connect_opts, canceler).await,
                     DnsClientKey::TcpRemote(tcp_l) => {
-                        DnsClient::connect_tcp_remote(
-                            &context.unwrap().context(),
-                            svr.unwrap(),
-                            tcp_l,
-                            context.unwrap().connect_opts_ref(),
-                            context.unwrap().flow_stat(),
-                            context.unwrap().connection_close_notify(),
-                            canceler,
-                        )
-                        .await
+                        let context = match context {
+                            Some(context) => context,
+                            None => {
+                                return Err(io::Error::new(io::ErrorKind::Other, "connect remote no context").into());
+                            }
+                        };
+
+                        let svr = match svr {
+                            Some(svr) => svr,
+                            None => {
+                                return Err(io::Error::new(io::ErrorKind::Other, "connect remote no svr").into());
+                            }
+                        };
+
+                        DnsClient::connect_tcp_remote(context, svr, tcp_l, canceler).await
                     }
                     DnsClientKey::UdpRemote(udp_l) => {
+                        let context = match context {
+                            Some(context) => context,
+                            None => {
+                                return Err(io::Error::new(io::ErrorKind::Other, "connect remote no context").into());
+                            }
+                        };
+
+                        let svr = match svr {
+                            Some(svr) => svr,
+                            None => {
+                                return Err(io::Error::new(io::ErrorKind::Other, "connect remote no svr").into());
+                            }
+                        };
+
                         DnsClient::connect_udp_remote(
-                            context.unwrap().context(),
-                            svr.unwrap(),
+                            context.context(),
+                            svr,
                             udp_l.clone(),
-                            context.unwrap().connect_opts_ref(),
-                            context.unwrap().flow_stat(),
+                            context.connect_opts_ref(),
+                            context.flow_stat(),
                             canceler,
                         )
                         .await

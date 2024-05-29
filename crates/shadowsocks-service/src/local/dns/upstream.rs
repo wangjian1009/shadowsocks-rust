@@ -28,12 +28,11 @@ use tokio::net::UnixStream;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::UdpSocket,
-    sync::Notify,
     time,
 };
 
 use crate::{
-    local::{loadbalancing::ServerIdent, net::AutoProxyClientStream},
+    local::{context::ServiceContext, loadbalancing::ServerIdent, net::AutoProxyClientStream},
     net::MonProxySocket,
 };
 
@@ -117,37 +116,13 @@ impl DnsClient {
 
     /// Connect to remote DNS server through proxy in TCP
     pub async fn connect_tcp_remote(
-        context: &SharedContext,
+        context: &ServiceContext,
         svr: &ServerIdent,
         ns: &Address,
-        connect_opts: &ConnectOpts,
-        flow_stat: Arc<FlowStat>,
-        connection_close_notify: Arc<Notify>,
         canceler: &Canceler,
     ) -> io::Result<DnsClient> {
-        let mut waiter = canceler.waiter();
-        tokio::select! {
-            r = AutoProxyClientStream::connect_proxied_no_score(
-                context.clone(),
-                connect_opts,
-                svr,
-                ns,
-                Some(flow_stat),
-                Some(connection_close_notify),
-                canceler,
-                #[cfg(feature = "rate-limit")]
-                None,
-                #[cfg(feature = "local-fake-mode")]
-                crate::local::context::FakeMode::None,
-            ) => {
-                let stream = r?;
-                Ok(DnsClient::TcpRemote { stream })
-            }
-            _ = waiter.wait() => {
-                tracing::info!("connect_tcp_remote canceled");
-                Err(io::Error::new(io::ErrorKind::Other, "canceled"))
-            }
-        }
+        let stream = AutoProxyClientStream::connect_proxied(context, svr, ns, canceler).await?;
+        Ok(DnsClient::TcpRemote { stream })
     }
 
     /// Connect to remote DNS server through proxy in UDP
@@ -160,20 +135,11 @@ impl DnsClient {
         canceler: &Canceler,
     ) -> io::Result<DnsClient> {
         let svr_cfg = svr.server_config();
-        let mut waiter = canceler.waiter();
         match svr_cfg.protocol() {
             ServerProtocol::SS(ss_cfg) => {
-                tokio::select! {
-                    r = ProxySocket::connect_with_opts(context, svr_cfg, ss_cfg, connect_opts, canceler) => {
-                        let socket = r?;
-                        let socket = MonProxySocket::from_socket(socket, flow_stat);
-                        Ok(DnsClient::UdpRemote { socket, ns })
-                    }
-                    _ = waiter.wait() => {
-                        tracing::info!("connect_udp_remote canceled");
-                        Err(io::Error::new(io::ErrorKind::Other, "canceled"))
-                    }
-                }
+                let socket = ProxySocket::connect_with_opts(context, svr_cfg, ss_cfg, connect_opts, canceler).await?;
+                let socket = MonProxySocket::from_socket(socket, flow_stat);
+                Ok(DnsClient::UdpRemote { socket, ns })
             }
             #[cfg(feature = "trojan")]
             ServerProtocol::Trojan(_cfg) => {
