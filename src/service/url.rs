@@ -1,7 +1,6 @@
 use bytes::Bytes;
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
 use http_body_util::{BodyExt, Full};
-use tracing::Instrument;
 use std::{future, io, process::ExitCode, sync::Arc};
 
 use tokio::{fs::File, io::AsyncWriteExt, runtime::Builder, time::Duration};
@@ -136,19 +135,25 @@ pub async fn main_async(matches: &ArgMatches) -> ExitCode {
             return write_output(output_path, Err(err)).await;
         }
     };
-    let svr_addr = svr_cfg.addr().clone();
-    tracing::debug!(svr =? &svr_addr, request = ?request);
+    tracing::trace!(
+        "miner: {} {}{}",
+        svr_cfg.addr().to_string(),
+        svr_cfg.protocol().name(),
+        svr_cfg.connector_transport_tag()
+    );
 
     let context = Context::new_shared(ServerType::Local);
     let canceler = Arc::new(Canceler::new());
-    
+
     #[allow(unused_mut)]
     let mut service_context = ServiceContext::new(context);
 
     #[cfg(target_os = "android")]
     if let Some(vpn_protect_path) = matches.get_one::<String>("VPN_PROTECT_PATH") {
         let mut connect_opts = service_context.connect_opts_ref().clone();
-        connect_opts.vpn_protect_path = Some(shadowsocks_service::shadowsocks::net::VpnProtectPath::Path(vpn_protect_path.into()));
+        connect_opts.vpn_protect_path = Some(shadowsocks_service::shadowsocks::net::VpnProtectPath::Path(
+            vpn_protect_path.into(),
+        ));
         service_context.set_connect_opts(connect_opts);
     }
 
@@ -164,18 +169,17 @@ pub async fn main_async(matches: &ArgMatches) -> ExitCode {
     async move {
         tokio::select! {
             _r = wait_timeout(timeout) => {
-                tracing::debug!("timeout");
+                tracing::error!("timeout");
                 write_output(output_path, Err(UrlTestError::Timeout("GlobalTimeout".to_string()))).await
             }
             r = api::request(request, service_context, server, canceler.as_ref()) => {
-                tracing::debug!(response = ?r);
+                tracing::trace!(response = ?r);
                 let response = r.map_err(|e| UrlTestError::Api(e));
 
                 write_output(output_path, response).await
             }
         }
     }
-    .instrument(tracing::info_span!("url", target = svr_addr.to_string()))
     .await
 }
 

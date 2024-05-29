@@ -588,11 +588,11 @@ async fn establish_client_tcp_redir<'a>(
 
     let server = balancer.best_tcp_server();
     let svr_cfg = server.server_config();
-    let mut waiter = canceler.waiter();
 
     let mut remote = AutoProxyClientStream::connect(&context, server.as_ref(), addr, canceler.as_ref()).await?;
-    tracing::info!("connect successed");
+    tracing::info!("connect to remote successed");
 
+    let mut waiter = canceler.waiter();
     tokio::select! {
         r = establish_tcp_tunnel(context.as_ref(), svr_cfg, stream, &mut remote, peer_addr, addr).instrument(info_span!("tcp", target = ?addr)) => r,
         _ = waiter.wait() => {

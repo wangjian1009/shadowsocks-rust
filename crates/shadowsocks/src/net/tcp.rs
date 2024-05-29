@@ -24,14 +24,10 @@ use crate::{canceler::Canceler, context::Context, ServerAddr};
 use super::{
     is_dual_stack_addr,
     sys::{
-        create_inbound_tcp_socket,
-        set_common_sockopt_after_accept,
-        set_tcp_fastopen,
-        socket_bind_dual_stack,
+        create_inbound_tcp_socket, set_common_sockopt_after_accept, set_tcp_fastopen, socket_bind_dual_stack,
         TcpStream as SysTcpStream,
     },
-    AcceptOpts,
-    ConnectOpts,
+    AcceptOpts, ConnectOpts,
 };
 
 /// TcpStream for outbound connections
@@ -57,10 +53,32 @@ impl TcpStream {
         canceler: &Canceler,
     ) -> io::Result<TcpStream> {
         let stream = match *addr {
-            ServerAddr::SocketAddr(ref addr) => SysTcpStream::connect(*addr, opts).await?,
+            ServerAddr::SocketAddr(ref addr) => {
+                tracing::trace!("connect to {:?} begin", addr);
+                match SysTcpStream::connect(*addr, opts).await {
+                    Err(err) => {
+                        tracing::error!(err=?err, "connect to {:?} failed", addr);
+                        return Err(err);
+                    }
+                    Ok(stream) => {
+                        tracing::trace!("connect to {:?} success", addr);
+                        stream
+                    }
+                }
+            }
             ServerAddr::DomainName(ref domain, port) => {
                 lookup_then_connect!(context, domain, port, canceler, |addr| {
-                    SysTcpStream::connect(addr, opts).await
+                    tracing::trace!("connect to {domain}:{port}({addr}) begin");
+                    match SysTcpStream::connect(addr, opts).await {
+                        Err(err) => {
+                            tracing::error!(err=?err, "connect to {domain}:{port}({addr}) error");
+                            Err(err)
+                        }
+                        Ok(stream) => {
+                            tracing::trace!("connect to {domain}:{port}({addr}) success");
+                            Ok(stream)
+                        }
+                    }
                 })?
                 .1
             }
