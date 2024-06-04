@@ -29,9 +29,7 @@ default = [
     "local-tun",
     "local-socks4",
     "local-maintain",
-    "local-signed-info",
     "local-fake-mode",
-    "local-android-protect",
     "local-api",
     "server-maintain",
     "server-limit",
@@ -85,9 +83,7 @@ full = [
 # Enable local server
 local = []
 local-maintain = ["hyper", "http-body-util", "hyper-util"]
-local-signed-info = ["cryptographic-message-syntax", "x509-certificate", "zip"]
 local-fake-mode = []
-local-android-protect = []
 local-api = ["hyper", "http-body-util", "hyper-util"]
 
 # Enable remote server
@@ -245,9 +241,6 @@ hyper = { version = "1.2", optional = true, features = ["full"] }
 http-body-util = { version = "0.1", optional = true }
 hyper-util = { version = "0.1", features = ["full"], optional = true }
 
-cryptographic-message-syntax = { version = "0.17.0", optional = true  }
-x509-certificate = { version = "0.14.0", optional = true  }
-zip = { version = "0.6.2", optional = true }
 hickory-resolver = { version = "0.24", optional = true, features = [
     "serde-config",
 ] }
@@ -289,9 +282,6 @@ shadowsocks = { version = "1.18.1", path = "../shadowsocks", default-features = 
 # Just for the ioctl call macro
 [target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))'.dependencies]
 nix = { version = "0.28", features = ["ioctl"] }
-
-[target.'cfg(target_os = "android")'.dependencies]
-dlopen = "0.1.8"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = ["Win32_Networking_WinSock"] }

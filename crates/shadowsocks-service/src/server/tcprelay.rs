@@ -93,6 +93,7 @@ impl TcpServer {
         connector: Arc<TcpConnector>,
         svr_cfg: ServerConfig,
         accept_opts: AcceptOpts,
+        canceler: &Canceler,
     ) -> io::Result<TcpServer> {
         #[cfg(feature = "tuic")]
         if let ServerProtocol::Tuic(tuic_config) = svr_cfg.protocol() {
@@ -115,6 +116,7 @@ impl TcpServer {
                         context.context().as_ref(),
                         svr_cfg.tcp_external_addr(),
                         accept_opts.clone(),
+                        canceler,
                     )
                     .await?;
                     TcpServerData::Ws(WebSocketAcceptor::new(ws_config.clone(), listener))
@@ -125,6 +127,7 @@ impl TcpServer {
                         context.context().as_ref(),
                         svr_cfg.tcp_external_addr(),
                         accept_opts.clone(),
+                        canceler,
                     )
                     .await?;
                     TcpServerData::Tls(TlsAcceptor::new(tls_config, listener).await?)
@@ -135,6 +138,7 @@ impl TcpServer {
                         context.context().as_ref(),
                         svr_cfg.tcp_external_addr(),
                         accept_opts.clone(),
+                        canceler,
                     )
                     .await?;
                     TcpServerData::Tls(RestlsAcceptor::new(context.context.context(), restls_config, listener).await?);
@@ -145,6 +149,7 @@ impl TcpServer {
                         context.context().as_ref(),
                         svr_cfg.tcp_external_addr(),
                         accept_opts.clone(),
+                        canceler,
                     )
                     .await?;
                     let listener = TlsAcceptor::new(tls_config, listener).await?;
@@ -179,6 +184,7 @@ impl TcpServer {
                     context.context().as_ref(),
                     svr_cfg.tcp_external_addr(),
                     accept_opts.clone(),
+                    canceler,
                 )
                 .await?,
             ),
@@ -190,6 +196,7 @@ impl TcpServer {
                 context.context().as_ref(),
                 svr_cfg.tcp_external_addr(),
                 accept_opts.clone(),
+                canceler,
             )
             .await?,
         ));
@@ -582,7 +589,7 @@ impl TcpServerClient {
             match protocol {
                 ServerMockProtocol::DNS => {
                     let (mut r, mut w) = tokio::io::split(stream);
-                    run_dns_tcp_stream(self.context.dns_resolver(), &mut r, &mut w, None).await?;
+                    run_dns_tcp_stream(self.context.dns_resolver(), &mut r, &mut w, None, canceler).await?;
                 }
             }
 

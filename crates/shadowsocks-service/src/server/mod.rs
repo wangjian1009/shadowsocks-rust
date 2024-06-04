@@ -183,7 +183,7 @@ pub async fn run(canceler: Arc<Canceler>, config: Config) -> io::Result<()> {
 
         server_builder.set_security_config(&config.security);
 
-        let server = server_builder.build().await?;
+        let server = server_builder.build(canceler.as_ref()).await?;
         servers.push(server);
     }
 

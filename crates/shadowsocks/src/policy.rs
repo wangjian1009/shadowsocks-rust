@@ -6,6 +6,7 @@ use crate::{
     net::{FlowStat, TcpStream},
     timeout::TimeoutTicker,
     ServerAddr,
+    canceler::Canceler,
 };
 
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -17,6 +18,7 @@ pub trait LocalProcessor: Sync + Send {
         r: Box<dyn AsyncRead + Send + Unpin>,
         w: Box<dyn AsyncWrite + Send + Unpin>,
         timeout_ticker: Option<TimeoutTicker>,
+        canceler: &Canceler,
     ) -> io::Result<()>;
 }
 
@@ -46,7 +48,7 @@ pub enum PacketAction {
 #[async_trait]
 pub trait UdpSocket: Sync + Send {
     async fn recv_from(&self) -> io::Result<(Bytes, SocketAddr)>;
-    async fn send_to(&self, buf: &[u8], addr: ServerAddr) -> io::Result<()>;
+    async fn send_to(&self, buf: &[u8], addr: ServerAddr, canceler: &Canceler) -> io::Result<()>;
 }
 
 #[async_trait]
@@ -57,6 +59,7 @@ pub trait ServerPolicy: Sync + Send {
         &self,
         src_addr: Option<&SocketAddr>,
         target_addr: ServerAddr,
+        canceler: &Canceler,
         #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
     ) -> io::Result<(TcpStream, Box<dyn ConnectionGuard>)>;
     async fn create_out_udp_socket(&self) -> io::Result<Box<dyn UdpSocket>>;
@@ -65,8 +68,9 @@ pub trait ServerPolicy: Sync + Send {
         &self,
         src_addr: Option<&SocketAddr>,
         target_addr: &ServerAddr,
+        canceler: &Canceler,
         #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
     ) -> io::Result<StreamAction>;
 
-    async fn packet_check(&self, src_addr: Option<&SocketAddr>, target_addr: &ServerAddr) -> io::Result<PacketAction>;
+    async fn packet_check(&self, src_addr: Option<&SocketAddr>, target_addr: &ServerAddr, canceler: &Canceler) -> io::Result<PacketAction>;
 }

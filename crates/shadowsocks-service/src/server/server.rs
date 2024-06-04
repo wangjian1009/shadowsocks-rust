@@ -197,7 +197,7 @@ impl ServerBuilder {
     /// 1. Starts plugin (subprocess)
     /// 2. Starts TCP server (listener)
     /// 3. Starts UDP server (listener)
-    pub async fn build(mut self) -> io::Result<Server> {
+    pub async fn build(mut self, canceler: &Canceler) -> io::Result<Server> {
         let mut plugin = None;
 
         if let Some(plugin_cfg) = self.svr_cfg.if_ss(|c| c.plugin()).unwrap_or(None) {
@@ -216,6 +216,7 @@ impl ServerBuilder {
                 Arc::new(TcpConnector::new(Some(self.context.context()))),
                 self.svr_cfg.clone(),
                 self.accept_opts.clone(),
+                canceler,
             )
             .await?;
             tcp_server = Some(server);
@@ -229,6 +230,7 @@ impl ServerBuilder {
                 self.udp_expiry_duration,
                 self.udp_capacity,
                 self.accept_opts.clone(),
+                canceler,
             )
             .await?;
             server.set_worker_count(self.worker_count);
@@ -446,7 +448,14 @@ impl Server {
         let mut cancel_waiter = canceler.waiter();
 
         loop {
-            match ManagerClient::connect(context.context_ref(), &manager_addr, context.connect_opts_ref()).await {
+            match ManagerClient::connect(
+                context.context_ref(),
+                &manager_addr,
+                context.connect_opts_ref(),
+                canceler.as_ref(),
+            )
+            .await
+            {
                 Err(err) => error!(error = ?err, "connect failed"),
                 Ok(mut client) => {
                     use super::manager::{ServerStat, StatRequest};
@@ -511,6 +520,7 @@ impl Server {
             self.context.context().as_ref(),
             self.svr_cfg.tcp_external_addr(),
             self.accept_opts.clone(),
+            canceler.as_ref(),
         )
         .await?;
 

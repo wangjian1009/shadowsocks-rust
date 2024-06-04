@@ -88,9 +88,7 @@ default = [
     "local-tunnel",
     "local-socks4",
     "local-redir",
-    "local-signed-info",
     "local-fake-mode",
-    "local-android-protect",
     "multi-threaded",
     "rate-limit",
     "host-dns",
@@ -112,9 +110,7 @@ default = [
 local = ["shadowsocks-service/local"]
 local-url = ["local", "hyper", "http-body-util", "url", "shadowsocks-service/local-api"]
 local-maintain = ["shadowsocks-service/local-maintain"]
-local-signed-info = ["shadowsocks-service/local-signed-info"]
 local-fake-mode = ["shadowsocks-service/local-fake-mode"]
-local-android-protect = ["shadowsocks-service/local-android-protect"]
 
 # Enable env-crypt
 env-crypt = ["shadowsocks-service/env-crypt"]

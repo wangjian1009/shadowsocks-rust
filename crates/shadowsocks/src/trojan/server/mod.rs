@@ -67,6 +67,8 @@ pub async fn serve(
 
                 let mut cancel_waiter = canceler.waiter();
 
+                let canceler = canceler.clone();
+                
                 #[cfg(feature = "statistics")]
                 let bu_context = bu_context.clone();
 
@@ -80,6 +82,7 @@ pub async fn serve(
                                 request_recv_timeout,
                                 idle_timeout,
                                 server_policy,
+                                &canceler,
                                 #[cfg(feature = "statistics")]
                                 bu_context,
                             ) => {
@@ -108,6 +111,7 @@ async fn process_incoming(
     request_recv_timeout: Duration,
     idle_timeout: Duration,
     server_policy: Arc<Box<dyn ServerPolicy>>,
+    canceler: &Arc<Canceler>,
     #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
 ) -> CloseReason {
     let request = match read_request(&mut incoming, cfg_hash.as_ref(), request_recv_timeout).await {
@@ -125,6 +129,7 @@ async fn process_incoming(
                 addr,
                 idle_timeout,
                 server_policy,
+                canceler.as_ref(),
                 #[cfg(feature = "statistics")]
                 bu_context,
             )
@@ -137,6 +142,7 @@ async fn process_incoming(
                 peer_addr,
                 idle_timeout,
                 server_policy,
+                canceler,
                 #[cfg(feature = "statistics")]
                 bu_context,
             )

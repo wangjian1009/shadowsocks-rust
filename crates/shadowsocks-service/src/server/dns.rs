@@ -18,6 +18,7 @@ pub async fn run_dns_tcp_stream<'a, I: AsyncRead + Unpin, O: AsyncWrite + Unpin>
     input: &'a mut I,
     output: &'a mut O,
     timeout_ticker: Option<TimeoutTicker>,
+    canceler: &Canceler,
 ) -> io::Result<()> {
     let mut length_buf = [0u8; 2];
     let mut message_buf = BytesMut::new();
@@ -59,7 +60,7 @@ pub async fn run_dns_tcp_stream<'a, I: AsyncRead + Unpin, O: AsyncWrite + Unpin>
             }
         };
 
-        let response = resolve(dns_resolver, request).await;
+        let response = resolve(dns_resolver, request, canceler).await;
 
         let mut buf = response.to_vec()?;
         let length = buf.len();
@@ -79,7 +80,11 @@ pub async fn run_dns_tcp_stream<'a, I: AsyncRead + Unpin, O: AsyncWrite + Unpin>
     Ok(())
 }
 
-pub async fn process_dns_udp_request(dns_resolver: &DnsResolver, input: &[u8]) -> io::Result<Vec<u8>> {
+pub async fn process_dns_udp_request(
+    dns_resolver: &DnsResolver,
+    input: &[u8],
+    canceler: &Canceler,
+) -> io::Result<Vec<u8>> {
     let request = match Message::from_vec(input) {
         Ok(m) => m,
         Err(err) => {
@@ -88,7 +93,7 @@ pub async fn process_dns_udp_request(dns_resolver: &DnsResolver, input: &[u8]) -
         }
     };
 
-    let response = resolve(dns_resolver, request).await;
+    let response = resolve(dns_resolver, request, canceler).await;
     match response.to_vec() {
         Ok(r) => {
             tracing::trace!("process complete");
@@ -124,7 +129,10 @@ async fn resolve(dns_resolver: &DnsResolver, request: Message, canceler: &Cancel
 
             let span = info_span!("dns.query", query = query.to_string());
             response = async move {
-                match dns_resolver.resolve(query.name().to_string().as_str(), 0, canceler).await {
+                match dns_resolver
+                    .resolve(query.name().to_string().as_str(), 0, canceler)
+                    .await
+                {
                     Ok(response_record_it) => {
                         let mut count = 0;
                         for addr in response_record_it {
@@ -176,7 +184,7 @@ mod test {
     use super::*;
     use async_trait::async_trait;
     use mockall::*;
-    use shadowsocks::dns_resolver::DnsResolve;
+    use shadowsocks::{canceler::CancelWaiter, dns_resolver::DnsResolve};
     use std::{
         net::{IpAddr, Ipv4Addr, SocketAddr},
         str::FromStr,
@@ -260,7 +268,7 @@ mod test {
                 .collect())
         });
         let resolver = DnsResolver::Custom(Box::new(mock_resolve));
-
+        let canceler = Canceler::new();
         let response = udp_process_query(
             &resolver,
             Message::new()
@@ -269,6 +277,7 @@ mod test {
                 .set_recursion_available(true)
                 .set_message_type(MessageType::Query)
                 .add_query(Query::query(Name::from_str("www.baidu.com").unwrap(), RecordType::A)),
+            &canceler,
         )
         .await
         .unwrap();
@@ -281,10 +290,10 @@ mod test {
         );
     }
 
-    async fn udp_process_query(resolver: &DnsResolver, request: &Message) -> io::Result<Message> {
+    async fn udp_process_query(resolver: &DnsResolver, request: &Message, canceler: &Canceler) -> io::Result<Message> {
         let request_buf = request.to_vec()?;
 
-        let output_buf = process_dns_udp_request(resolver, &request_buf).await?;
+        let output_buf = process_dns_udp_request(resolver, &request_buf, canceler).await?;
 
         match Message::from_vec(&output_buf[..]) {
             Ok(response) => Ok(response),

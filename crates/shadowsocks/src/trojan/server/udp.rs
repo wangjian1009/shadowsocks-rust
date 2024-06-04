@@ -24,6 +24,7 @@ pub(super) async fn serve_udp(
     peer_addr: Option<SocketAddr>,
     idle_timeout: Duration,
     server_policy: Arc<Box<dyn ServerPolicy>>,
+    canceler: &Arc<Canceler>,
     #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
 ) -> CloseReason {
     let (outgoing_pkt_tx, outgoing_pkt_rx) = channel(1);
@@ -42,14 +43,21 @@ pub(super) async fn serve_udp(
             }
         };
 
+        let close_reason_tx = close_reason_tx.clone();
+        let timeout_waiter_ticker = timeout_waiter.ticker();
+        let canceler = canceler.clone();
+
         tokio::spawn(
-            serve_udp_outgoing(
-                outgoing_pkt_rx,
-                incoming_pkt_tx,
-                close_reason_tx.clone(),
-                outgoing_socket,
-                timeout_waiter.ticker(),
-            )
+            async move {
+                serve_udp_outgoing(
+                    outgoing_pkt_rx,
+                    incoming_pkt_tx,
+                    close_reason_tx,
+                    outgoing_socket,
+                    timeout_waiter_ticker,
+                    canceler.as_ref(),
+                ).await
+            }
             .in_current_span(),
         )
     };
@@ -65,7 +73,7 @@ pub(super) async fn serve_udp(
 
     // 当前任务执行客户端请求分发
     let close_reason = tokio::select! {
-        r = serve_udp_incoming(outgoing_pkt_tx, incoming_pkt_rx, incoming, peer_addr, server_policy, timeout_waiter.ticker()) => { r }
+        r = serve_udp_incoming(outgoing_pkt_tx, incoming_pkt_rx, incoming, peer_addr, server_policy, timeout_waiter.ticker(), canceler) => { r }
         r = close_reason_rx.recv() => {
             match r {
                 Some(r) => r,
@@ -95,12 +103,13 @@ async fn serve_udp_incoming(
     peer_addr: Option<SocketAddr>,
     server_policy: Arc<Box<dyn ServerPolicy>>,
     timeout_ticker: TimeoutTicker,
+    canceler: &Canceler,
 ) -> CloseReason {
     let (incoming_reader, incoming_writer) = new_trojan_packet_connection(incoming);
     let flow_state = server_policy.create_connection_flow_state_udp();
     let flow_state_2 = flow_state.clone();
     tokio::select! {
-        r = dispatch_incoming_to_outgoing(incoming_reader, outgoing_pkt_tx, peer_addr, server_policy, flow_state, timeout_ticker) => { r }
+        r = dispatch_incoming_to_outgoing(incoming_reader, outgoing_pkt_tx, peer_addr, server_policy, flow_state, timeout_ticker, canceler) => { r }
         r = dispatch_incoming_from_outgoing(incoming_writer, incoming_pkt_rx, flow_state_2) => { r }
     }
 }
@@ -112,6 +121,7 @@ async fn dispatch_incoming_to_outgoing<S>(
     server_policy: Arc<Box<dyn ServerPolicy>>,
     flow_state: Option<Arc<FlowStat>>,
     timeout_ticker: TimeoutTicker,
+    canceler: &Canceler,
 ) -> CloseReason
 where
     S: StreamConnection + 'static,
@@ -145,7 +155,7 @@ where
             peer_addr
         };
 
-        match server_policy.packet_check(check_peer_addr.as_ref(), &addr).await {
+        match server_policy.packet_check(check_peer_addr.as_ref(), &addr, canceler).await {
             Err(err) => {
                 warn!(target = addr.to_string(), error = ?err, "packet check fail");
                 return CloseReason::ClientBlocked;
@@ -209,12 +219,13 @@ async fn serve_udp_outgoing(
     close_reason_tx: Sender<CloseReason>,
     outgoing_socket: Box<dyn UdpSocket>,
     timeout_ticker: TimeoutTicker,
+    canceler: &Canceler,
 ) {
     let outgoing_socket_1 = Arc::new(outgoing_socket);
     let outgoing_socket_2 = outgoing_socket_1.clone();
 
     let r = tokio::select!(
-        r = dispatch_outgoing_from_incoming(outgoing_socket_1, &mut outgoing_pkt_rx, timeout_ticker.clone()) => { r }
+        r = dispatch_outgoing_from_incoming(outgoing_socket_1, &mut outgoing_pkt_rx, timeout_ticker.clone(), canceler) => { r }
         r = dispatch_outgoing_to_incoming(outgoing_socket_2, &mut incoming_pkt_tx, timeout_ticker.clone()) => { r }
     );
 
@@ -232,9 +243,10 @@ async fn dispatch_outgoing_from_incoming(
     outgoing_socket: Arc<Box<dyn UdpSocket>>,
     outgoing_pkt_rx: &mut PacketReceiver,
     timeout_ticker: TimeoutTicker,
+    canceler: &Canceler,
 ) -> Option<CloseReason> {
     while let Some((pkt, addr)) = outgoing_pkt_rx.recv().await {
-        match outgoing_socket.send_to(&pkt, addr).await {
+        match outgoing_socket.send_to(&pkt, addr, canceler).await {
             Ok(()) => timeout_ticker.tick(),
             Err(_err) => {
                 return Some(CloseReason::SockError);

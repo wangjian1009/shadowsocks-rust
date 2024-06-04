@@ -30,9 +30,6 @@ mod maintain;
 mod start_stat;
 use start_stat::StartStat;
 
-/// 解析证书等可以脱离Android运行，环境相关在模块内区分
-pub mod android;
-
 use self::{
     context::ServiceContext,
     loadbalancing::{PingBalancer, PingBalancerBuilder},
@@ -90,8 +87,8 @@ cfg_if! {
 
 }
 
-#[cfg(all(feature = "local-fake-mode", target_os = "android"))]
-use crate::local::context::FakeCheckServer;
+#[cfg(feature = "local-fake-mode")]
+use crate::local::context::{FakeCheckServer, FakeChecker};
 
 /// Default TCP Keep Alive timeout
 ///
@@ -137,7 +134,7 @@ pub struct Server {
     wg_server: Option<wg::Server>,
     #[cfg(feature = "local-maintain")]
     maintain_server: Option<maintain::MaintainServer>,
-    #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
+    #[cfg(feature = "local-fake-mode")]
     fake_check_server: Option<FakeCheckServer>,
     #[cfg(feature = "local-flow-stat")]
     reporter_server: Option<reporter::ReporterServer>,
@@ -145,7 +142,12 @@ pub struct Server {
 
 impl Server {
     /// Create a shadowsocks local server
-    pub async fn new(context: Arc<Context>, config: Config, canceler: &Arc<Canceler>) -> io::Result<Server> {
+    pub async fn new(
+        context: Arc<Context>,
+        config: Config,
+        canceler: &Arc<Canceler>,
+        #[cfg(feature = "local-fake-mode")] fake_checker: Option<Box<dyn FakeChecker + Send>>,
+    ) -> io::Result<Server> {
         assert!(config.config_type == ConfigType::Local && !config.local.is_empty());
 
         trace!("{:?}", config);
@@ -313,7 +315,7 @@ impl Server {
             wg_server: None,
             #[cfg(feature = "local-maintain")]
             maintain_server: None,
-            #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
+            #[cfg(feature = "local-fake-mode")]
             fake_check_server: None,
             #[cfg(feature = "local-flow-stat")]
             reporter_server: None,
@@ -575,9 +577,9 @@ impl Server {
         }
 
         // 延迟检测 FakeMode
-        #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
-        {
-            local_server.fake_check_server = Some(FakeCheckServer::new(context.clone()));
+        #[cfg(feature = "local-fake-mode")]
+        if let Some(fake_checker) = fake_checker {
+            local_server.fake_check_server = Some(FakeCheckServer::new(context.clone(), fake_checker));
         }
 
         // 流量上报服务
@@ -667,7 +669,7 @@ impl Server {
             )));
         }
 
-        #[cfg(all(feature = "local-fake-mode", target_os = "android"))]
+        #[cfg(feature = "local-fake-mode")]
         if let Some(svr) = self.fake_check_server {
             vfut.push(ServerHandle(tokio::spawn(
                 svr.run(canceler.clone()).instrument(info_span!("fake")),
@@ -843,13 +845,36 @@ where
     first_res.unwrap_or_else(|| Ok(()))
 }
 
-pub async fn create(config: Config, canceler: &Arc<Canceler>) -> io::Result<Server> {
+pub async fn create(
+    config: Config,
+    canceler: &Arc<Canceler>,
+    #[cfg(feature = "local-fake-mode")] fake_checker: Option<Box<dyn FakeChecker + Send>>,
+) -> io::Result<Server> {
     let context = Context::new(ServerType::Server);
-    let server = Server::new(Arc::new(context), config, canceler).await?;
+    let server = Server::new(
+        Arc::new(context),
+        config,
+        canceler,
+        #[cfg(feature = "local-fake-mode")]
+        fake_checker,
+    )
+    .await?;
     Ok(server)
 }
 
 /// Create then run a Local Server
-pub async fn run(config: Config, canceler: Arc<Canceler>) -> io::Result<()> {
-    create(config, &canceler).await?.run(canceler).await
+pub async fn run(
+    config: Config,
+    canceler: Arc<Canceler>,
+    #[cfg(feature = "local-fake-mode")] fake_checker: Option<Box<dyn FakeChecker + Send>>,
+) -> io::Result<()> {
+    create(
+        config,
+        &canceler,
+        #[cfg(feature = "local-fake-mode")]
+        fake_checker,
+    )
+    .await?
+    .run(canceler)
+    .await
 }

@@ -89,7 +89,7 @@ struct TunnelUdpInboundWriter {
 
 #[async_trait]
 impl UdpInboundWrite for TunnelUdpInboundWriter {
-    async fn send_to(&self, peer_addr: SocketAddr, _remote_addr: &Address, data: &[u8]) -> io::Result<()> {
+    async fn send_to(&self, peer_addr: SocketAddr, _remote_addr: &Address, data: &[u8], _canceler: &Canceler) -> io::Result<()> {
         self.inbound.send_to(data, peer_addr).await.map(|_| ())
     }
 }
@@ -160,7 +160,7 @@ impl TunnelUdpServer {
                     }
 
                     let data = &buffer[..n];
-                    if let Err(err) = manager.send_to(peer_addr, self.forward_addr.clone(), data)
+                    if let Err(err) = manager.send_to(peer_addr, self.forward_addr.clone(), data, &canceler)
                         .await
                     {
                         debug!(

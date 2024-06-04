@@ -96,6 +96,7 @@ cfg_if! {
                 mut r: Box<dyn AsyncRead + Send + Unpin>,
                 mut w: Box<dyn AsyncWrite + Send + Unpin>,
                 timeout_ticker: Option<TimeoutTicker>,
+                canceler: &Canceler
             ) -> io::Result<()>
             {
                 match self.protocol {
@@ -105,6 +106,7 @@ cfg_if! {
                             &mut r,
                             &mut w,
                             timeout_ticker,
+                            canceler,
                         )
                         .instrument(info_span!("dns"))
                         .await?;
@@ -144,6 +146,7 @@ impl policy::ServerPolicy for ServerPolicy {
         &self,
         source_addr: Option<&SocketAddr>,
         target_addr: ServerAddr,
+        canceler: &Canceler,
         #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<(TcpStream, Box<dyn policy::ConnectionGuard>)> {
         let stream = timeout_fut(
@@ -152,6 +155,7 @@ impl policy::ServerPolicy for ServerPolicy {
                 self.context.context_ref(),
                 target_addr.clone(),
                 self.context.connect_opts_ref(),
+                canceler,
             ),
         )
         .await?;
@@ -180,6 +184,7 @@ impl policy::ServerPolicy for ServerPolicy {
         &self,
         src_addr: Option<&SocketAddr>,
         target_addr: &ServerAddr,
+        canceler: &Canceler,
         #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> io::Result<policy::StreamAction> {
         // 后续支持不同地址的处理
@@ -225,7 +230,7 @@ impl policy::ServerPolicy for ServerPolicy {
             return Ok(policy::StreamAction::ClientBlocked);
         }
 
-        if self.context.check_outbound_blocked(target_addr).await {
+        if self.context.check_outbound_blocked(target_addr, canceler).await {
             return Ok(policy::StreamAction::OutboundBlocked);
         }
 
@@ -267,6 +272,7 @@ impl policy::ServerPolicy for ServerPolicy {
         &self,
         src_addr: Option<&SocketAddr>,
         target_addr: &ServerAddr,
+        canceler: &Canceler,
     ) -> io::Result<policy::PacketAction> {
         // 后续支持不同地址的处理
         if let Some(src_addr) = src_addr {
@@ -275,7 +281,7 @@ impl policy::ServerPolicy for ServerPolicy {
             }
         };
 
-        if self.context.check_outbound_blocked(target_addr).await {
+        if self.context.check_outbound_blocked(target_addr, canceler).await {
             return Ok(policy::PacketAction::OutboundBlocked);
         }
 

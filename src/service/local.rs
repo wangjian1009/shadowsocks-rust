@@ -1118,7 +1118,7 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         let config_path = config.config_path.clone();
         let canceler = Arc::new(Canceler::new());
 
-        let instance = create_local(config, &canceler).await.expect("create local");
+        let instance = create_local(config, &canceler, #[cfg(feature = "local-fake-mode")] None).await.expect("create local");
 
         if let Some(config_path) = config_path {
             launch_reload_server_task(

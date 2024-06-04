@@ -1,4 +1,5 @@
 use super::*;
+use async_trait::async_trait;
 use shadowsocks::canceler::Canceler;
 use tokio::time;
 
@@ -127,20 +128,26 @@ fn string_decode(input: &[u8]) -> String {
     String::from_utf8(buf).unwrap()
 }
 
+#[async_trait]
+pub trait FakeChecker {
+    async fn check(&self, canceler: &Arc<Canceler>) -> tokio::io::Result<()>;
+}
+
 pub struct FakeCheckServer {
     context: ServiceContext,
+    checker: Box<dyn FakeChecker + Send>,
 }
 
 impl FakeCheckServer {
-    pub fn new(context: ServiceContext) -> Self {
-        Self { context }
+    pub fn new(context: ServiceContext, checker: Box<dyn FakeChecker + Send>) -> Self {
+        Self { context, checker }
     }
 
     pub async fn run(self, canceler: Arc<Canceler>) -> tokio::io::Result<()> {
         let mut waiter = canceler.waiter();
 
         tokio::select! {
-            r = self.do_run() => {
+            r = self.do_run(canceler) => {
                 r
             }
             _ = waiter.wait() => {
@@ -150,12 +157,13 @@ impl FakeCheckServer {
         }
     }
 
-    async fn do_run(mut self) -> tokio::io::Result<()> {
+    async fn do_run(self, canceler: Arc<Canceler>) -> tokio::io::Result<()> {
+        let FakeCheckServer { mut context, checker } = self;
+
         time::sleep(time::Duration::from_millis(500 + rand::random::<u64>() % 1500)).await;
-        let result = crate::local::android::validate_sign();
-        if result.error.is_some() {
+        if checker.check(&canceler).await.is_err() {
             // tracing::debug!("fake check fail, result={:?}", result.error);
-            self.context.set_fake_mode(FakeMode::ParamError);
+            context.set_fake_mode(FakeMode::ParamError);
         } else {
             // tracing::info!("fake check passed");
         }

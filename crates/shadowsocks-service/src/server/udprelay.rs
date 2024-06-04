@@ -16,7 +16,13 @@ use futures::future;
 use lru_time_cache::LruCache;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use shadowsocks::{
-    canceler::Canceler, config::{ServerProtocol, ServerUser}, crypto::CipherCategory, lookup_then, net::{AcceptOpts, AddrFamily, UdpSocket as OutboundUdpSocket}, relay::udprelay::{options::UdpSocketControlData, ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE}, ServerAddr, ServerConfig
+    canceler::Canceler,
+    config::{ServerProtocol, ServerUser},
+    crypto::CipherCategory,
+    lookup_then,
+    net::{AcceptOpts, AddrFamily, UdpSocket as OutboundUdpSocket},
+    relay::udprelay::{options::UdpSocketControlData, ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
+    ServerAddr, ServerConfig,
 };
 use tokio::{sync::mpsc, task::JoinHandle, time};
 use tracing::{debug, error, info, trace, warn, Instrument};
@@ -94,6 +100,7 @@ impl UdpServer {
         time_to_live: Option<Duration>,
         capacity: Option<usize>,
         accept_opts: AcceptOpts,
+        canceler: &Canceler,
     ) -> io::Result<UdpServer> {
         let time_to_live = time_to_live.unwrap_or(crate::DEFAULT_UDP_EXPIRY_DURATION);
 
@@ -126,7 +133,7 @@ impl UdpServer {
 
         let (keepalive_tx, keepalive_rx) = mpsc::channel(UDP_ASSOCIATION_CLOSE_CHANNEL_SIZE);
 
-        let socket = ProxySocket::bind_with_opts(context.context(), &svr_cfg, ss_svr_cfg, accept_opts).await?;
+        let socket = ProxySocket::bind_with_opts(context.context(), &svr_cfg, ss_svr_cfg, accept_opts, canceler).await?;
         let socket = MonProxySocket::from_socket(socket, context.flow_stat_udp());
         let listener = Arc::new(socket);
 
@@ -158,7 +165,7 @@ impl UdpServer {
     }
 
     /// Start server's accept loop
-    pub async fn run(mut self, _canceler: Arc<Canceler>) -> io::Result<()> {
+    pub async fn run(mut self, canceler: Arc<Canceler>) -> io::Result<()> {
         info!(
             "shadowsocks udp server listening on {}, inbound address {}",
             self.local_addr().expect("listener.local_addr"),
@@ -192,6 +199,7 @@ impl UdpServer {
                 #[cfg(feature = "statistics")]
                 let bu_context = bu_context.clone();
 
+                let canceler = canceler.clone();
                 other_receivers.push(tokio::spawn(
                     async move {
                         let mut buffer = [0u8; MAXIMUM_UDP_PAYLOAD_SIZE];
@@ -201,6 +209,7 @@ impl UdpServer {
                                 &context,
                                 &listener,
                                 &mut buffer,
+                                canceler.as_ref(),
                                 #[cfg(feature = "statistics")]
                                 &bu_context,
                             )
@@ -269,14 +278,14 @@ impl UdpServer {
                     self.assoc_map.keep_alive(&peer_addr);
                 }
 
-                recv_result = UdpServer::recv_one_packet(&self.context, &listener, &mut buffer, #[cfg(feature = "statistics")] &bu_context) => {
+                recv_result = UdpServer::recv_one_packet(&self.context, &listener, &mut buffer, canceler.as_ref(), #[cfg(feature = "statistics")] &bu_context) => {
                     let (n, peer_addr, target_addr, control) = match recv_result {
                         Some(s) => s,
                         None => continue,
                     };
 
                     let data = &buffer[..n];
-                    if let Err(err) = self.send_packet(&listener, peer_addr, target_addr, control, Bytes::copy_from_slice(data),
+                    if let Err(err) = self.send_packet(&listener, peer_addr, target_addr, control, Bytes::copy_from_slice(data), &canceler,
                                                        #[cfg(feature = "statistics")] &bu_context).await {
                         debug!(
                             "udp packet relay {} with {} bytes failed, error: {}",
@@ -290,7 +299,7 @@ impl UdpServer {
                 recv_result = multicore_recv(&mut orx_opt), if orx_opt.is_some() => {
                     let (peer_addr, target_addr, control, data) = recv_result;
                     let data_len = data.len();
-                    if let Err(err) = self.send_packet(&listener, peer_addr, target_addr, control, data, #[cfg(feature = "statistics")] &bu_context).await {
+                    if let Err(err) = self.send_packet(&listener, peer_addr, target_addr, control, data, &canceler, #[cfg(feature = "statistics")] &bu_context).await {
                         debug!(
                             "udp packet relay {} with {} bytes failed, error: {}",
                             peer_addr,
@@ -360,6 +369,7 @@ impl UdpServer {
         target_addr: ServerAddr,
         control: Option<UdpSocketControlData>,
         data: Bytes,
+        canceler: &Arc<Canceler>,
         #[cfg(feature = "statistics")] bu_context: &shadowsocks::statistics::BuContext,
     ) -> io::Result<()> {
         match self.assoc_map {
@@ -373,6 +383,7 @@ impl UdpServer {
                     MultiProtocolSocket::SS(listener.clone()),
                     peer_addr,
                     self.keepalive_tx.clone(),
+                    canceler.clone(),
                     #[cfg(feature = "statistics")]
                     bu_context.clone(),
                 );
@@ -404,6 +415,7 @@ impl UdpServer {
                     peer_addr,
                     self.keepalive_tx.clone(),
                     client_session_id,
+                    canceler.clone(),
                     #[cfg(feature = "statistics")]
                     bu_context.clone(),
                 );
@@ -441,6 +453,7 @@ impl UdpAssociation {
         inbound: MultiProtocolSocket,
         peer_addr: SocketAddr,
         keepalive_tx: mpsc::Sender<NatKey>,
+        canceler: Arc<Canceler>,
         #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> UdpAssociation {
         let (assoc_handle, sender) = UdpAssociationContext::create(
@@ -449,6 +462,7 @@ impl UdpAssociation {
             peer_addr,
             keepalive_tx,
             None,
+            canceler,
             #[cfg(feature = "statistics")]
             bu_context,
         );
@@ -462,6 +476,7 @@ impl UdpAssociation {
         peer_addr: SocketAddr,
         keepalive_tx: mpsc::Sender<NatKey>,
         client_session_id: u64,
+        canceler: Arc<Canceler>,
         #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> UdpAssociation {
         let (assoc_handle, sender) = UdpAssociationContext::create(
@@ -470,6 +485,7 @@ impl UdpAssociation {
             peer_addr,
             keepalive_tx,
             Some(client_session_id),
+            canceler,
             #[cfg(feature = "statistics")]
             bu_context,
         );
@@ -543,6 +559,7 @@ impl UdpAssociationContext {
         peer_addr: SocketAddr,
         keepalive_tx: mpsc::Sender<NatKey>,
         client_session_id: Option<u64>,
+        canceler: Arc<Canceler>,
         #[cfg(feature = "statistics")] bu_context: shadowsocks::statistics::BuContext,
     ) -> (JoinHandle<()>, mpsc::Sender<UdpAssociationSendMessage>) {
         // Pending packets UDP_ASSOCIATION_SEND_CHANNEL_SIZE for each association should be good enough for a server.
@@ -569,12 +586,13 @@ impl UdpAssociationContext {
                 Some(shadowsocks::statistics::METRIC_UDP_SESSION_TOTAL),
             ),
         };
-        let handle = tokio::spawn(async move { assoc.dispatch_packet(receiver).await }.in_current_span());
+        
+        let handle = tokio::spawn(async move { assoc.dispatch_packet(receiver, canceler.as_ref()).await }.in_current_span());
 
         (handle, sender)
     }
 
-    async fn dispatch_packet(&mut self, mut receiver: mpsc::Receiver<UdpAssociationSendMessage>) {
+    async fn dispatch_packet(&mut self, mut receiver: mpsc::Receiver<UdpAssociationSendMessage>, canceler: &Canceler) {
         let mut outbound_ipv4_buffer = Vec::new();
         let mut outbound_ipv6_buffer = Vec::new();
         let mut keepalive_interval = time::interval(Duration::from_secs(1));
@@ -590,7 +608,7 @@ impl UdpAssociationContext {
                         }
                     };
 
-                    self.dispatch_received_packet(peer_addr, &target_addr, &data, &control).await;
+                    self.dispatch_received_packet(peer_addr, &target_addr, &data, &control, canceler).await;
                 }
 
                 received_opt = receive_from_outbound_opt(&self.outbound_ipv4_socket, &mut outbound_ipv4_buffer), if self.outbound_ipv4_socket.is_some() => {
@@ -666,6 +684,7 @@ impl UdpAssociationContext {
         target_addr: &ServerAddr,
         data: &[u8],
         control: &Option<UdpSocketControlData>,
+        canceler: &Canceler,
     ) {
         if let Some(ref mut session) = self.client_session {
             if peer_addr != self.peer_addr {
@@ -685,7 +704,7 @@ impl UdpAssociationContext {
             control,
         );
 
-        if self.context.check_outbound_blocked(target_addr).await {
+        if self.context.check_outbound_blocked(target_addr, canceler).await {
             error!(
                 "udp client {} outbound {} blocked by ACL rules",
                 self.peer_addr, target_addr
@@ -712,7 +731,10 @@ impl UdpAssociationContext {
             session_context.client_user = control.user.clone();
         }
 
-        if let Err(err) = self.dispatch_received_outbound_packet(target_addr, data).await {
+        if let Err(err) = self
+            .dispatch_received_outbound_packet(target_addr, data, canceler)
+            .await
+        {
             error!(
                 "udp relay {} -> {} with {} bytes, error: {}",
                 self.peer_addr,
@@ -723,13 +745,20 @@ impl UdpAssociationContext {
         }
     }
 
-    async fn dispatch_received_outbound_packet(&mut self, target_addr: &ServerAddr, data: &[u8], canceler: &Canceler) -> io::Result<()> {
+    async fn dispatch_received_outbound_packet(
+        &mut self,
+        target_addr: &ServerAddr,
+        data: &[u8],
+        canceler: &Canceler,
+    ) -> io::Result<()> {
         match *target_addr {
             ServerAddr::SocketAddr(sa) => self.send_received_outbound_packet(sa, data).await,
-            ServerAddr::DomainName(ref dname, port) => lookup_then!(self.context.context_ref(), dname, port, canceler, |sa| {
-                self.send_received_outbound_packet(sa, data).await
-            })
-            .map(|_| ()),
+            ServerAddr::DomainName(ref dname, port) => {
+                lookup_then!(self.context.context_ref(), dname, port, canceler, |sa| {
+                    self.send_received_outbound_packet(sa, data).await
+                })
+                .map(|_| ())
+            }
         }
     }
 

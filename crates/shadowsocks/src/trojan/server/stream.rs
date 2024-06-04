@@ -21,12 +21,14 @@ pub(super) async fn serve_tcp(
     target_addr: ServerAddr,
     idle_timeout: Duration,
     server_policy: Arc<Box<dyn ServerPolicy>>,
+    canceler: &Canceler,
     #[cfg(feature = "statistics")] bu_context: crate::statistics::BuContext,
 ) -> CloseReason {
     match server_policy
         .stream_check(
             peer_addr.as_ref(),
             &target_addr,
+            canceler,
             #[cfg(feature = "statistics")]
             bu_context.clone(),
         )
@@ -58,6 +60,7 @@ pub(super) async fn serve_tcp(
                 .create_out_connection(
                     peer_addr.as_ref(),
                     target_addr,
+                    canceler,
                     #[cfg(feature = "statistics")]
                     bu_context,
                 )
@@ -109,7 +112,7 @@ pub(super) async fn serve_tcp(
             tokio::pin!(timeout_waiter);
 
             let r = tokio::select! {
-                r = processor.process(recv, send, Some(timeout_ticker)) => r,
+                r = processor.process(recv, send, Some(timeout_ticker), canceler) => r,
                 _ = &mut timeout_waiter => {
                     debug!("process timeout");
                     return CloseReason::IdleTimeout;

@@ -23,8 +23,6 @@ impl Svc {
     ) -> io::Result<Response<Full<Bytes>>> {
         let result = match (req.method(), req.uri().path()) {
             (&Method::GET, "/traffic") => Self::query_traffic(context, req).await,
-            #[cfg(feature = "local-signed-info")]
-            (&Method::GET, "/android/validate") => Self::android_validate(context, req).await,
             #[cfg(feature = "rate-limit")]
             (&Method::POST, "/speed-limit") => Self::update_speed_limit(context, req).await,
             #[cfg(feature = "rate-limit")]
@@ -137,50 +135,9 @@ impl Svc {
             StatusCode::BAD_REQUEST
         };
 
-        #[cfg(feature = "local-android-protect")]
-        if response_code == StatusCode::OK {
-            use crate::local::android;
-
-            let check_result = android::validate_sign();
-            if let Some(error) = check_result.error {
-                response_code = StatusCode::from_u16(300 + error.code()).unwrap();
-            } else if let Some(_error) = check_result.path_error {
-                response_code = StatusCode::from_u16(201).unwrap();
-            }
-        }
-
         Response::builder()
             .status(response_code)
             .body(Full::new(Bytes::new()))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-    }
-
-    #[cfg(feature = "local-signed-info")]
-    async fn android_validate(
-        _context: Arc<ServiceContext>,
-        _req: Request<Incoming>,
-    ) -> io::Result<Response<Full<Bytes>>> {
-        use crate::local::android;
-
-        let validate_result = android::validate_sign();
-
-        let response = json5::to_string(&json!(
-        {"signedDataFile": validate_result.signed_data_file.map(|v| {
-            let parts: Vec<&str> = v.split('/').collect();
-            parts.last().map(|v| v.to_string())
-        }),
-         "sha1Fingerprint": validate_result.sha1_fingerprint.map(|e| {
-             e.iter().map(|e| format!("{:X}", e)).collect::<Vec<String>>().join(":")
-         }),
-         "error": validate_result.error.as_ref().map(|e| format!("{}", e)),
-         "errorDetail": validate_result.error.as_ref().map(|e| format!("{:?}", e)),
-         "pathError": validate_result.path_error.as_ref().map(|e| format!("{}", e)),
-        }))
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-        Response::builder()
-            .status(StatusCode::OK)
-            .body(Full::new(Bytes::from(response.into_bytes())))
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
 }
