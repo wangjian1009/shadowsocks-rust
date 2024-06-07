@@ -1,3 +1,4 @@
+use byteorder::{LittleEndian, ByteOrder};
 use std::sync::Arc;
 use tokio::{
     io,
@@ -47,6 +48,7 @@ impl ReporterServer {
         
         let mut tx_slots = vec![0u64; SPEED_SLOT_COUNT];
         let mut rx_slots = vec![0u64; SPEED_SLOT_COUNT];
+        const SPEED_DURATION_MS: u64 = SPEED_SLOT_DURATION_MS * (SPEED_SLOT_COUNT as u64);
 
         let mut pre_slot: usize = 0;
         let mut pre_tx: u64 = 0;
@@ -89,8 +91,8 @@ impl ReporterServer {
             pre_rx = rx;
 
             if speed_update_count % report_span_count == 0 {
-                let speed_tx: u64 = tx_slots.iter().sum();
-                let speed_rx: u64 = rx_slots.iter().sum();
+                let speed_tx: u64 = tx_slots.iter().sum::<u64>() * 1000 / SPEED_DURATION_MS;
+                let speed_rx: u64 = rx_slots.iter().sum::<u64>() * 1000 / SPEED_DURATION_MS;
 
                 // tracing::trace!(
                 //     "report: tx={} rx={} speed_tx={} speed_rx={}",
@@ -99,10 +101,14 @@ impl ReporterServer {
                 //     speed_tx,
                 //     speed_rx
                 // );
-                let buf: [u64; 4] = [tx, rx, speed_tx, speed_rx];
-                let buf = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const _, 32) };
 
-                let _ = send_local_notify(&self.stat_addr, 1, buf).await;
+                let mut buf = [0u8; 32];
+                LittleEndian::write_u64(&mut buf[0..8], tx);
+                LittleEndian::write_u64(&mut buf[8..16], rx);
+                LittleEndian::write_u64(&mut buf[16..24], speed_tx);
+                LittleEndian::write_u64(&mut buf[24..32], speed_rx);
+                
+                let _ = send_local_notify(&self.stat_addr, 1, &buf).await;
             }
         }
     }
