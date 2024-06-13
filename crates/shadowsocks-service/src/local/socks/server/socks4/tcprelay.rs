@@ -94,11 +94,11 @@ impl Socks4TcpHandler {
         let target_addr = target_addr.into();
         let mut server_opt = None;
         let server_result = if self.balancer.is_empty() {
-            AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &target_addr, canceler).await
+            AutoProxyClientStream::connect_bypassed(self.context.as_ref(), &target_addr, server.connect_opts_ref(), canceler).await
         } else {
             let server = self.balancer.best_tcp_server();
 
-            let r = AutoProxyClientStream::connect(&self.context, &server, &target_addr, canceler).await;
+            let r = AutoProxyClientStream::connect(&self.context, &server, &target_addr, server.connect_opts_ref(), canceler).await;
             server_opt = Some(server);
 
             r

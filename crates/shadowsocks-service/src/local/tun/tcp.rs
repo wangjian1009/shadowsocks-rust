@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    future::Future,
     io::{self, ErrorKind},
     mem,
     net::{IpAddr, SocketAddr},
@@ -113,12 +114,12 @@ impl Drop for TcpConnection {
 }
 
 impl TcpConnection {
-    async fn new(
+    fn new(
         socket: TcpSocket<'static>,
         socket_creation_tx: &mpsc::UnboundedSender<TcpSocketCreation>,
         manager_notify: Arc<ManagerNotify>,
         tcp_opts: &TcpSocketOpts,
-    ) -> TcpConnection {
+    ) -> impl Future<Output = TcpConnection> {
         let send_buffer_size = tcp_opts.send_buffer_size.unwrap_or(DEFAULT_TCP_SEND_BUFFER_SIZE);
         let recv_buffer_size = tcp_opts.recv_buffer_size.unwrap_or(DEFAULT_TCP_RECV_BUFFER_SIZE);
 
@@ -136,11 +137,13 @@ impl TcpConnection {
             socket,
             socket_created_tx: tx,
         });
-        // waiting socket add to SocketSet
-        let _ = rx.await;
-        TcpConnection {
-            control,
-            manager_notify,
+        async move {
+            // waiting socket add to SocketSet
+            let _ = rx.await;
+            TcpConnection {
+                control,
+                manager_notify,
+            }
         }
     }
 }
@@ -297,12 +300,9 @@ impl TcpTun {
         let manager_handle = {
             let manager_running = manager_running.clone();
 
-            let span = info_span!("manager");
             thread::Builder::new()
                 .name("smoltcp-poll".to_owned())
                 .spawn(move || {
-                    let _span = span.enter();
-
                     let TcpSocketManager {
                         ref mut device,
                         ref mut iface,
@@ -530,8 +530,7 @@ impl TcpTun {
                 &self.manager_socket_creation_tx,
                 self.manager_notify.clone(),
                 &accept_opts.tcp,
-            )
-            .await;
+            );
 
             // establish a tunnel
             let context = self.context.clone();
@@ -539,6 +538,7 @@ impl TcpTun {
             let canceler = canceler.clone();
             tokio::spawn(
                 async move {
+                    let connection = connection.await;
                     if let Err(err) =
                         handle_redir_client(context, canceler, balancer, connection, src_addr, dst_addr).await
                     {

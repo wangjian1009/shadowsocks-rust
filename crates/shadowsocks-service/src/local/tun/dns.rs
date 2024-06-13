@@ -4,7 +4,10 @@ use tracing::Instrument;
 
 use shadowsocks::{canceler::Canceler, relay::socks5::Address};
 
-use super::super::{dns::{DnsClient, NameServerAddr}, net::UdpInboundWrite};
+use super::super::{
+    dns::{DnsClient, NameServerAddr},
+    net::UdpInboundWrite,
+};
 
 pub struct DnsProcessor {
     mock_dns_addr: SocketAddr,
@@ -37,7 +40,7 @@ impl DnsProcessor {
     pub fn mock_dns_addr(&self) -> &SocketAddr {
         &self.mock_dns_addr
     }
-    
+
     pub async fn handle_udp_frame(
         &self,
         src_addr: SocketAddr,
@@ -60,7 +63,15 @@ impl DnsProcessor {
         let canceler = canceler.clone();
         tokio::spawn(
             async move {
-                match client.resolve(message, local_addr.as_ref().map(|e| e.as_ref()), &remote_addr, canceler.as_ref()).await {
+                match client
+                    .resolve(
+                        message,
+                        local_addr.as_ref().map(|e| e.as_ref()),
+                        &remote_addr,
+                        canceler.as_ref(),
+                    )
+                    .await
+                {
                     Ok(response) => {
                         let response = match response.to_vec() {
                             Ok(v) => v,

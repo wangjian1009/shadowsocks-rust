@@ -4,18 +4,35 @@
 use std::os::unix::io::RawFd;
 use std::{
     io::{self, ErrorKind},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
 
 use byte_string::ByteStr;
-use ipnet::{IpNet, Ipv4Net};
+use ipnet::IpNet;
 use shadowsocks::{canceler::Canceler, config::Mode};
 use smoltcp::wire::{IpProtocol, TcpPacket, UdpPacket};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, error, info, trace, warn};
-use tun::{AsyncDevice, Configuration as TunConfiguration, Device as TunDevice, Error as TunError, Layer};
+
+cfg_if::cfg_if! {
+    if #[cfg(any(target_os = "ios",
+                 target_os = "macos",
+                 target_os = "linux",
+                 target_os = "android",
+                 target_os = "windows",
+                 target_os = "freebsd"))] {
+        use tun2::{
+            create_as_async, AsyncDevice, Configuration as TunConfiguration, AbstractDevice, Error as TunError, Layer,
+        };
+    } else {
+        use tun2::{AbstractDevice, Configuration as TunConfiguration, Error as TunError, Layer};
+
+        mod fake_tun;
+        use self::fake_tun::{create_as_async, AsyncDevice};
+    }
+}
 
 use crate::local::{
     context::ServiceContext, loadbalancing::PingBalancer, net::UdpAssociationCloseReceiver, start_stat::StartStat,
@@ -27,19 +44,12 @@ mod dns;
 #[cfg(feature = "local-dns")]
 pub use dns::DnsProcessor;
 
-use self::{
-    ip_packet::IpPacket,
-    sys::{write_packet_with_pi, IFF_PI_PREFIX_LEN},
-    tcp::TcpTun,
-    udp::UdpTun,
-};
+use self::{ip_packet::IpPacket, tcp::TcpTun, udp::UdpTun};
 
 mod ip_packet;
 mod tcp;
 mod udp;
 mod virt_device;
-
-use super::tun_sys as sys;
 
 /// Tun service builder
 pub struct TunBuilder {
@@ -51,6 +61,9 @@ pub struct TunBuilder {
     udp_capacity: Option<usize>,
     mode: Mode,
 }
+
+/// TunConfiguration contains a HANDLE, which is a *mut c_void on Windows.
+unsafe impl Send for TunBuilder {}
 
 impl TunBuilder {
     /// Create a Tun service builder
@@ -75,7 +88,7 @@ impl TunBuilder {
     }
 
     pub fn name(&mut self, name: &str) {
-        self.tun_config.name(name);
+        self.tun_config.tun_name(name);
     }
 
     pub fn effect_address_net(&mut self, address_net: IpNet) {
@@ -103,13 +116,15 @@ impl TunBuilder {
     pub async fn build(mut self) -> io::Result<Tun> {
         self.tun_config.layer(Layer::L3).up();
 
-        #[cfg(target_os = "linux")]
-        self.tun_config.platform(|tun_config| {
-            // IFF_NO_PI preventing excessive buffer reallocating
-            tun_config.packet_information(false);
-        });
+        // XXX: tun2 set IFF_NO_PI by default.
+        //
+        // #[cfg(target_os = "linux")]
+        // self.tun_config.platform_config(|tun_config| {
+        //     // IFF_NO_PI preventing excessive buffer reallocating
+        //     tun_config.packet_information(false);
+        // });
 
-        let device = match tun::create_as_async(&self.tun_config) {
+        let device = match create_as_async(&self.tun_config) {
             Ok(d) => d,
             Err(TunError::Io(err)) => return Err(err),
             Err(err) => return Err(io::Error::new(ErrorKind::Other, err)),
@@ -125,7 +140,7 @@ impl TunBuilder {
         let tcp = TcpTun::new(
             self.context.clone(),
             self.balancer,
-            device.get_ref().mtu().unwrap_or(1500) as u32,
+            device.as_ref().mtu().unwrap_or(1500) as u32,
         );
 
         Ok(Tun {
@@ -168,15 +183,11 @@ impl Tun {
 
     /// Start serving
     pub async fn run(mut self, start_stat: StartStat, canceler: Arc<Canceler>) -> io::Result<()> {
-        if let Ok(mtu) = self.device.get_ref().mtu() {
-            assert!(mtu > 0 && mtu as usize > IFF_PI_PREFIX_LEN);
-        }
-
         info!(
             "shadowsocks tun device {}, mode {}",
             self.device
-                .get_ref()
-                .name()
+                .as_ref()
+                .tun_name()
                 .or_else(|r| Ok::<_, ()>(r.to_string()))
                 .unwrap(),
             self.mode,
@@ -184,21 +195,9 @@ impl Tun {
         start_stat.notify().await?;
 
         let address_net = if let Some(address_net) = self.device_address_net {
-            match address_net {
-                IpNet::V4(s) => {
-                    trace!("[TUN] tun device network: {}", s);
-                    s
-                }
-                IpNet::V6(s) => {
-                    error!("[TUN] not support device address, {}", s);
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("not support device address {}", s),
-                    ));
-                }
-            }
+            address_net
         } else {
-            let address = match self.device.get_ref().address() {
+            let address = match self.device.as_ref().address() {
                 Ok(a) => a,
                 Err(err) => {
                     error!("[TUN] failed to get device address, error: {}", err);
@@ -206,7 +205,7 @@ impl Tun {
                 }
             };
 
-            let netmask = match self.device.get_ref().netmask() {
+            let netmask = match self.device.as_ref().netmask() {
                 Ok(n) => n,
                 Err(err) => {
                     error!("[TUN] failed to get device netmask, error: {}", err);
@@ -214,7 +213,7 @@ impl Tun {
                 }
             };
 
-            let address_net = match Ipv4Net::with_netmask(address, netmask) {
+            let address_net = match IpNet::with_netmask(address, netmask) {
                 Ok(n) => n,
                 Err(err) => {
                     error!("[TUN] invalid address {}, netmask {}, error: {}", address, netmask, err);
@@ -232,14 +231,9 @@ impl Tun {
             address_net
         };
 
-        // Set default route
-        if let Err(err) = sys::set_route_configuration(self.device.get_mut()).await {
-            warn!("[TUN] tun device set route failed, error: {}", err);
-        }
-
         let address_broadcast = address_net.broadcast();
 
-        let mut packet_buffer = vec![0u8; 65536 + IFF_PI_PREFIX_LEN].into_boxed_slice();
+        let mut packet_buffer = vec![0u8; 65536].into_boxed_slice();
         let mut cancel_waiter = canceler.waiter();
 
         loop {
@@ -253,15 +247,7 @@ impl Tun {
                 n = self.device.read(&mut packet_buffer) => {
                     let n = n?;
 
-                    if n <= IFF_PI_PREFIX_LEN {
-                        error!(
-                            "[TUN] packet too short, packet: {:?}",
-                            ByteStr::new(&packet_buffer[..n])
-                        );
-                        continue;
-                    }
-
-                    let packet = &mut packet_buffer[IFF_PI_PREFIX_LEN..n];
+                    let packet = &mut packet_buffer[..n];
                     trace!("[TUN] received IP packet {:?}", ByteStr::new(packet));
 
                     tokio::select! {
@@ -281,11 +267,18 @@ impl Tun {
                 // UDP channel sent back
                 packet = self.udp.recv_packet() => {
                     tokio::select! {
-                        r = write_packet_with_pi(&mut self.device, &packet) => {
-                            if let Err(err) = r {
-                                error!("[TUN] failed to set packet information, error: {}, {:?}", err, ByteStr::new(&packet));
-                            } else {
-                                trace!("[TUN] sent IP packet (UDP) {:?}", ByteStr::new(&packet));
+                        r = self.device.write(&packet) => {
+                            match r {
+                                Ok(n) => {
+                                    if n < packet.len() {
+                                        warn!("[TUN] sent IP packet (UDP), but truncated. sent {} < {}, {:?}", n, packet.len(), ByteStr::new(&packet));
+                                    } else {
+                                        trace!("[TUN] sent IP packet (UDP) {:?}", ByteStr::new(&packet));
+                                    }
+                                }
+                                Err(err) => {
+                                    error!("[TUN] failed to set packet information, error: {}, {:?}", err, ByteStr::new(&packet));
+                                }
                             }
                         }
                         _ = cancel_waiter.wait() => {
@@ -311,11 +304,18 @@ impl Tun {
                 // TCP channel sent back
                 packet = self.tcp.recv_packet() => {
                     tokio::select! {
-                        r = write_packet_with_pi(&mut self.device, &packet) => {
-                            if let Err(err) = r {
-                                error!("[TUN] failed to set packet information, error: {}, {:?}", err, ByteStr::new(&packet));
-                            } else {
-                                trace!("[TUN] sent IP packet (TCP) {:?}", ByteStr::new(&packet));
+                        r = self.device.write(&packet) => {
+                            match r {
+                                Ok(n) => {
+                                    if n < packet.len() {
+                                        warn!("[TUN] sent IP packet (TCP), but truncated. sent {} < {}, {:?}", n, packet.len(), ByteStr::new(&packet));
+                                    } else {
+                                        trace!("[TUN] sent IP packet (TCP) {:?}", ByteStr::new(&packet));
+                                    }
+                                }
+                                Err(err) => {
+                                    error!("[TUN] failed to set packet information, error: {}, {:?}", err, ByteStr::new(&packet));
+                                }
                             }
                         }
                         _ = cancel_waiter.wait() => {
@@ -328,12 +328,7 @@ impl Tun {
         }
     }
 
-    async fn handle_tun_frame(
-        &mut self,
-        canceler: &Arc<Canceler>,
-        device_broadcast_addr: &Ipv4Addr,
-        frame: &[u8],
-    ) -> smoltcp::wire::Result<()> {
+    async fn handle_tun_frame(&mut self, canceler: &Arc<Canceler>, device_broadcast_addr: &IpAddr, frame: &[u8]) -> smoltcp::wire::Result<()> {
         let packet = match IpPacket::new_checked(frame)? {
             Some(packet) => packet,
             None => {
@@ -342,20 +337,20 @@ impl Tun {
             }
         };
 
+        trace!("[TUN] {:?}", packet);
+
         let src_ip_addr = packet.src_addr();
         let dst_ip_addr = packet.dst_addr();
-        let src_non_unicast = match src_ip_addr {
-            IpAddr::V4(v4) => {
-                v4.is_broadcast() || v4.is_multicast() || v4.is_unspecified() || v4 == *device_broadcast_addr
-            }
-            IpAddr::V6(v6) => v6.is_multicast() || v6.is_unspecified(),
-        };
-        let dst_non_unicast = match dst_ip_addr {
-            IpAddr::V4(v4) => {
-                v4.is_broadcast() || v4.is_multicast() || v4.is_unspecified() || v4 == *device_broadcast_addr
-            }
-            IpAddr::V6(v6) => v6.is_multicast() || v6.is_unspecified(),
-        };
+        let src_non_unicast = src_ip_addr == *device_broadcast_addr
+            || match src_ip_addr {
+                IpAddr::V4(v4) => v4.is_broadcast() || v4.is_multicast() || v4.is_unspecified(),
+                IpAddr::V6(v6) => v6.is_multicast() || v6.is_unspecified(),
+            };
+        let dst_non_unicast = dst_ip_addr == *device_broadcast_addr
+            || match dst_ip_addr {
+                IpAddr::V4(v4) => v4.is_broadcast() || v4.is_multicast() || v4.is_unspecified(),
+                IpAddr::V6(v6) => v6.is_multicast() || v6.is_unspecified(),
+            };
 
         if src_non_unicast || dst_non_unicast {
             trace!(

@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks"
-version = "1.18.1"
+version = "1.19.1"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -9,7 +9,7 @@ documentation = "https://docs.rs/shadowsocks-core"
 keywords = ["shadowsocks", "proxy", "socks", "socks5", "firewall"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.71"
+rust-version = "1.74"
 
 [badges]
 maintenance = { status = "passively-maintained" }
@@ -79,7 +79,7 @@ tracing = "0.1.35"
 metrics = { version = "0.20", optional = true }
 
 libc = "0.2.141"
-bytes = "1.5"
+bytes = "1.6"
 cfg-if = "1"
 byte_string = "1.0"
 base64 = "0.22"
@@ -125,7 +125,6 @@ tokio = { version = "1.9.0", features = [
     "sync",
     "time",
 ] }
-tokio-tfo = "0.2.0"
 tokio-rustls = { version = "0.25", optional = true }
 webpki-roots = { version = "0.26", optional = true }
 tokio-util = { version = "*", features = ["codec"], optional = true}
@@ -145,7 +144,7 @@ arc-swap = { version = "1.7", optional = true }
 notify = { version = "6.0", optional = true }
 
 aes = { version = "0.8", optional = true }
-blake3 = "1.4"
+blake3 = "1.5"
 
 byteorder = { version = "1.4", optional = true }
 crossbeam-utils = { version = "0.8", default-features = false, optional = true }
@@ -162,6 +161,9 @@ shadowsocks-crypto = { version = "0.5.4", features = ["ring"] }
 
 [target.'cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
 shadowsocks-crypto = { version = "0.5.4", features = [] }
+
+[target.'cfg(any(windows, target_os = "linux", target_os = "android", target_os = "freebsd", target_os = "macos", target_os = "ios", target_os = "watchos", target_os = "tvos"))'.dependencies]
+tokio-tfo = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = [

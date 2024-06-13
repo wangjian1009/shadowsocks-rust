@@ -1,5 +1,5 @@
 pub use self::association::{
-    UdpAssociationCloseReason, UdpAssociationCloseReceiver, UdpAssociationManager, UdpInboundWrite,
+    generate_client_session_id, UdpAssociationCloseReason, UdpAssociationCloseReceiver, UdpAssociationManager, UdpInboundWrite,
 };
 
 pub mod association;

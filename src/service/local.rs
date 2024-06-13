@@ -12,12 +12,12 @@ use std::{
 };
 
 use clap::{builder::PossibleValuesParser, Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
-use futures::future::{self, Either};
+use futures::future::{self, FutureExt};
+use tracing::{error, info, trace, Instrument};
 use tokio::{
     self,
     runtime::{Builder, Runtime},
 };
-use tracing::{error, info};
 
 #[cfg(feature = "local-redir")]
 use shadowsocks_service::config::RedirType;
@@ -31,7 +31,7 @@ use shadowsocks_service::{
     local::loadbalancing::PingBalancer,
     shadowsocks::{
         canceler::Canceler,
-        config::{Mode, ServerAddr, ServerConfig, ServerProtocol, ShadowsocksConfig},
+        config::{Mode, ServerAddr, ServerConfig, ServerProtocol, ServerSource, ShadowsocksConfig},
         crypto::{available_ciphers, CipherKind},
         plugin::PluginConfig,
         transport::RateLimiter,
@@ -191,6 +191,14 @@ pub fn define_command_line_options(mut app: Command) -> Command {
             .value_hint(ValueHint::CommandName)
             .requires("SERVER_ADDR")
             .help("SIP003 (https://shadowsocks.org/guide/sip003.html) plugin"),
+    )
+    .arg(
+        Arg::new("PLUGIN_MODE")
+            .long("plugin-mode")
+            .num_args(1)
+            .action(ArgAction::Set)
+            .requires("PLUGIN")
+            .help("SIP003/SIP003u plugin mode, must be one of `tcp_only` (default), `udp_only` and `tcp_and_udp`"),
     )
     .arg(
         Arg::new("PLUGIN_OPT")
@@ -553,6 +561,43 @@ pub fn define_command_line_options(mut app: Command) -> Command {
         );
     }
 
+    #[cfg(feature = "local-fake-dns")]
+    {
+        app = app
+            .arg(
+                Arg::new("FAKE_DNS_RECORD_EXPIRE_DURATION")
+                    .long("fake-dns-record-expire-duration")
+                    .num_args(1)
+                    .action(ArgAction::Set)
+                    .value_parser(clap::value_parser!(u64))
+                    .help("Fake DNS record expire duration in seconds"),
+            )
+            .arg(
+                Arg::new("FAKE_DNS_IPV4_NETWORK")
+                    .long("fake-dns-ipv4-network")
+                    .num_args(1)
+                    .action(ArgAction::Set)
+                    .value_parser(vparser::parse_ipnet)
+                    .help("Fake DNS IPv4 address network"),
+            )
+            .arg(
+                Arg::new("FAKE_DNS_IPV6_NETWORK")
+                    .long("fake-dns-ipv6-network")
+                    .num_args(1)
+                    .action(ArgAction::Set)
+                    .value_parser(vparser::parse_ipnet)
+                    .help("Fake DNS IPv6 address network"),
+            )
+            .arg(
+                Arg::new("FAKE_DNS_DATABASE_PATH")
+                    .long("fake-dns-database-path")
+                    .num_args(1)
+                    .action(ArgAction::Set)
+                    .value_hint(ValueHint::AnyPath)
+                    .help("Fake DNS database storage path"),
+            );
+    }
+
     #[cfg(unix)]
     {
         app = app
@@ -606,6 +651,27 @@ pub fn define_command_line_options(mut app: Command) -> Command {
         );
     }
 
+    #[cfg(feature = "local-online-config")]
+    {
+        app = app
+            .arg(
+                Arg::new("ONLINE_CONFIG_URL")
+                    .long("online-config-url")
+                    .num_args(1)
+                    .action(ArgAction::Set)
+                    .value_hint(ValueHint::Url)
+                    .help("SIP008 Online Configuration Delivery URL (https://shadowsocks.org/doc/sip008.html)"),
+            )
+            .arg(
+                Arg::new("ONLINE_CONFIG_UPDATE_INTERVAL")
+                    .long("online-config-update-interval")
+                    .num_args(1)
+                    .action(ArgAction::Set)
+                    .value_parser(clap::value_parser!(u64))
+                    .help("SIP008 Online Configuration Delivery update interval in seconds, 3600 by default"),
+            );
+    }
+
     app
 }
 
@@ -615,14 +681,6 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
         let config_path_opt = matches
             .get_one::<PathBuf>("CONFIG")
             .cloned()
-            .map(|path| {
-                #[cfg(feature = "local-android-protect")]
-                let path = match path.parent() {
-                    None => path.clone(),
-                    Some(p) => p.join("4b1bcbfa63037875119ba5d7f24e47b9"),
-                };
-                path
-            })
             .or_else(|| {
                 if !matches.contains_id("SERVER_CONFIG") {
                     match crate::config::get_default_config_path("local.json") {
@@ -746,7 +804,13 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                         plugin: p.to_owned(),
                         plugin_opts: matches.get_one::<String>("PLUGIN_OPT").map(ToOwned::to_owned),
                         plugin_args: Vec::new(),
-                        plugin_mode: Mode::TcpOnly,
+                        plugin_mode: matches
+                            .get_one::<String>("PLUGIN_MODE")
+                            .map(|x| {
+                                x.parse::<Mode>()
+                                    .expect("plugin-mode must be one of `tcp_only` (default), `udp_only` and `tcp_and_udp`")
+                            })
+                            .unwrap_or(Mode::TcpOnly),
                     };
 
                     protocol.set_plugin(plugin);
@@ -764,7 +828,8 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             config.server.push(ServerInstanceConfig::with_server_config(sc));
         }
 
-        if let Some(svr_addr) = matches.get_one::<ServerConfig>("SERVER_URL").cloned() {
+        if let Some(mut svr_addr) = matches.get_one::<ServerConfig>("SERVER_URL").cloned() {
+            svr_addr.set_source(ServerSource::CommandLine);
             config.server.push(ServerInstanceConfig::with_server_config(svr_addr));
         }
 
@@ -916,6 +981,24 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                 }
             }
 
+            #[cfg(feature = "local-fake-dns")]
+            {
+                use ipnet::{Ipv4Net, Ipv6Net};
+
+                if let Some(d) = matches.get_one::<u64>("FAKE_DNS_RECORD_EXPIRE_DURATION") {
+                    local_config.fake_dns_record_expire_duration = Some(Duration::from_secs(*d));
+                }
+                if let Some(n) = matches.get_one::<Ipv4Net>("FAKE_DNS_IPV4_NETWORK") {
+                    local_config.fake_dns_ipv4_network = Some(*n);
+                }
+                if let Some(n) = matches.get_one::<Ipv6Net>("FAKE_DNS_IPV6_NETWORK") {
+                    local_config.fake_dns_ipv6_network = Some(*n);
+                }
+                if let Some(p) = matches.get_one::<PathBuf>("FAKE_DNS_DATABASE_PATH").cloned() {
+                    local_config.fake_dns_database_path = Some(p);
+                }
+            }
+
             if matches.get_flag("UDP_ONLY") {
                 local_config.mode = Mode::UdpOnly;
             }
@@ -1043,6 +1126,17 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
             config.outbound_bind_addr = Some(*bind_addr);
         }
 
+        #[cfg(feature = "local-online-config")]
+        if let Some(online_config_url) = matches.get_one::<String>("ONLINE_CONFIG_URL") {
+            use shadowsocks_service::config::OnlineConfig;
+
+            let online_config_update_interval = matches.get_one::<u64>("ONLINE_CONFIG_UPDATE_INTERVAL").cloned();
+            config.online_config = Some(OnlineConfig {
+                config_url: online_config_url.clone(),
+                update_interval: online_config_update_interval.map(Duration::from_secs),
+            });
+        }
+
         // DONE READING options
 
         if config.local.is_empty() {
@@ -1120,39 +1214,67 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
         let instance = create_local(config, &canceler, #[cfg(feature = "local-fake-mode")] None).await.expect("create local");
 
-        if let Some(config_path) = config_path {
-            launch_reload_server_task(
-                config_path,
-                instance.server_balancer().clone().cloned(),
-                canceler.clone(),
-            );
-        }
+        let reload_task = match config_path {
+            Some(config_path) => ServerReloader {
+                config_path: config_path.clone(),
+                balancer: instance.server_balancer().clone(),
+            }
+            .launch_reload_server_task(canceler.clone())
+            .instrument(tracing::info_span!("reloase"))
+            .boxed(),
+            None => future::pending().boxed(),
+        };
 
         let abort_signal = monitor::create_signal_monitor(canceler.clone());
         let server = instance.run(canceler);
 
+        let reload_task = reload_task.fuse();
+        let abort_signal = abort_signal.fuse();
+        let server = server.fuse();
+
+        tokio::pin!(reload_task);
         tokio::pin!(abort_signal);
         tokio::pin!(server);
 
-        let exit_code = match future::select(server, abort_signal).await {
-            // Server future resolved without an error. This should never happen.
-            Either::Left((Ok(..), ..)) => {
-                info!("all server exited");
-                ExitCode::SUCCESS
+        loop {
+            futures::select! {
+                server_res = server => {
+                    match server_res {
+                        // Server future resolved without an error. This should never happen.
+                        Ok(..) => {
+                            eprintln!("server exited unexpectedly");
+                            return crate::EXIT_CODE_SERVER_EXIT_UNEXPECTEDLY.into();
+                        }
+                        // Server future resolved with error, which are listener errors in most cases
+                        Err(err) => {
+                            eprintln!("server aborted with {err}");
+                            return crate::EXIT_CODE_SERVER_ABORTED.into();
+                        }
+                    }
+                }
+                // The abort signal future resolved. Means we should just exit.
+                _ = abort_signal => {
+                    return ExitCode::SUCCESS;
+                }
+                _ = reload_task => {
+                    // continue.
+                    trace!("server-loader task task exited");
+                }
             }
-            // Server future resolved with error, which are listener errors in most cases
-            Either::Left((Err(err), ..)) => {
-                error!(error = ?err, "server aborted");
-                crate::EXIT_CODE_SERVER_ABORTED.into()
-            }
-            // The abort signal future resolved. Means we should just exit.
-            Either::Right(_) => ExitCode::SUCCESS,
-        };
-
-        exit_code
+        }
     };
 
     Ok((runtime, main_fut))
+}
+
+pub fn load_config_from_file<P: AsRef<Path>>(filename: &P) -> io::Result<String> {
+    let filename = filename.as_ref();
+
+    let mut reader = OpenOptions::new().read(true).open(filename)?;
+    let mut content = String::new();
+    reader.read_to_string(&mut content)?;
+
+    Ok(content)
 }
 
 /// Program entrance `main`
@@ -1164,84 +1286,83 @@ pub fn main(matches: &ArgMatches) -> ExitCode {
     }
 }
 
-#[cfg(unix)]
-fn launch_reload_server_task(config_path: PathBuf, mut balancer: Option<PingBalancer>, canceler: Arc<Canceler>) {
-    use tokio::signal::unix::{signal, SignalKind};
-    use tracing::{info_span, Instrument};
+struct ServerReloader {
+    config_path: PathBuf,
+    balancer: PingBalancer,
+}
 
-    let mut cancel_waiter = canceler.waiter();
-    tokio::spawn(
-        async move {
-            let mut sigusr1 = signal(SignalKind::user_defined1()).expect("signal");
+impl ServerReloader {
+    #[cfg_attr(not(any(unix, feature = "local-online-config")), allow(dead_code))]
+    async fn run_once(&self, canceler: &Arc<Canceler>) -> Result<(), Box<dyn std::error::Error>> {
+        use tokio::time::Instant;
+        
+        let start_time = Instant::now();
 
-            while tokio::select! {
-                r = sigusr1.recv() => { r.is_some() },
-                _ = cancel_waiter.wait() => {
-                    info!("canceled");
-                    return;
-                }
-            } {
-                let config = match Config::load_from_file(&config_path, ConfigType::Local) {
-                    Ok(c) => c,
-                    Err(err) => {
-                        error!("auto-reload {} failed with error: {}", config_path.display(), err);
-                        continue;
-                    }
-                };
-
-                let servers: Vec<ServerConfig> = config.server.into_iter().map(|s| s.config).collect();
-                info!("auto-reload {} with {} servers", config_path.display(), servers.len());
-
-                if let Some(balancer) = balancer.as_mut() {
-                    let r = balancer.reset_servers(servers, &canceler).await;
-
-                    if let Err(err) = r {
-                        error!("auto-reload {} but found error: {}", config_path.display(), err);
-                    }
-                }
+        // Load servers from source
+        let source_config = match Config::load_from_file(&self.config_path, ConfigType::Local) {
+            Ok(c) => c,
+            Err(err) => {
+                error!(
+                    "server-loader task failed to load from file: {}, error: {}",
+                    self.config_path.display(),
+                    err
+                );
+                return Err(Box::new(err));
             }
+        };
+
+        let server_len = source_config.server.len();
+
+        let fetch_end_time = Instant::now();
+
+        if let Err(err) = self
+            .balancer
+            .reset_servers(source_config.server, &[ServerSource::Configuration], canceler)
+            .await
+        {
+            error!("server-loader task {} servers but found error: {}", server_len, err);
+            return Err(Box::new(err));
         }
-        .instrument(info_span!("reload")),
-    );
-}
 
-#[cfg(not(feature = "local-android-protect"))]
-pub fn load_config_from_file<P: AsRef<Path>>(filename: &P) -> io::Result<String> {
-    let filename = filename.as_ref();
+        let total_end_time = Instant::now();
 
-    let mut reader = OpenOptions::new().read(true).open(filename)?;
-    let mut content = String::new();
-    reader.read_to_string(&mut content)?;
+        info!(
+            "server-loader task load from {} with {} servers, fetch costs: {:?}, total costs: {:?}",
+            self.config_path.display(),
+            server_len,
+            fetch_end_time - start_time,
+            total_end_time - start_time,
+        );
 
-    Ok(content)
-}
+        Ok(())
+    }
 
-#[cfg(feature = "local-android-protect")]
-pub fn load_config_from_file<P: AsRef<Path>>(filename: &P) -> io::Result<String> {
-    let filename = filename.as_ref();
+    #[cfg(unix)]
+    async fn launch_signal_reload_server_task(self: Arc<Self>, canceler: &Arc<Canceler>) {
+        use tracing::debug;
+        use tokio::signal::unix::{signal, SignalKind};
 
-    let mut reader = OpenOptions::new().read(true).open(filename)?;
+        let mut sigusr1 = signal(SignalKind::user_defined1()).expect("signal");
 
-    let mut ib = Vec::new();
-    reader.read_to_end(&mut ib)?;
+        debug!("server-loader task is now listening USR1");
 
-    let len = ib.len();
-    for i in 0..len {
-        let p = len - i - 1;
-        if p == 0 {
-            ib[p] ^= 0x84;
-        } else {
-            ib[p] ^= ib[p - 1];
+        while sigusr1.recv().await.is_some() {
+            let _ = self.run_once(canceler).await;
         }
     }
 
-    let content = String::from_utf8(ib).map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+    #[cfg(unix)]
+    async fn launch_reload_server_task(self, canceler: Arc<Canceler>) {
+        let arc_self = Arc::new(self);
+        arc_self.launch_signal_reload_server_task(&canceler).await
+    }
 
-    Ok(content)
+    #[cfg(windows)]
+    async fn launch_reload_server_task(self) {
+        let _ = self.config_path;
+        let _ = self.balancer;
+    }
 }
-
-#[cfg(not(unix))]
-fn launch_reload_server_task(_: PathBuf, _: PingBalancer) {}
 
 #[cfg(test)]
 mod test {

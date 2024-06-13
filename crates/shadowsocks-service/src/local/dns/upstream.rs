@@ -10,17 +10,18 @@ use hickory_resolver::proto::{
     error::{ProtoError, ProtoErrorKind},
     op::Message,
 };
+use tracing::{error, trace};
+use lru_time_cache::{Entry, LruCache};
 use rand::{thread_rng, Rng};
 use shadowsocks::{
     canceler::Canceler,
     config::ServerProtocol,
     context::SharedContext,
     net::{ConnectOpts, FlowStat, TcpStream as ShadowTcpStream, UdpSocket as ShadowUdpSocket},
-    relay::{udprelay::ProxySocket, Address},
+    relay::{udprelay::{options::UdpSocketControlData, ProxySocket}, Address},
     transport::StreamConnection,
     ServerAddr,
 };
-use tracing::trace;
 
 #[cfg(unix)]
 use tokio::net::UnixStream;
@@ -32,8 +33,9 @@ use tokio::{
 };
 
 use crate::{
-    local::{context::ServiceContext, loadbalancing::ServerIdent, net::AutoProxyClientStream},
-    net::MonProxySocket,
+    local::{context::ServiceContext, loadbalancing::ServerIdent, net::{udp::generate_client_session_id, AutoProxyClientStream}},
+    net::{packet_window::PacketWindowFilter, MonProxySocket},
+    DEFAULT_UDP_EXPIRY_DURATION,
 };
 
 /// Collection of various DNS connections
@@ -56,6 +58,8 @@ pub enum DnsClient {
     UdpRemote {
         socket: MonProxySocket,
         ns: Address,
+        control: UdpSocketControlData,
+        server_windows: LruCache<u64, PacketWindowFilter>,
     },
 }
 
@@ -137,9 +141,18 @@ impl DnsClient {
         let svr_cfg = svr.server_config();
         match svr_cfg.protocol() {
             ServerProtocol::SS(ss_cfg) => {
-                let socket = ProxySocket::connect_with_opts(context, svr_cfg, ss_cfg, connect_opts, canceler).await?;
-                let socket = MonProxySocket::from_socket(socket, flow_stat);
-                Ok(DnsClient::UdpRemote { socket, ns })
+                let socket = ProxySocket::connect_with_opts(context.clone(), svr_cfg, ss_cfg, connect_opts, canceler).await?;
+                let socket = MonProxySocket::from_socket(socket, flow_stat.clone());
+                let mut control = UdpSocketControlData::default();
+                control.client_session_id = generate_client_session_id();
+                control.packet_id = 0; // AEAD-2022 Packet ID starts from 1
+                Ok(DnsClient::UdpRemote {
+                    socket,
+                    ns,
+                    control,
+                    // NOTE: expiry duration should be configurable. But the Client is held by DnsClientCache, which expires very quickly.
+                    server_windows: LruCache::with_expiry_duration(DEFAULT_UDP_EXPIRY_DURATION),
+                })
             }
             #[cfg(feature = "trojan")]
             ServerProtocol::Trojan(_cfg) => {
@@ -192,12 +205,38 @@ impl DnsClient {
             #[cfg(unix)]
             DnsClient::UnixStream { ref mut stream } => stream_query(stream, msg).await,
             DnsClient::TcpRemote { ref mut stream } => stream_query(stream, msg).await,
-            DnsClient::UdpRemote { ref mut socket, ref ns } => {
+            DnsClient::UdpRemote {
+                ref mut socket,
+                ref ns,
+                ref mut control,
+                ref mut server_windows,
+            } => {
+                control.packet_id = match control.packet_id.checked_add(1) {
+                    Some(i) => i,
+                    None => return Err(ProtoErrorKind::Message("packet id overflows").into()),
+                };
+
                 let bytes = msg.to_vec()?;
-                socket.send(&ServerAddr::from(ns), &bytes).await?;
+                socket.send_with_ctrl(&ServerAddr::from(ns), control, &bytes).await?;
 
                 let mut recv_buf = [0u8; 256];
-                let (n, _) = socket.recv(&mut recv_buf).await?;
+                let (n, _, recv_control) = socket.recv_with_ctrl(&mut recv_buf).await?;
+
+                if let Some(server_control) = recv_control {
+                    let filter = match server_windows.entry(server_control.server_session_id) {
+                        Entry::Occupied(occ) => occ.into_mut(),
+                        Entry::Vacant(vac) => vac.insert(PacketWindowFilter::new()),
+                    };
+
+                    if !filter.validate_packet_id(server_control.packet_id, u64::MAX) {
+                        error!(
+                            "dns client for {} packet_id {} out of window",
+                            ns, server_control.packet_id
+                        );
+
+                        return Err(ProtoErrorKind::Message("packet id out of window").into());
+                    }
+                }
 
                 Message::from_vec(&recv_buf[..n])
             }

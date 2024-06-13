@@ -728,7 +728,7 @@ impl UdpAssociationContext {
                 return;
             }
 
-            session_context.client_user = control.user.clone();
+            session_context.client_user.clone_from(&control.user);
         }
 
         if let Err(err) = self
@@ -920,7 +920,7 @@ impl UdpAssociationContext {
                 control.client_session_id = client_session.client_session_id;
                 control.server_session_id = self.server_session_id;
                 control.packet_id = self.server_packet_id;
-                control.user = client_session.client_user.clone();
+                control.user.clone_from(&client_session.client_user);
 
                 if let Err(err) = match &self.inbound {
                     MultiProtocolSocket::SS(socket) => {

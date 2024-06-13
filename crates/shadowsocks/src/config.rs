@@ -349,6 +349,15 @@ impl Default for ServerUserManager {
     }
 }
 
+/// The source of the ServerConfig
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ServerSource {
+    Default,       //< Default source, created in code
+    Configuration, //< Created from configuration
+    CommandLine,   //< Created from command line
+    OnlineConfig,  //< Created from online configuration (SIP008)
+}
+
 /// Configuration for a server
 #[derive(Clone, Debug, PartialEq)]
 pub struct ServerConfig {
@@ -362,6 +371,9 @@ pub struct ServerConfig {
 
     /// Weight
     weight: ServerWeight,
+
+    /// Source
+    source: ServerSource,
 
     /// 请求超时配置
     request_recv_timeout: Duration,
@@ -520,6 +532,7 @@ impl ServerConfig {
             protocol,
             timeout: Duration::from_secs(30),
             weight: ServerWeight::new(),
+            source: ServerSource::Default,
 
             request_recv_timeout: Duration::from_secs(60),
             idle_timeout: Duration::from_secs(1740),
@@ -600,6 +613,16 @@ impl ServerConfig {
     /// Set server's balancer weight
     pub fn set_weight(&mut self, weight: ServerWeight) {
         self.weight = weight;
+    }
+
+    /// Get server's source
+    pub fn source(&self) -> ServerSource {
+        self.source
+    }
+
+    /// Set server's source
+    pub fn set_source(&mut self, source: ServerSource) {
+        self.source = source;
     }
 
     /// Get URL for QRCode

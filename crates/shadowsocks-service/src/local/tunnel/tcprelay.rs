@@ -138,7 +138,7 @@ async fn handle_tcp_client(
     if balancer.is_empty() {
         trace!("establishing tcp tunnel {} <-> {} direct", peer_addr, forward_addr);
 
-        let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), &forward_addr, canceler).await?;
+        let mut remote = AutoProxyClientStream::connect_bypassed(context.as_ref(), forward_addr, canceler).await?;
         return establish_tcp_tunnel_bypassed(&mut stream, &mut remote, peer_addr, &forward_addr, None).await;
     }
 
@@ -155,6 +155,6 @@ async fn handle_tcp_client(
     #[cfg(feature = "rate-limit")]
     let stream = shadowsocks::transport::RateLimitedStream::from_stream(stream, Some(context.rate_limiter()));
 
-    let mut remote = AutoProxyClientStream::connect_proxied(&context, &server, &forward_addr, canceler).await?;
-    establish_tcp_tunnel(context.as_ref(), svr_cfg, stream, &mut remote, peer_addr, &forward_addr).await
+    let mut remote = AutoProxyClientStream::connect_proxied_with_opts(&context, &server, forward_addr, server.connect_opts_ref(), canceler).await?;
+    establish_tcp_tunnel(context.as_ref(), svr_cfg, stream, &mut remote, peer_addr, forward_addr).await
 }

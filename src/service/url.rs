@@ -6,8 +6,7 @@ use std::{future, io, process::ExitCode, sync::Arc};
 use tokio::{fs::File, io::AsyncWriteExt, runtime::Builder, time::Duration};
 
 use shadowsocks_service::{
-    local::{api, context::ServiceContext, loadbalancing::ServerIdent},
-    shadowsocks::{canceler::Canceler, config::ServerType, context::Context, ServerConfig},
+    config::ServerInstanceConfig, local::{api, context::ServiceContext, loadbalancing::ServerIdent}, shadowsocks::{canceler::Canceler, config::ServerType, context::Context, ServerConfig}
 };
 
 use hyper::{
@@ -159,7 +158,12 @@ pub async fn main_async(matches: &ArgMatches) -> ExitCode {
 
     let service_context = Arc::new(service_context);
 
-    let server = match ServerIdent::new(service_context.clone(), svr_cfg, Duration::MAX, Duration::MAX) {
+    let server = match ServerIdent::new(
+        service_context.clone(),
+        ServerInstanceConfig::with_server_config(svr_cfg),
+        Duration::MAX,
+        Duration::MAX,
+    ) {
         Ok(server) => Arc::new(server),
         Err(err) => {
             return write_output(output_path, Err(UrlTestError::ArgumentError(format!("{:?}", err)))).await;

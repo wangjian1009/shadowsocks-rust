@@ -253,7 +253,7 @@ impl Socks5TcpHandler {
                 );
 
                 (
-                    AutoProxyClientStream::connect(&self.context, &server, &target_addr, canceler)
+                    AutoProxyClientStream::connect_with_opts(&self.context, &server, &target_addr, server.connect_opts_ref(), canceler)
                         .instrument(span.clone())
                         .await,
                     Some(server),

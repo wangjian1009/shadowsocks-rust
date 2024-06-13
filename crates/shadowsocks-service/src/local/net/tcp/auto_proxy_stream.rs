@@ -11,7 +11,13 @@ use cfg_if::cfg_if;
 
 use pin_project::pin_project;
 use shadowsocks::{
-    canceler::Canceler, context::SharedContext, create_connector_then, net::{ConnectOpts, FlowStat}, relay::{socks5::Address, tcprelay::proxy_stream::ProxyClientStream}, transport::{AsyncPing, DeviceOrGuard, RateLimitedStream, StreamConnection}, ServerAddr
+    canceler::Canceler,
+    context::SharedContext,
+    create_connector_then,
+    net::{ConnectOpts, FlowStat},
+    relay::{socks5::Address, tcprelay::proxy_stream::ProxyClientStream},
+    transport::{AsyncPing, DeviceOrGuard, RateLimitedStream, StreamConnection},
+    ServerAddr,
 };
 
 #[cfg(feature = "rate-limit")]
@@ -74,21 +80,43 @@ pub struct AutoProxyClientStream {
 
 impl AutoProxyClientStream {
     /// Connect to target `addr` via shadowsocks' server configured by `svr_cfg`
-    pub async fn connect(
+    pub async fn connect<A>(
         context: &Arc<ServiceContext>,
         server: &ServerIdent,
-        addr: &Address,
+        addr: A,
         canceler: &Canceler,
-    ) -> io::Result<AutoProxyClientStream> {
+    ) -> io::Result<AutoProxyClientStream>
+    where
+        A: Into<Address>,
+    {
+        Self::connect_with_opts(context, server, addr, context.connect_opts_ref(), canceler).await
+    }
+    
+    pub async fn connect_with_opts<A>(
+        context: &Arc<ServiceContext>,
+        server: &ServerIdent,
+        addr: A,
+        connect_opts: &ConnectOpts,
+        canceler: &Canceler,
+    ) -> io::Result<AutoProxyClientStream>
+    where
+        A: Into<Address>,
+    {
+        let addr = addr.into();
+
         #[cfg(feature = "local-fake-mode")]
         if context.fake_mode().is_bypass() {
-            return AutoProxyClientStream::connect_bypassed(context, addr, canceler)
+            return AutoProxyClientStream::connect_bypassed_with_opts(context, addr, connect_opts, canceler)
                 .instrument(info_span!("bypass", reason = "fake"))
                 .await;
         }
 
-        if context.check_target_bypassed(addr, canceler).instrument(info_span!("acl")).await {
-            AutoProxyClientStream::connect_bypassed(context, addr, canceler)
+        if context
+            .check_target_bypassed(&addr, canceler)
+            .instrument(info_span!("acl"))
+            .await
+        {
+            AutoProxyClientStream::connect_bypassed_with_opts(context, addr, connect_opts, canceler)
                 .instrument(info_span!("bypass", reason = "acl"))
                 .await
         } else {
@@ -109,20 +137,41 @@ impl AutoProxyClientStream {
                     )
                 }
             };
-            AutoProxyClientStream::connect_proxied(context, server, addr, canceler)
+            AutoProxyClientStream::connect_proxied_with_opts(context, server, addr, connect_opts, canceler)
                 .instrument(span)
                 .await
         }
     }
 
     /// Connect directly to target `addr`
-    pub async fn connect_bypassed(context: &ServiceContext, addr: &Address, canceler: &Canceler) -> io::Result<AutoProxyClientStream> {
+    pub async fn connect_bypassed<A>(
+        context: &ServiceContext,
+        addr: A,
+        canceler: &Canceler,
+    ) -> io::Result<AutoProxyClientStream>
+    where
+        A: Into<Address>,
+    {
+        Self::connect_bypassed_with_opts(context, addr, context.connect_opts_ref(), canceler).await
+    }
+    
+    pub async fn connect_bypassed_with_opts<A>(
+        context: &ServiceContext,
+        addr: A,
+        connect_opts: &ConnectOpts,
+        canceler: &Canceler,
+    ) -> io::Result<AutoProxyClientStream>
+    where
+        A: Into<Address>,
+    {
+        let addr = addr.into();
+
         // Connect directly.
         let stream = shadowsocks::net::TcpStream::connect_remote_with_opts(
             context.context_ref(),
-            ServerAddr::from(addr.clone()),
-            context.connect_opts_ref(),
-            canceler, 
+            ServerAddr::from(addr),
+            connect_opts,
+            canceler,
         )
         .await?;
 
@@ -133,15 +182,31 @@ impl AutoProxyClientStream {
     }
 
     /// Connect via server to target `addr`
-    pub async fn connect_proxied(
+    pub async fn connect_proxied<A>(
         context: &ServiceContext,
         server: &ServerIdent,
-        addr: &Address,
+        addr: A,
         canceler: &Canceler,
-    ) -> io::Result<AutoProxyClientStream> {
+    ) -> io::Result<AutoProxyClientStream>
+    where
+        A: Into<Address>,
+    {
+        Self::connect_proxied_with_opts(context, server, addr, context.connect_opts_ref(), canceler).await
+    }
+
+    pub async fn connect_proxied_with_opts<A>(
+        context: &ServiceContext,
+        server: &ServerIdent,
+        addr: A,
+        connect_opts: &ConnectOpts,
+        canceler: &Canceler,
+    ) -> io::Result<AutoProxyClientStream>
+    where
+        A: Into<Address>,
+    {
         match Self::connect_proxied_no_score(
             context.context(),
-            context.connect_opts_ref(),
+            connect_opts,
             server,
             addr,
             Some(context.flow_stat()),
@@ -163,17 +228,27 @@ impl AutoProxyClientStream {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn connect_proxied_no_score(
+    async fn connect_proxied_no_score<A>(
         context: SharedContext,
         connect_opts: &ConnectOpts,
         svr: &ServerIdent,
-        addr: &Address,
+        addr: A,
         flow_stat: Option<Arc<FlowStat>>,
         connection_close_notify: Option<Arc<Notify>>,
         canceler: &Canceler,
         #[cfg(feature = "rate-limit")] rate_limit: Option<Arc<RateLimiter>>,
         #[cfg(feature = "local-fake-mode")] fake_mode: FakeMode,
-    ) -> io::Result<AutoProxyClientStream> {
+    ) -> io::Result<AutoProxyClientStream>
+    where
+        A: Into<Address>,
+    {
+        #[cfg_attr(not(feature = "local-fake-dns"), allow(unused_mut))]
+        let mut addr = addr.into();
+        #[cfg(feature = "local-fake-dns")]
+        if let Some(mapped_addr) = context.try_map_fake_address(&addr).await {
+            addr = mapped_addr;
+        }
+
         let svr_cfg = svr.server_config();
         create_connector_then!(Some(context.clone()), svr_cfg.connector_transport(), |connector| {
             let connector = Arc::new(connector);

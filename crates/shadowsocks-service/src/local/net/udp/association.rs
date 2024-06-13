@@ -140,7 +140,13 @@ where
     }
 
     /// Sends `data` from `peer_addr` to `target_addr`
-    pub async fn send_to(&mut self, peer_addr: SocketAddr, target_addr: Address, data: &[u8], canceler: &Arc<Canceler>) -> io::Result<()> {
+    #[cfg_attr(not(feature = "local-fake-dns"), allow(unused_mut))]
+    pub async fn send_to(&mut self, peer_addr: SocketAddr, mut target_addr: Address, data: &[u8], canceler: &Arc<Canceler>) -> io::Result<()> {
+        #[cfg(feature = "local-fake-dns")]
+        if let Some(mapped_addr) = self.context.try_map_fake_address(&target_addr).await {
+            target_addr = mapped_addr;
+        }
+
         // Check or (re)create an association
 
         let mut assoc = self.assoc_map.get(&peer_addr);
@@ -317,8 +323,9 @@ thread_local! {
     static CLIENT_SESSION_RNG: RefCell<SmallRng> = RefCell::new(SmallRng::from_entropy());
 }
 
+/// Generate an AEAD-2022 Client SessionID
 #[inline]
-fn generate_client_session_id() -> u64 {
+pub fn generate_client_session_id() -> u64 {
     CLIENT_SESSION_RNG.with(|rng| rng.borrow_mut().gen())
 }
 

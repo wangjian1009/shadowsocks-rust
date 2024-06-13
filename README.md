@@ -649,6 +649,25 @@ Example configuration:
             // Linux/Android: tproxy (default)
             // FreeBSD/OpenBSD: pf (default)
             "udp_redir": "tproxy"
+        },
+        {
+            // FakeDNS local server (feature = "local-fake-dns")
+            // FakeDNS is a DNS server that allocates an IPv4 / IPv6 address in a specific pool for each queries.
+            // Subsequence requests from the other local interfaces that the target addresses includes those allocated IP addresses,
+            // will be substituted back to their original domain name addresses.
+            // This feature is useful mostly for transparent proxy, which will allow the proxied domain names to be resolved remotely.
+            "protocol": "fake-dns",
+            // Listen address
+            "local_address": "127.0.0.1",
+            "local_port": 10053,
+            // IPv4 address pool (for A records)
+            "fake_dns_ipv4_network": "10.255.0.0/16",
+            // IPv6 address pool (for AAAA records)
+            "fake_dns_ipv6_network": "fdf2:e786:ab40:9d2f::/64",
+            // Persistent storage for all allocated DNS records
+            "fake_dns_database_path": "/var/shadowsocks/fakedns.db",
+            // OPTIONAL: Record expire duration in seconds, 10s by default
+            "fake_dns_record_expire_duration": 10
         }
     ],
 
@@ -803,6 +822,14 @@ Example configuration:
         // Interval seconds between each check for the best server
         // Optional. Specify to enable shorter checking interval for the best server only.
         "check_best_interval": 5
+    },
+
+    // SIP008 Online Configuration Delivery
+    // https://shadowsocks.org/doc/sip008.html
+    "online_config": {
+        "config_url": "https://path-to-online-sip008-configuration",
+        // Optional. Seconds between each update to config_url. Default to 3600s
+        "update_interval": 3600
     },
 
     // Service configurations

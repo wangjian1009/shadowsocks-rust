@@ -10,12 +10,12 @@ use std::{
     time::Duration,
 };
 
-use shadowsocks::ServerConfig;
+use shadowsocks::{net::ConnectOpts, ServerConfig};
 use tokio::sync::Mutex;
 
-use super::server_stat::{Score, ServerStat};
+use crate::{config::ServerInstanceConfig, local::context::ServiceContext};
 
-use crate::local::context::ServiceContext;
+use super::server_stat::{Score, ServerStat};
 
 #[cfg(feature = "tuic")]
 use shadowsocks::{config::ServerProtocol, tuic::client as tuic};
@@ -70,7 +70,8 @@ impl Debug for ServerScore {
 pub struct ServerIdent {
     tcp_score: ServerScore,
     udp_score: ServerScore,
-    svr_cfg: ServerConfig,
+    svr_cfg: ServerInstanceConfig,
+    connect_opts: ConnectOpts,
 
     #[cfg(feature = "tuic")]
     tuic_dispatcher: Option<Arc<tuic::Dispatcher>>,
@@ -79,14 +80,14 @@ pub struct ServerIdent {
 impl ServerIdent {
     /// Create a `ServerIdent`
     pub fn new(
-        _context: Arc<ServiceContext>,
-        svr_cfg: ServerConfig,
+        context: Arc<ServiceContext>,
+        svr_cfg: ServerInstanceConfig,
         max_server_rtt: Duration,
         check_window: Duration,
     ) -> io::Result<ServerIdent> {
         #[cfg(feature = "tuic")]
-        let tuic_dispatcher = if let ServerProtocol::Tuic(tuic_config) = svr_cfg.protocol() {
-            let server_addr = match svr_cfg.addr() {
+        let tuic_dispatcher = if let ServerProtocol::Tuic(tuic_config) = svr_cfg.config.protocol() {
+            let server_addr = match svr_cfg.config.addr() {
                 shadowsocks::ServerAddr::DomainName(domain, port) => tuic::ServerAddrWithName::DomainAddr {
                     domain: domain.clone(),
                     port: *port,
@@ -114,7 +115,7 @@ impl ServerIdent {
             };
 
             let config_provider: tuic::ConfigProvider = {
-                let _context = _context.clone();
+                let _context = context.clone();
                 let tuic_config = tuic_config.clone();
                 Box::new(move || {
                     #[cfg(feature = "local-fake-mode")]
@@ -124,7 +125,7 @@ impl ServerIdent {
                     let mut effect_tuic_cfg = &tuic_config;
 
                     #[cfg(feature = "local-fake-mode")]
-                    if let Some(fake_cfg) = _context.fake_mode().is_param_error_for_tuic(&tuic_config) {
+                    if let Some(fake_cfg) = context.fake_mode().is_param_error_for_tuic(&tuic_config) {
                         _tuic_cfg_buf = Some(fake_cfg);
                         effect_tuic_cfg = _tuic_cfg_buf.as_ref().unwrap();
                     }
@@ -140,30 +141,55 @@ impl ServerIdent {
             };
 
             Some(Arc::new(tuic::Dispatcher::new(
-                _context.context(),
+                context.context(),
                 server_addr,
                 config_provider,
-                _context.connect_opts_ref().clone(),
+                context.connect_opts_ref().clone(),
             )))
         } else {
             None
         };
 
+        #[allow(unused_mut)]
+        let mut connect_opts = context.connect_opts_ref().clone();
+
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if let Some(fwmark) = svr_cfg.outbound_fwmark {
+            connect_opts.fwmark = Some(fwmark);
+        }
+
+        if let Some(bind_local_addr) = svr_cfg.outbound_bind_addr {
+            connect_opts.bind_local_addr = Some(bind_local_addr);
+        }
+
+        if let Some(ref bind_interface) = svr_cfg.outbound_bind_interface {
+            connect_opts.bind_interface = Some(bind_interface.clone());
+        }
+        
         Ok(ServerIdent {
-            tcp_score: ServerScore::new(svr_cfg.weight().tcp_weight(), max_server_rtt, check_window),
-            udp_score: ServerScore::new(svr_cfg.weight().udp_weight(), max_server_rtt, check_window),
+            tcp_score: ServerScore::new(svr_cfg.config.weight().tcp_weight(), max_server_rtt, check_window),
+            udp_score: ServerScore::new(svr_cfg.config.weight().udp_weight(), max_server_rtt, check_window),
             svr_cfg,
+            connect_opts,
             #[cfg(feature = "tuic")]
             tuic_dispatcher,
         })
     }
 
+    pub fn connect_opts_ref(&self) -> &ConnectOpts {
+        &self.connect_opts
+    }
+
     pub fn server_config(&self) -> &ServerConfig {
-        &self.svr_cfg
+        &self.svr_cfg.config
     }
 
     pub fn server_config_mut(&mut self) -> &mut ServerConfig {
-        &mut self.svr_cfg
+        &mut self.svr_cfg.config
+    }
+
+    pub fn server_instance_config(&self) -> &ServerInstanceConfig {
+        &self.svr_cfg
     }
 
     pub fn tcp_score(&self) -> &ServerScore {

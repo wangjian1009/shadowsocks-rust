@@ -17,10 +17,14 @@ use arc_swap::ArcSwap;
 use byte_string::ByteStr;
 use futures::future;
 use shadowsocks::{
-    canceler::Canceler, config::{Mode, ServerProtocol, ShadowsocksConfig}, plugin::{Plugin, PluginMode}, relay::{
+    canceler::Canceler,
+    config::{Mode, ServerProtocol, ServerSource, ShadowsocksConfig},
+    plugin::{Plugin, PluginMode},
+    relay::{
         socks5::Address,
         udprelay::{options::UdpSocketControlData, proxy_socket::ProxySocket, MAXIMUM_UDP_PAYLOAD_SIZE},
-    }, ServerAddr, ServerConfig
+    },
+    ServerAddr, ServerConfig,
 };
 use spin::Mutex as SpinMutex;
 use tokio::{
@@ -31,7 +35,10 @@ use tokio::{
 };
 use tracing::{debug, error, info, trace, warn, Instrument};
 
-use crate::local::{context::ServiceContext, net::AutoProxyClientStream};
+use crate::{
+    config::ServerInstanceConfig,
+    local::{context::ServiceContext, net::AutoProxyClientStream},
+};
 
 use super::{
     server_data::ServerIdent,
@@ -78,7 +85,7 @@ impl PingBalancerBuilder {
         }
     }
 
-    pub fn add_server(&mut self, server: ServerConfig) -> io::Result<()> {
+    pub fn add_server(&mut self, server: ServerInstanceConfig) -> io::Result<()> {
         let ident = ServerIdent::new(
             self.context.clone(),
             server,
@@ -281,28 +288,31 @@ impl PingBalancerContext {
                 // Run all of them simutaneously
                 let _ = future::join_all(check_fut).await;
 
-                let plugin_abortable = tokio::spawn(async move {
-                    let mut vfut = Vec::with_capacity(plugins.len());
+                let plugin_abortable = tokio::spawn(
+                    async move {
+                        let mut vfut = Vec::with_capacity(plugins.len());
 
-                    for plugin in plugins {
-                        vfut.push(async move {
-                            match plugin.join().await {
-                                Ok(status) => {
-                                    error!("plugin exited with status: {}", status);
-                                    Ok(())
+                        for plugin in plugins {
+                            vfut.push(async move {
+                                match plugin.join().await {
+                                    Ok(status) => {
+                                        error!("plugin exited with status: {}", status);
+                                        Ok(())
+                                    }
+                                    Err(err) => {
+                                        error!("plugin exited with error: {}", err);
+                                        Err(err)
+                                    }
                                 }
-                                Err(err) => {
-                                    error!("plugin exited with error: {}", err);
-                                    Err(err)
-                                }
-                            }
-                        });
+                            });
+                        }
+
+                        let _ = future::join_all(vfut).await;
+
+                        panic!("all plugins are exited. all connections may fail, check your configuration");
                     }
-
-                    let _ = future::join_all(vfut).await;
-
-                    panic!("all plugins are exited. all connections may fail, check your configuration");
-                }.in_current_span());
+                    .in_current_span(),
+                );
 
                 Some(plugin_abortable)
             }
@@ -726,14 +736,42 @@ impl PingBalancer {
     }
 
     /// Reset servers in load balancer. Designed for auto-reloading configuration file.
-    pub async fn reset_servers(&self, servers: Vec<ServerConfig>, canceler: &Arc<Canceler>) -> io::Result<()> {
+    pub async fn reset_servers(
+        &self,
+        servers: Vec<ServerInstanceConfig>,
+        replace_server_sources: &[ServerSource],
+        canceler: &Arc<Canceler>,
+    ) -> io::Result<()> {
         let old_context = self.inner.context.load();
 
+        let mut old_servers = old_context.servers.clone();
+        let mut idx = 0;
+        while idx < old_servers.len() {
+            let source_match = replace_server_sources
+                .iter()
+                .any(|src| *src == old_servers[idx].server_config().source());
+            if source_match {
+                old_servers.swap_remove(idx);
+            } else {
+                idx += 1;
+            }
+        }
+
         let mut server_idents: Vec<Arc<ServerIdent>> = Vec::new();
-        for s in servers.iter() {
+        for server_cfg in servers {
             server_idents.push(Arc::new(ServerIdent::new(
-                self.context(),
-                s.clone(),
+                old_context.context.clone(),
+                server_cfg,
+                old_context.max_server_rtt,
+                old_context.check_interval * EXPECTED_CHECK_POINTS_IN_CHECK_WINDOW,
+            )?));
+        }
+
+        // Recreate a new instance for old servers (old server instance may still being held by clients)
+        for old_server in old_servers {
+            server_idents.push(Arc::new(ServerIdent::new(
+                old_context.context.clone(),
+                old_server.server_instance_config().clone(),
                 old_context.max_server_rtt,
                 old_context.check_interval * EXPECTED_CHECK_POINTS_IN_CHECK_WINDOW,
             )?));
@@ -813,7 +851,16 @@ impl PingChecker {
 
         let addr = Address::DomainNameAddress("clients3.google.com".to_owned(), 80);
 
-        let stream = AutoProxyClientStream::connect_proxied(&self.context, &self.server, &addr, canceler).await?;
+        let mut stream = AutoProxyClientStream::connect_proxied_with_opts(
+            &self.context,
+            &self.server,
+            &addr,
+            self.server.connect_opts_ref(),
+            canceler,
+        )
+        .await?;
+
+        stream.write_all(GET_BODY).await?;
 
         let mut reader = BufReader::new(stream);
 
@@ -846,7 +893,14 @@ impl PingChecker {
 
         let addr = Address::DomainNameAddress("detectportal.firefox.com".to_owned(), 80);
 
-        let mut stream = AutoProxyClientStream::connect_proxied(&self.context, &self.server, &addr, canceler).await?;
+        let mut stream = AutoProxyClientStream::connect_proxied_with_opts(
+            &self.context,
+            &self.server,
+            &addr,
+            self.server.connect_opts_ref(),
+            canceler,
+        )
+        .await?;
         stream.write_all(GET_BODY).await?;
 
         let mut reader = BufReader::new(stream);
@@ -891,9 +945,14 @@ impl PingChecker {
 
         let svr_cfg = self.server.server_config();
 
-        let client =
-            ProxySocket::connect_with_opts(self.context.context(), svr_cfg, cfg, self.context.connect_opts_ref(), canceler)
-                .await?;
+        let client = ProxySocket::connect_with_opts(
+            self.context.context(),
+            svr_cfg,
+            cfg,
+            self.server.connect_opts_ref(),
+            canceler,
+        )
+        .await?;
 
         let mut control = UdpSocketControlData::default();
         control.client_session_id = rand::random::<u64>();

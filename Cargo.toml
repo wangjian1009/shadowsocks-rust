@@ -1,6 +1,6 @@
 [package]
 name = "shadowsocks-rust"
-version = "1.18.2"
+version = "1.19.4"
 authors = ["Shadowsocks Contributors"]
 description = "shadowsocks is a fast tunnel proxy that helps you bypass firewalls."
 repository = "https://github.com/shadowsocks/shadowsocks-rust"
@@ -9,7 +9,7 @@ documentation = "https://docs.rs/shadowsocks-rust"
 keywords = ["shadowsocks", "proxy", "socks", "socks5", "firewall"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.71"
+rust-version = "1.74"
 
 [badges]
 maintenance = { status = "passively-maintained" }
@@ -106,6 +106,43 @@ default = [
     "aead-cipher-2022",
 ]
 
+# Basic Features
+basic = ["logging", "hickory-dns", "local", "server", "multi-threaded"]
+
+# All Suggested Features
+full = [
+    "logging",
+    "hickory-dns",
+    "dns-over-tls",
+    "dns-over-https",
+    "local",
+    "server",
+    "manager",
+    "utility",
+    "service",
+    "local-http",
+    "local-http-rustls",
+    "local-tunnel",
+    "local-socks4",
+    "local-dns",
+    "local-redir",
+    "local-tun",
+    "local-fake-dns",
+    "local-online-config",
+    "multi-threaded",
+    "stream-cipher",
+    "aead-cipher-2022",
+]
+
+# Full features with extra (non-stable)
+full-extra = [
+    "full",
+    "dns-over-h3",
+    "aead-cipher-extra",
+    "aead-cipher-2022-extra",
+    "security-replay-attack-detect",
+]
+
 # Enable local server
 local = ["shadowsocks-service/local"]
 local-url = ["local", "hyper", "http-body-util", "url", "shadowsocks-service/local-api"]
@@ -189,6 +226,15 @@ local-tunnel = ["local", "shadowsocks-service/local-tunnel"]
 local-socks4 = ["local", "shadowsocks-service/local-socks4"]
 # Enable Tun interface protocol for sslocal
 local-tun = ["local", "shadowsocks-service/local-tun", "ipnet"]
+# Enable Fake DNS for sslocal
+local-fake-dns = ["local", "shadowsocks-service/local-fake-dns", "ipnet"]
+# sslocal support online URL (SIP008 Online Configuration Delivery)
+# https://shadowsocks.org/doc/sip008.html
+local-online-config = [
+    "local",
+    "mime",
+    "shadowsocks-service/local-online-config",
+]
 
 # ssurl support outline (ssconf) URL
 utility-url-outline = ["reqwest"]
@@ -251,6 +297,7 @@ serde = { version = "1.0", features = ["derive"] }
 json5 = "0.4"
 thiserror = "1.0"
 base64 = "0.22"
+mime = { version = "0.3", optional = true }
 
 url = { version = "*", optional = true }
 
@@ -259,10 +306,10 @@ metrics = { version = "0.20", optional = true }
 metrics-util = { version = "^0.14", optional = true }
 metrics-exporter-prometheus = { version = "0.11", optional = true }
 
-clap = { version = "4.4", features = ["wrap_help", "suggestions"] }
+clap = { version = "4.5", features = ["wrap_help", "suggestions"] }
 cfg-if = "1"
-qrcode = { version = "0.13", default-features = false, optional = true }
-sysexits = "0.7"
+qrcode = { version = "0.14", default-features = false, optional = true }
+sysexits = "0.8"
 exitcode = "1"
 bytes = "1.0"
 byteorder = "1.3"
@@ -293,23 +340,31 @@ rpmalloc = { version = "0.2", optional = true }
 hyper = { version = "1.1", optional = true }
 http-body-util = { version = "0.1", optional = true }
 
-shadowsocks-service = { version = "1.17.2", path = "./crates/shadowsocks-service", default-features = false }
-windows-service = { version = "0.6", optional = true }
+shadowsocks-service = { version = "1.19.4", path = "./crates/shadowsocks-service", default-features = false }
+windows-service = { version = "0.7", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5"
 
 [target.'cfg(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"))'.dependencies]
-reqwest = { version = "0.11", features = [
+reqwest = { version = "0.12", features = [
     "blocking",
     "rustls-tls",
     "rustls-tls-native-roots",
+    "deflate",
+    "gzip",
+    "brotli",
+    "zstd",
 ], default-features = false, optional = true }
 
 [target.'cfg(not(any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
-reqwest = { version = "0.11", features = [
+reqwest = { version = "0.12", features = [
     "blocking",
     "native-tls-vendored",
+    "deflate",
+    "gzip",
+    "brotli",
+    "zstd",
 ], optional = true }
 
 [dev-dependencies]

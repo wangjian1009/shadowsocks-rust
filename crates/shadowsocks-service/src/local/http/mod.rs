@@ -2,8 +2,11 @@
 //!
 //! https://www.ietf.org/rfc/rfc2068.txt
 
-pub use self::server::{Http, HttpBuilder, HttpConnectionHandler};
-pub use http_stream::ProxyHttpStream;
+pub use self::{
+    http_client::{HttpClient, HttpClientError},
+    http_stream::ProxyHttpStream,
+    server::{Http, HttpBuilder, HttpConnectionHandler},
+};
 
 mod http_client;
 mod http_service;

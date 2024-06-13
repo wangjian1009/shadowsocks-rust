@@ -6,10 +6,10 @@ use std::{
     os::fd::RawFd,
 };
 use tokio::{
-    io::{self, AsyncReadExt},
+    io::{self, AsyncReadExt, AsyncWriteExt},
     time::{self, Duration, Instant},
 };
-use tun::{AsyncDevice, Configuration as TunConfiguration, Error as TunError, Layer};
+use tun2::{AsyncDevice, Configuration as TunConfiguration, Error as TunError, Layer};
 
 use shadowsocks::canceler::Canceler;
 use shadowsocks::net::{AddrFamily, ConnectOpts, UdpSocket};
@@ -33,8 +33,6 @@ const MAX_UDP_SIZE: usize = 1472; // (1 << 16) - 1;
 const HANDSHAKE_RATE_LIMIT: u64 = 10;
 const TICK_DURATION: Duration = Duration::from_millis(250);
 const RATE_LIMITER_RESET_DURATION: Duration = Duration::from_secs(1);
-
-use super::tun_sys::{write_packet_with_pi, IFF_PI_PREFIX_LEN};
 
 enum ProcessError {
     NextTick,
@@ -219,12 +217,13 @@ impl Server {
                 r = tun_device.read(&mut tun_src_buf[..]) => {
                     let src = match r {
                         Ok(n) => {
-                            if n <= IFF_PI_PREFIX_LEN {
-                                tracing::error!("tun packet too short, packet: {:?}", &tun_src_buf[..n]);
-                                continue;
-                            }
+                            // if n <= IFF_PI_PREFIX_LEN {
+                            //     tracing::error!("tun packet too short, packet: {:?}", &tun_src_buf[..n]);
+                            //     continue;
+                            // }
 
-                            &tun_src_buf[IFF_PI_PREFIX_LEN..n]
+                            // &tun_src_buf[IFF_PI_PREFIX_LEN..n]
+                            &tun_src_buf[..n]
                         },
                         Err(err) => {
                             tracing::error!(err = ?err, "tun read error");
@@ -496,24 +495,24 @@ async fn wireguard_udp_input(
             .await?;
         }
         wg::TunnResult::WriteToTunnelV4(packet, _addr) => {
-            match write_packet_with_pi(tun_device, packet).await {
+            match tun_device.write(packet).await {
                 Err(err) => {
                     tracing::error!(err = ?err, "udp_input: tun write packet(v4) error");
                 }
-                Ok(()) => {
+                Ok(n) => {
                     // tracing::error!("udp_input: tun write packet(v4) {}", packet.len());
-                    process_result.tun_writed += packet.len();
+                    process_result.tun_writed += n;
                 }
             }
         }
         wg::TunnResult::WriteToTunnelV6(packet, _addr) => {
-            match write_packet_with_pi(tun_device, packet).await {
+            match tun_device.write(packet).await {
                 Err(err) => {
                     tracing::error!(err = ?err, "udp_input: tun write packet(v6) error");
                 }
-                Ok(()) => {
+                Ok(n) => {
                     // tracing::error!("udp_input: tun write packet(v6) {}", packet.len());
-                    process_result.tun_writed += packet.len();
+                    process_result.tun_writed += n;
                 }
             }
         }
@@ -572,7 +571,7 @@ async fn read_tun_device(config: &LocalConfig, fd: Option<RawFd>) -> io::Result<
         tun_config.destination(addr.addr());
     }
     if let Some(name) = &config.tun_interface_name {
-        tun_config.name(name);
+        tun_config.tun_name(name);
     }
 
     if let Some(fd) = fd {
@@ -587,7 +586,7 @@ async fn read_tun_device(config: &LocalConfig, fd: Option<RawFd>) -> io::Result<
         tun_config.packet_information(false);
     });
 
-    let device = match tun::create_as_async(&tun_config) {
+    let device = match tun2::create_as_async(&tun_config) {
         Ok(d) => d,
         Err(TunError::Io(err)) => return Err(err),
         Err(err) => return Err(io::Error::new(io::ErrorKind::Other, err)),

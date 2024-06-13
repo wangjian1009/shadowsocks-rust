@@ -13,6 +13,8 @@ use shadowsocks::{
 };
 #[cfg(feature = "local-dns")]
 use tokio::sync::Mutex;
+#[cfg(feature = "local-fake-dns")]
+use tokio::sync::RwLock;
 
 #[cfg(feature = "rate-limit")]
 use shadowsocks::transport::RateLimiter;
@@ -45,6 +47,9 @@ cfg_if! {
     }
 }
 
+#[cfg(feature = "local-fake-dns")]
+use super::fake_dns::manager::FakeDnsManager;
+
 /// Local Service Context
 #[derive(Clone)]
 pub struct ServiceContext {
@@ -62,6 +67,9 @@ pub struct ServiceContext {
     // For DNS relay's ACL domain name reverse lookup -- whether the IP shall be forwarded
     #[cfg(feature = "local-dns")]
     reverse_lookup_cache: Arc<Mutex<LruCache<IpAddr, bool>>>,
+
+    #[cfg(feature = "local-fake-dns")]
+    fake_dns_manager: Arc<RwLock<Vec<Arc<FakeDnsManager>>>>,
 
     #[cfg(feature = "rate-limit")]
     rate_limiter: Arc<RateLimiter>,
@@ -97,6 +105,8 @@ impl ServiceContext {
                 Duration::from_secs(3 * 24 * 60 * 60),
                 10240, // XXX: It should be enough for a normal user.
             ))),
+            #[cfg(feature = "local-fake-dns")]
+            fake_dns_manager: Arc::new(RwLock::new(Vec::new())),
             #[cfg(feature = "rate-limit")]
             rate_limiter: Arc::new(RateLimiter::new(None).unwrap()),
             #[cfg(feature = "sniffer")]
@@ -231,6 +241,33 @@ impl ServiceContext {
         context.set_replay_attack_policy(security.replay_attack.policy);
     }
 
+    /// Set Fake DNS manager
+    #[cfg(feature = "local-fake-dns")]
+    pub async fn add_fake_dns_manager(&self, manager: Arc<FakeDnsManager>) {
+        let mut managers = self.fake_dns_manager.write().await;
+        managers.push(manager);
+    }
+
+    /// Fake DNS maps IP to Domain
+    #[cfg(feature = "local-fake-dns")]
+    pub async fn try_map_fake_address(&self, addr: &Address) -> Option<Address> {
+        let socket_addr = match addr {
+            Address::DomainNameAddress(..) => return None,
+            Address::SocketAddress(socket_addr) => socket_addr,
+        };
+        let ip_addr = socket_addr.ip();
+
+        for mgr in self.fake_dns_manager.read().await.iter() {
+            if let Ok(Some(name)) = mgr.map_ip_domain(ip_addr).await {
+                let new_addr = Address::DomainNameAddress(name.to_string(), socket_addr.port());
+                log::trace!("fakedns mapped {} -> {}", addr, new_addr);
+                return Some(new_addr);
+            }
+        }
+
+        None
+    }
+    
     pub fn connection_close_notify(&self) -> Arc<Notify> {
         self.connection_close_notify.clone()
     }
