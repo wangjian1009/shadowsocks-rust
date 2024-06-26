@@ -14,7 +14,7 @@ use crate::{
 };
 
 use http::StatusCode;
-use log::{debug, error, trace, warn};
+use tracing::{debug, error, trace, warn};
 use mime::Mime;
 use shadowsocks::config::ServerSource;
 use tokio::time;

@@ -3,7 +3,7 @@
 use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use hickory_resolver::proto::op::{response_code::ResponseCode, Message};
-use log::error;
+use tracing::error;
 use shadowsocks::{lookup_then, net::UdpSocket as ShadowUdpSocket, ServerAddr};
 use tokio::time;
 

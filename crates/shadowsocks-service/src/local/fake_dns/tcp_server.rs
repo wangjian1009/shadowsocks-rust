@@ -13,7 +13,7 @@ use hickory_resolver::proto::{
     op::{response_code::ResponseCode, Message},
     serialize::binary::{BinEncodable, BinEncoder, EncodeMode},
 };
-use log::{error, trace};
+use tracing::{error, trace};
 use shadowsocks::{lookup_then, net::TcpListener as ShadowTcpListener, ServerAddr};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

@@ -10,7 +10,7 @@ use std::{
 
 use hickory_resolver::proto::rr::Name;
 use ipnet::{Ipv4AddrRange, Ipv4Net, Ipv6AddrRange, Ipv6Net};
-use log::{trace, warn};
+use tracing::{trace, warn};
 use sled::{Config as SledConfig, Db as SledDatabase};
 use tokio::sync::Mutex;
 

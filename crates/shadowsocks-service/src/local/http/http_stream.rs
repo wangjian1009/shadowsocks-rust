@@ -88,7 +88,7 @@ impl ProxyHttpStream {
                             if let Ok(certs) = rustls_native_certs::load_native_certs() {
                                 for cert in certs {
                                     if let Err(err) = store.add(cert) {
-                                        warn!("failed to add cert (native), error: {}", err);
+                                        tracing::warn!("failed to add cert (native), error: {}", err);
                                     }
                                 }
                             }

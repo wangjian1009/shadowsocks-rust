@@ -12,7 +12,7 @@ use hickory_resolver::proto::{
         RecordType,
     },
 };
-use log::{debug, trace};
+use tracing::{debug, trace};
 
 use super::manager::FakeDnsManager;
 

@@ -67,6 +67,7 @@ mod local_value_parser {
 
     use shadowsocks_service::shadowsocks::relay::socks5::{Address, AddressError};
 
+    #[allow(dead_code)]
     #[derive(Debug, Clone)]
     pub struct RemoteDnsAddress(pub Address);
 
